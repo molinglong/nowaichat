@@ -1,0 +1,58 @@
+# 把开发垃圾挡在 build context 外,加速构建、缩小镜像
+
+# 依赖和构建产物
+node_modules
+.next
+out
+build
+dist
+*.tsbuildinfo
+next-env.d.ts
+
+# 数据库
+*.db
+*.db-*
+prisma/*.db
+prisma/*.db-journal
+
+# 环境
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env.*.local
+
+# 上传(运行时挂载,不入仓)
+uploads/
+
+# Vercel
+.vercel
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+*.swp
+*.swo
+Thumbs.db
+
+# 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+npm_error.txt
+npm_output.txt
+
+# Git
+.git
+.gitignore
+
+# 备份文件
+dev.db.before-*
+
+# 生成的 Prisma Client(build 阶段会重新生成)
+src/generated
+
+# 文档(可选,保留不影响构建)
+# README.md
+# DEPLOY.md

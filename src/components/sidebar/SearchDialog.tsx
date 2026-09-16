@@ -1,0 +1,471 @@
+'use client'
+
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
+import { Search, X, Loader2, MessageSquare } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+interface ConversationData {
+  id: string
+  title: string
+  mode?: string
+  updatedAt: string
+  // 搜索模式下,由 /api/messages/snippets 注入的"消息级命中"预览
+  matchedFragment?: string | null
+  matchedFragmentRole?: string | null
+}
+
+interface MessageFragment {
+  conversationId: string
+  messageId: string
+  role: string
+  snippet: string
+}
+
+/**
+ * 按 updatedAt 把对话分到时间分组:
+ * - 今天(0:00 至今)
+ * - 昨天(昨天 0:00 至今天 0:00)
+ * - 本周(过去 7 天内,但不是今天/昨天)
+ * - 本月(过去 30 天内,但不在上述范围)
+ * - 更早(超过 30 天)
+ */
+type GroupKey = '今天' | '昨天' | '本周' | '本月' | '更早'
+
+const GROUP_ORDER: GroupKey[] = ['今天', '昨天', '本周', '本月', '更早']
+
+// 每页拉取条数(分段加载的"段")
+const PAGE_SIZE = 20
+
+function getGroupKey(updatedAt: string, now: Date = new Date()): GroupKey {
+  const d = new Date(updatedAt)
+  if (isNaN(d.getTime())) return '更早'
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const oneDay = 24 * 60 * 60 * 1000
+  const diff = startOfToday.getTime() - d.getTime()
+
+  if (diff >= 0 && diff < oneDay) return '今天'
+  if (diff >= oneDay && diff < 2 * oneDay) return '昨天'
+  if (diff < 7 * oneDay) return '本周'
+  if (diff < 30 * oneDay) return '本月'
+  return '更早'
+}
+
+function groupConversations(items: ConversationData[]) {
+  const map = new Map<GroupKey, ConversationData[]>()
+  for (const conv of items) {
+    const key = getGroupKey(conv.updatedAt)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(conv)
+  }
+  // 只保留实际有数据的分组,并按预定义顺序排列
+  return GROUP_ORDER.filter((k) => map.has(k)).map((k) => ({
+    key: k,
+    items: map.get(k)!,
+  }))
+}
+
+interface SearchDialogProps {
+  open: boolean
+  onClose: () => void
+  /** 选中一条对话后跳转。Sidebar 用 router.push,其他场景可自定义(如嵌入子页) */
+  onSelect?: (id: string) => void
+}
+
+export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<ConversationData[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [total, setTotal] = useState<number | null>(null)
+  const [activeIndex, setActiveIndex] = useState(0)
+  // 消息级命中片段(由 /api/messages/snippets 注入): conversationId -> fragment
+  const [fragmentsByConv, setFragmentsByConv] = useState<Map<string, MessageFragment>>(
+    new Map()
+  )
+  const inputRef = useRef<HTMLInputElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const router = useRouter()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 同步当前结果长度,供 runSearch 在追加模式下计算 offset
+  const itemsRef = useRef<ConversationData[]>([])
+  useEffect(() => {
+    itemsRef.current = results
+  }, [results])
+
+  // 打开时自动聚焦输入框
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => inputRef.current?.focus(), 30)
+    } else {
+      setQuery('')
+      setResults([])
+      setFragmentsByConv(new Map())
+      setActiveIndex(0)
+      setHasMore(true)
+      setTotal(null)
+    }
+  }, [open])
+
+  // ESC 关闭弹窗
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
+  // 锁定背景滚动
+  useEffect(() => {
+    if (!open) return
+    const original = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = original
+    }
+  }, [open])
+
+  // 搜索接口
+  const runSearch = useCallback(
+    async (q: string, reset: boolean) => {
+      const trimmed = q.trim()
+      if (reset) {
+        setLoading(true)
+      } else {
+        setLoadingMore(true)
+      }
+      try {
+        const params = new URLSearchParams()
+        params.set('limit', String(PAGE_SIZE))
+        params.set('offset', reset ? '0' : String(itemsRef.current.length))
+        if (trimmed) params.set('q', trimmed)
+        const res = await fetch(`/api/conversations?${params.toString()}`)
+        if (res.ok) {
+          const data = await res.json()
+          const items = data.items ?? []
+          const total = typeof data.total === 'number' ? data.total : null
+          const hasMore =
+            typeof data.hasMore === 'boolean'
+              ? data.hasMore
+              : total == null
+                ? items.length === PAGE_SIZE
+                : itemsRef.current.length + items.length < total
+          setResults((prev) => (reset ? items : [...prev, ...items]))
+          setTotal(total)
+          setHasMore(hasMore)
+          if (reset) setActiveIndex(0)
+        }
+      } catch (err) {
+        console.error('Search failed:', err)
+        if (reset) setResults([])
+      } finally {
+        if (reset) setLoading(false)
+        else setLoadingMore(false)
+      }
+    },
+    []
+  )
+
+  // 防抖触发首次/重置查询(query 变化)
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      runSearch(query, true)
+    }, 200)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [query, runSearch])
+
+  // 当搜索结果或关键词变化时,拉取消息级命中片段。
+  // 翻页加载也会重新触发,保证新增会话也能拿到片段。
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed || results.length === 0) {
+      // 无关键词或无结果:清理片段,避免显示陈旧命中
+      setFragmentsByConv((prev) => (prev.size === 0 ? prev : new Map()))
+      return
+    }
+    const convIds = results.map((r) => r.id).join(',')
+    const controller = new AbortController()
+    let cancelled = false
+    // 短延迟避免搜索主请求抖动期间重复触发
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/messages/snippets?convIds=${encodeURIComponent(convIds)}&q=${encodeURIComponent(trimmed)}`,
+          { signal: controller.signal }
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        const fragments: MessageFragment[] = Array.isArray(data.fragments)
+          ? data.fragments
+          : []
+        const map = new Map<string, MessageFragment>()
+        for (const f of fragments) {
+          // 一个会话取一条最早的(后端已排序),后到的忽略
+          if (!map.has(f.conversationId)) map.set(f.conversationId, f)
+        }
+        setFragmentsByConv(map)
+      } catch {
+        // 静默失败:片段是"锦上添花",不影响主搜索体验
+      }
+    }, 120)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [results, query])
+
+  // 触底加载更多(滚动容器内哨兵元素)
+  useEffect(() => {
+    if (!open) return
+    const sentinel = sentinelRef.current
+    const root = scrollRef.current
+    if (!sentinel || !root) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const e = entries[0]
+        if (e.isIntersecting && hasMore && !loading && !loadingMore) {
+          runSearch(query, false)
+        }
+      },
+      { root, rootMargin: '120px 0px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [open, hasMore, loading, loadingMore, query, runSearch])
+
+  function highlightMatch(text: string, q: string) {
+    if (!q.trim()) return text
+    // 不区分大小写地高亮;只标第一个命中(标题/片段通常一次即可)
+    const idx = text.toLowerCase().indexOf(q.trim().toLowerCase())
+    if (idx === -1) return text
+    return (
+      <>
+        {text.slice(0, idx)}
+        <mark className="bg-accent/30 text-content-primary rounded px-0.5">
+          {text.slice(idx, idx + q.trim().length)}
+        </mark>
+        {text.slice(idx + q.trim().length)}
+      </>
+    )
+  }
+
+  // 命中片段的角色徽章(用户/AI),搜索模式下显示
+  function FragmentRoleBadge({ role }: { role: string }) {
+    const isUser = role === 'user'
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center px-1 py-px rounded text-[9px] font-medium tracking-wide uppercase',
+          isUser
+            ? 'bg-accent/15 text-accent'
+            : 'bg-surface-subtle text-content-muted'
+        )}
+      >
+        {isUser ? 'YOU' : 'AI'}
+      </span>
+    )
+  }
+
+  function handleSelect(conv: ConversationData) {
+    onClose()
+    if (onSelect) {
+      onSelect(conv.id)
+      return
+    }
+    router.push(`/chat/c/${conv.id}`)
+  }
+
+  // 把结果按时间分组(最新在上,已经在 API 层按 updatedAt desc 排好)
+  const grouped = useMemo(() => groupConversations(results), [results])
+  // 扁平化用于键盘导航(activeIndex 跨组工作)
+  const flatResults = useMemo(
+    () => grouped.flatMap((g) => g.items),
+    [grouped]
+  )
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex((i) => Math.min(i + 1, Math.max(0, flatResults.length - 1)))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex((i) => Math.max(0, i - 1))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const target = flatResults[activeIndex]
+      if (target) handleSelect(target)
+    }
+  }
+
+  if (!open) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] px-4"
+      onClick={onClose}
+    >
+      {/* Backdrop — 主题感知磨砂遮罩 */}
+      <div className="absolute inset-0 bg-black/20 backdrop-blur-[12px] saturate-150 dark:bg-white/15 dark:saturate-150" />
+
+      {/* Panel */}
+      <div
+        className="relative w-full max-w-lg rounded-xl border border-line/60 bg-surface-glass backdrop-blur-xl shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Search input */}
+        <div className="flex items-center gap-2 px-3.5 py-3 border-b border-line/50">
+          <Search className="w-4 h-4 text-content-muted shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="搜索聊天记录..."
+            className="flex-1 bg-transparent text-sm text-content-primary placeholder:text-content-muted outline-none"
+          />
+          {loading && <Loader2 className="w-3.5 h-3.5 text-content-muted animate-spin" />}
+          <button
+            onClick={onClose}
+            className="p-1 rounded-md hover:bg-surface-subtle transition-colors"
+            aria-label="关闭搜索"
+          >
+            <X className="w-3.5 h-3.5 text-content-muted" />
+          </button>
+        </div>
+
+        {/* Results */}
+        <div
+          ref={scrollRef}
+          className="max-h-[50vh] overflow-y-auto py-1"
+        >
+          {results.length === 0 && !loading ? (
+            !query.trim() ? (
+              // 无关键词、无结果 —— 没有任何历史记录
+              <div className="px-4 py-8 text-center text-xs text-content-muted">
+                还没有聊天记录
+              </div>
+            ) : (
+              // 有关键词、无结果 —— 搜索无匹配
+              <div className="px-4 py-8 text-center text-xs text-content-muted">
+                没有匹配的对话
+              </div>
+            )
+          ) : grouped.length === 0 && !loading ? (
+            <div className="px-4 py-8 text-center text-xs text-content-muted">
+              加载中...
+            </div>
+          ) : (
+            <div className="py-1">
+              {grouped.map((group, gi) => {
+                const fragmentHits = query.trim()
+                  ? group.items.filter((c) => fragmentsByConv.has(c.id)).length
+                  : 0
+                return (
+                  <div key={group.key} className={cn(gi === 0 ? '' : 'mt-1')}>
+                    {/* 分组标题 —— 搜索时显示"搜索结果",浏览时显示时间分组 */}
+                    <div className="px-3.5 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-content-muted">
+                      {query.trim() ? '搜索结果' : group.key}
+                      <span className="ml-1.5 text-content-muted/70 normal-case tracking-normal">
+                        {group.items.length}
+                        {query.trim() && fragmentHits > 0 ? ` (${fragmentHits} 条消息命中)` : ''}
+                      </span>
+                    </div>
+                  {/* 该分组下的对话 */}
+                  <ul className="space-y-0.5 px-1">
+                    {group.items.map((conv) => {
+                      const flatIdx = flatResults.indexOf(conv)
+                      const fragment = fragmentsByConv.get(conv.id)
+                      return (
+                        <li key={conv.id}>
+                          <button
+                            onClick={() => handleSelect(conv)}
+                            onMouseEnter={() => setActiveIndex(flatIdx)}
+                            className={cn(
+                              'w-full flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors',
+                              flatIdx === activeIndex
+                                ? 'bg-accent/15 text-content-primary'
+                                : 'text-content-secondary hover:bg-surface-subtle/60'
+                            )}
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60 mt-1" />
+                            <div className="flex-1 min-w-0">
+                              {/* 标题行(支持高亮) */}
+                              <div className="text-sm truncate">
+                                {highlightMatch(conv.title || '新对话', query)}
+                              </div>
+                              {/* 消息级命中片段:仅搜索模式下显示,无命中时退化隐藏 */}
+                              {fragment && (
+                                <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                                  <FragmentRoleBadge role={fragment.role} />
+                                  <span className="text-[11px] text-content-muted/90 truncate flex-1">
+                                    {highlightMatch(fragment.snippet, query)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+                )
+              })}
+
+              {/* 加载更多哨兵 —— 滚到这里自动请求下一页 */}
+              <div ref={sentinelRef} className="h-1" />
+              {loadingMore && (
+                <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-content-muted">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  加载更多...
+                </div>
+              )}
+              {!hasMore && results.length > 0 && (
+                <div className="py-3 text-center text-[11px] text-content-muted/70">
+                  已经到底了
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div className="flex items-center justify-between px-3.5 py-2 border-t border-line/50 text-[10px] text-content-muted">
+          <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded bg-surface-subtle text-content-secondary">↑</kbd>
+              <kbd className="px-1 py-0.5 rounded bg-surface-subtle text-content-secondary">↓</kbd>
+              选择
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded bg-surface-subtle text-content-secondary">↵</kbd>
+              打开
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1 py-0.5 rounded bg-surface-subtle text-content-secondary">Esc</kbd>
+              关闭
+            </span>
+          </div>
+          <span>
+            {results.length}
+            {total != null ? ` / ${total}` : ''} 条{query.trim() ? '结果' : '记录'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}

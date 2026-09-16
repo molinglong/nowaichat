@@ -1,0 +1,82 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+.next/
+out/
+build/
+dist/
+
+# Testing
+coverage/
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Prisma
+prisma/*.db
+prisma/*.db-journal
+
+# Uploads
+uploads/
+
+# Dev files
+*.db
+*.db-*
+npm_error.txt
+npm_output.txt
+
+# SQLite migration 临时备份(防止意外入库)
+/dev.db.before-*
+/dev.db.empty-before-restore
+
+# Generated
+src/generated/
+
+# Deploy
+deploy/.env.production
+deploy/backups/
+
+# ===== 2026-09-16 重建仓库追加 =====
+# Rust/Tauri 编译产物
+src-tauri/target/
+**/src-tauri/target/
+# 旧仓库备份目录
+.git-backup-*/
+# 日志与诊断输出
+*.log
+tsc*.out
+query
+# 临时诊断脚本
+diag-*.cjs
+pg-diag.cjs
+list-users.cjs
+apply-mask-mig.cjs

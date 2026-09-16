@@ -1,0 +1,89 @@
+# 生产环境编排: app (Next.js) + postgres + nginx + certbot
+# 用法:
+#   第一次: ./scripts/deploy.sh init   <- 申请证书
+#   之后:   ./scripts/deploy.sh up     <- 拉起
+#   停掉:   ./scripts/deploy.sh down
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aichatt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-aichatt}
+    volumes:
+      - aichatt_pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-aichatt}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 数据库只暴露给本机,不要映射到宿主机公网
+    networks:
+      - internal
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: aichatt-app:latest
+    container_name: aichatt-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aichatt}?schema=public
+      AUTH_SECRET: ${AUTH_SECRET:?必须设置 AUTH_SECRET}
+      AUTH_URL: ${AUTH_URL:?必须设置 AUTH_URL,例如 https://your-domain.com}
+      NODE_ENV: production
+    volumes:
+      - aichatt_uploads:/app/uploads
+    networks:
+      - internal
+      - external
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: aichatt-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - aichatt_certbot_conf:/etc/letsencrypt:ro
+      - aichatt_certbot_www:/var/www/certbot:ro
+    networks:
+      - external
+
+  certbot:
+    image: certbot/certbot
+    container_name: aichatt-certbot
+    volumes:
+      - aichatt_certbot_conf:/etc/letsencrypt
+      - aichatt_certbot_www:/var/www/certbot:rw
+    # 仅在 init 脚本里临时跑一次,平时不常驻
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do sleep 3600; done'"
+
+volumes:
+  aichatt_pgdata:
+    name: aichatt_pgdata
+  aichatt_uploads:
+    name: aichatt_uploads
+  aichatt_certbot_conf:
+    name: aichatt_certbot_conf
+  aichatt_certbot_www:
+    name: aichatt_certbot_www
+
+networks:
+  internal:
+    name: aichatt_internal
+  external:
+    name: aichatt_external

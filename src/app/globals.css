@@ -1,0 +1,296 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── PingFang SC Ultralight 苹方极细 ───────────────────── */
+@font-face {
+  font-family: 'PingFang Ultralight';
+  src: url('/fonts/pingfangsc-ultralight.otf') format('opentype');
+  font-weight: 100;
+  font-display: swap;
+}
+
+/* ── 统一配色体系：macOS 极简黑白灰 + 单一中灰强调色 ───────────── */
+/* 变量采用 RGB 三元组（配合 Tailwind 的 rgb(var(--x) / <alpha>) 支持透明度）*/
+:root {
+  /* 基础 */
+  --background: 245 245 247;
+  --foreground: 29 29 31;
+
+  /* 面板层级 */
+  --surface: 255 255 255;
+  --surface-muted: 245 245 247;
+  --surface-subtle: 233 233 236;
+  --surface-glass: 255 255 255;
+
+  /* 边框 */
+  --line: 227 227 230;
+  --line-strong: 201 201 206;
+
+  /* 文本层级 */
+  --content-primary: 29 29 31;
+  --content-secondary: 110 110 115;
+  --content-muted: 152 152 157;
+
+  /* 强调色（中灰体系）*/
+  --accent: 63 63 70;
+  --accent-hover: 39 39 42;
+  --accent-foreground: 255 255 255;
+  --accent-soft: 236 236 238;
+
+  /* 代码块 */
+  --code-header: 245 245 247;
+  --code-bg: 250 250 250;
+}
+
+.dark {
+  /* 基础 */
+  --background: 12 12 13;
+  --foreground: 245 245 247;
+
+  /* 面板层级 */
+  --surface: 28 28 30;
+  --surface-muted: 38 38 40;
+  --surface-subtle: 51 51 54;
+  --surface-glass: 28 28 30;
+
+  /* 边框 */
+  --line: 57 57 60;
+  --line-strong: 74 74 78;
+
+  /* 文本层级 */
+  --content-primary: 245 245 247;
+  --content-secondary: 160 160 168;
+  --content-muted: 112 112 122;
+
+  /* 强调色（中灰体系）*/
+  --accent: 212 212 216;
+  --accent-hover: 228 228 231;
+  --accent-foreground: 28 28 30;
+  --accent-soft: 51 51 54;
+
+  /* 代码块 */
+  --code-header: 44 44 46;
+  --code-bg: 28 28 30;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  /* color-scheme 让浏览器原生 UI(表单控件/滚动条)跟随主题,
+     避免 iOS Safari 在深色模式下出现"白色输入框/滚动条"刺眼 */
+  color-scheme: light dark;
+}
+
+/* Safe-area 变量(需要 viewport-fit=cover 才能拿到非 0 值)
+   组件可以用 padding-bottom: var(--sab) 等避开 iPhone 刘海/Home Indicator */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+
+  /* 软键盘高度(由 useVisualViewport hook 写入)。键盘未弹出时为 0px。
+     ChatInput 等组件用 padding-bottom: var(--keyboard-height, 0px) 顶住键盘。 */
+  --keyboard-height: 0px;
+}
+
+body {
+  color: rgb(var(--foreground));
+  background: rgb(var(--background));
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Text selection */
+::selection {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: inherit;
+}
+
+.dark ::selection {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Custom scrollbar — 更细更浅,默认几乎隐形 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--content-muted) / 0.25) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--content-muted) / 0.25);
+  border-radius: 9999px;
+  transition: background-color 200ms ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--content-secondary) / 0.5);
+}
+
+/* Default transitions for interactive elements */
+@layer base {
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+
+  /* Focus visible ring for all interactive elements */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid rgb(var(--content-secondary));
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* 聊天消息滚动容器:防止整页橡皮筋回弹 */
+  .scroll-contain {
+    overscroll-behavior: contain;
+  }
+
+  /* 触屏设备(无 hover)直接显示按钮;桌面端 hover 才显示。
+     用来替代"纯靠 group-hover 显示"的编辑/删除按钮等,
+     让手机端用户永远能看到并点中这些操作。 */
+  @media (hover: none) {
+    .show-on-touch {
+      opacity: 1 !important;
+    }
+  }
+}
+
+/* 侧边栏会话列表逐个淡入(macOS 风格缓动,配合 inline animationDelay 错峰) */
+@keyframes sidebar-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sidebar-item-enter {
+  animation: sidebar-item-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* ── Tauri 桌面客户端专属样式 ─────────────────────────────
+   [data-tauri] 属性由 Tauri WebView 自动注入到 <html>，
+   浏览器开发时（npm run dev）永远不存在。
+   这里写任何客户端定制，web 端完全不受影响。
+   ─────────────────────────────────────────────────────── */
+[data-tauri] {
+  /* 窗口圆角：配合 transparent:true 制造圆角窗口 */
+  border-radius: 12px;
+  overflow: hidden;
+
+  /* 示例：客户端全局优化 */
+  /* scrollbar 宽度 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 127, 127, 0.3) transparent;
+}
+
+/* 桌面端：去除外层 padding，让圆角容器直接贴窗口边缘（macOS 浮窗感） */
+@media (min-width: 1024px) {
+  [data-tauri] .h-screen.bg-surface-muted {
+    padding: 0 !important;
+  }
+}
+
+/* 桌面端：调整圆角大小和阴影匹配全屏感 */
+@media (min-width: 1024px) {
+  [data-tauri] .shadow-2xl.border-line {
+    border-radius: 12px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25) !important;
+  }
+}
+
+/* 隐藏浏览器右键菜单（已经在 layout.tsx 用 JS 拦截，
+   这里给一个兜底 CSS 方案） */
+[data-tauri] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 允许特定元素可选中（聊天消息等） */
+[data-tauri] .message-content,
+[data-tauri] .chat-input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 客户端专属滚动条样式 */
+[data-tauri] ::-webkit-scrollbar {
+  width: 6px;
+}
+[data-tauri] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-tauri] ::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.3);
+  border-radius: 3px;
+}
+
+/* 客户端标题栏：去掉浏览器默认 focus 环 */
+[data-tauri] .title-bar button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 客户端禁止图片拖拽保存（可选，防止误操作） */
+/*
+[data-tauri] img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+*/
+
+/* ── Tauri 拖拽区自动隔离 ─────────────────────────────
+   在 header 上设了 data-tauri-drag-region 的元素
+   内部所有交互控件自动排除拖拽,无需逐个加 style。
+   ─────────────────────────────────────────────────── */
+[data-tauri] [data-tauri-drag-region] button,
+[data-tauri] [data-tauri-drag-region] a,
+[data-tauri] [data-tauri-drag-region] input,
+[data-tauri] [data-tauri-drag-region] select,
+[data-tauri] [data-tauri-drag-region] textarea {
+  -webkit-app-region: no-drag;
+}
+
+/* ── 富渲染(markdown+公式)局部覆盖 ───────────────────────── */
+/* 块级代码: 去掉行内 code 的背景/边框,由 pre 容器统一承担 */
+.rich-md pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+}
+/* 长公式横向滚动,防溢出气泡 */
+.rich-md .katex-display {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
