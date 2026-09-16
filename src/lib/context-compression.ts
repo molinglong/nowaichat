@@ -280,6 +280,9 @@ async function saveSummary(options: {
  *
  * 设计: 仅当该轮 user 消息文本够长时(MIN_USER_TEXT_LENGTH)才尝试摘要,
  * 避免对"你好""嗯"等闲聊触发 LLM 调用。
+ *
+ * @param force 手动压缩模式(用户点击"立即压缩"):跳过极短消息与阈值检查,
+ *              但保留"消息太少无法压缩"的兜底,返回是否真正执行了压缩。
  */
 export async function maybeCompressContext(options: {
   conversationId: string
@@ -294,7 +297,9 @@ export async function maybeCompressContext(options: {
   contextWindow: number
   /** 该会话最近累计的消息数(由调用方从 DB 读出,避免再读一次) */
   totalMessages: number
-}): Promise<void> {
+  /** 手动压缩:跳过极短消息与阈值检查 */
+  force?: boolean
+}): Promise<boolean> {
   const {
     conversationId,
     modelId,
@@ -303,12 +308,13 @@ export async function maybeCompressContext(options: {
     assistantText,
     contextWindow,
     totalMessages,
+    force = false,
   } = options
 
   try {
-    // 1) 极短消息跳过,减少无效调用
-    if (userText.trim().length < MIN_USER_TEXT_LENGTH) return
-    if (!contextWindow || contextWindow <= 0) return
+    // 1) 极短消息跳过,减少无效调用(手动压缩不跳过)
+    if (!force && userText.trim().length < MIN_USER_TEXT_LENGTH) return false
+    if (!contextWindow || contextWindow <= 0) return false
 
     // 2) 达到触发阈值才压缩
     //    粗估:"本轮 user/assistant + 历史累计的 token"
@@ -318,24 +324,24 @@ export async function maybeCompressContext(options: {
       1024,
       Math.floor(contextWindow * COMPRESS_THRESHOLD - RESERVED_OUTPUT_TOKENS)
     )
-    if (estimatedTotal < threshold) {
+    if (!force && estimatedTotal < threshold) {
       console.log(
         `[compress] skip: total≈${estimatedTotal} < threshold=${threshold} (conv=${conversationId})`
       )
-      return
+      return false
     }
 
     // 3) 从 DB 读最近若干条消息原文(用于构造摘要输入)
     //    一次读 60 条(≈ 30 对),足够覆盖大多数压缩场景。
     const recentMessages = await prisma.message.findMany({
-      where: { conversationId, role: { in: ["user", "assistant"] } },
+      where: { conversationId, archived: false, role: { in: ["user", "assistant"] } },
       orderBy: { createdAt: "desc" },
       take: 60,
       select: { id: true, role: true, content: true, createdAt: true },
     })
     // 倒序读出来后反转回时间正序
     recentMessages.reverse()
-    if (recentMessages.length < MIN_RECENT_TURNS * 2) return
+    if (recentMessages.length < MIN_RECENT_TURNS * 2) return false
 
     // 4) 决定压缩范围: 保留最近 N 对,前面的全部参与压缩
     const keepPairs = Math.max(
@@ -347,7 +353,7 @@ export async function maybeCompressContext(options: {
     )
     const keepMsgs = keepPairs * 2
     const older = recentMessages.slice(0, recentMessages.length - keepMsgs)
-    if (older.length === 0) return
+    if (older.length === 0) return false
 
     // 5) 读已有"最新摘要",作为前置上下文传给 LLM
     const existingSummary = await loadLatestSummary(conversationId)
@@ -379,8 +385,10 @@ export async function maybeCompressContext(options: {
       coveredMessages: older.length,
     })
     console.log(`[compress] saved summary for conv=${conversationId}`)
+    return true
   } catch (err) {
     // 压缩失败不影响主聊天流程
     console.error("[compress] failed:", err)
+    return false
   }
 }

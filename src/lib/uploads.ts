@@ -83,10 +83,14 @@ export async function deleteReferencedFiles(attachmentsJson: string | null): Pro
   }
 }
 
-/** 删除一个上传文件(不存在时静默成功) */
+/** 删除一个上传文件及其中转站记录(不存在时静默成功) */
 export async function deleteUploadFile(name: string): Promise<void> {
   const safe = sanitizeUploadName(name)
   if (!safe) return
+  // 同步删除中转站记录(调用方:未发送附件删除 / 消息级联清理 / 孤儿清扫)
+  await prisma.uploadFile.deleteMany({ where: { fileName: safe } }).catch((err) => {
+    console.error("[uploads] Failed to delete UploadFile record:", safe, err)
+  })
   try {
     await unlink(path.join(UPLOAD_DIR, safe))
   } catch (err: unknown) {
@@ -119,6 +123,8 @@ export async function sweepOrphanUploads(maxAgeMs: number): Promise<number> {
       const info = await stat(filePath)
       if (now - info.mtimeMs > maxAgeMs) {
         await unlink(filePath)
+        // 文件被清,中转站记录一并删除
+        await prisma.uploadFile.deleteMany({ where: { fileName: entry } }).catch(() => {})
         removed++
       }
     } catch {

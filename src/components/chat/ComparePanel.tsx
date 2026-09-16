@@ -13,6 +13,12 @@ import { toast } from '@/lib/toast'
 
 const COMPARE_MODELS_STORAGE_KEY = 'chat:compareModels'
 
+/** E 对比模式投票: 最新一轮投票(高亮胜出泳道) */
+interface CompareVoteInfo {
+  groupId: string
+  votedModel: string
+}
+
 interface ComparePanelProps {
   conversationId?: string
   /** 每个泳道的初始消息(与 compareModels 对齐) */
@@ -34,6 +40,8 @@ interface ComparePanelProps {
   compareModeAvailable?: boolean
   /** 会话创建后通知父级(用于隐藏切换开关) */
   onConversationCreated?: (convId: string) => void
+  /** E 对比模式投票: 会话已保存的最新一轮投票(回显高亮用) */
+  initialVote?: CompareVoteInfo | null
 }
 
 export function ComparePanel({
@@ -51,8 +59,10 @@ export function ComparePanel({
   onCompareModeChange,
   compareModeAvailable,
   onConversationCreated,
+  initialVote,
 }: ComparePanelProps) {
   const [compareModels, setCompareModels] = useState<string[]>(initialCompareModels)
+  const [latestVote, setLatestVote] = useState<CompareVoteInfo | null>(initialVote ?? null)
   const [anyLoading, setAnyLoading] = useState(false)
   // 单独继续聊天: 弹窗选中的泳道模型,确认后转换/克隆
   const [soloModelId, setSoloModelId] = useState<string | null>(null)
@@ -158,6 +168,25 @@ export function ComparePanel({
     laneApis.current.forEach((api) => api.stop())
   }, [])
 
+  // E 对比模式投票: 服务端按 modelId 反查最新轮 groupId,前端无需感知
+  const handleVote = useCallback(async (modelId: string) => {
+    const convId = conversationIdRef.current
+    if (!convId) return
+    try {
+      const res = await fetch(`/api/conversations/${convId}/compare-vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '投票失败')
+      setLatestVote({ groupId: data.groupId, votedModel: data.votedModel })
+      toast.success('已记录你的选择', { title: '对比投票' })
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : '投票失败,请重试')
+    }
+  }, [])
+
   const handleCompareModelsChange = useCallback(
     (models: string[]) => {
       setCompareModels(models)
@@ -248,6 +277,8 @@ export function ComparePanel({
                   registerApi={(api) => registerApi(modelId, api)}
                   onLoadingChange={(loading) => handleLoadingChange(modelId, loading)}
                   onRequestSolo={setSoloModelId}
+                  isVoted={latestVote?.votedModel === modelId}
+                  onVote={handleVote}
                 />
               ) : (
                 <div className="h-full flex items-center justify-center px-4">

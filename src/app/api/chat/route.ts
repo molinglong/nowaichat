@@ -20,12 +20,14 @@ import { generateImage, extractImagePrompts, IMG_MARKER_REGEX } from "@/lib/ai/i
 import { generateConversationTitle } from "@/lib/ai/title-generator"
 import { getStylePromptFromPreset, STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style"
 import { getMaskById } from '@/lib/ai/mask-resolve'
+import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
 import { loadLatestSummary, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
-import { sanitizeUploadName, readUploadFile, readUploadAsDataUrl } from "@/lib/uploads"
+import { sanitizeUploadName, readUploadAsDataUrl } from "@/lib/uploads"
+import { SCANNED_PDF_MIN_CHARS } from "@/lib/file-parser"
 import type { ModelDefinition } from "@/lib/ai/types"
 
 export const maxDuration = 120 // seconds – 深度思考耗时较长,Vercel Pro 允许到 300
@@ -348,18 +350,43 @@ export async function POST(req: NextRequest) {
               text: `（用户上传了一张图片「${att.name}」，但你无法查看图片内容。请直接告诉用户：你无法查看图片，需要切换到支持视觉的模型后重新发送；不要尝试描述、猜测或生成图片。）`,
             })
           }
-        } else if (att.type.startsWith("text/")) {
-          const buf = await readUploadFile(fileName)
-          if (buf) {
-            // 截断超长文本,避免撑爆上下文
-            const text = buf.toString("utf-8").slice(0, 20000)
-            contentParts.push({ type: "text", text: `【附件 ${att.name}】\n${text}` })
-          }
         } else {
-          contentParts.push({
-            type: "text",
-            text: `（用户上传了文件 ${att.name}，当前版本暂不支持解析该类型）`,
-          })
+          // 文本/PDF:从中转站(UploadFile)取上传时解析好的文本,不再读盘重复解析
+          const rec = await prisma.uploadFile
+            .findUnique({ where: { fileName } })
+            .catch(() => null)
+          if (
+            rec?.parseStatus === "done" &&
+            rec.parseText &&
+            rec.parseText.trim().length >= SCANNED_PDF_MIN_CHARS
+          ) {
+            // 截断超长文本,避免撑爆上下文
+            const truncated = rec.parseText.length > 20000
+            const text = rec.parseText.slice(0, 20000)
+            contentParts.push({
+              type: "text",
+              text: `【附件 ${att.name}】\n${text}${
+                truncated ? "\n（内容过长，已截断前 20000 字符）" : ""
+              }`
+            })
+          } else if (rec?.parseStatus === "done") {
+            // done 但提取不到有效文本:扫描件/图片型 PDF
+            contentParts.push({
+              type: "text",
+              text: `（用户上传的 PDF「${att.name}」是扫描版/图片型，未能提取到文本。请告诉用户：扫描版 PDF 暂无法阅读，建议提供文字版，或在设置中切换到支持视觉的模型。）`,
+            })
+          } else if (rec) {
+            // failed 等异常状态
+            contentParts.push({
+              type: "text",
+              text: `（用户上传的文件「${att.name}」解析失败，无法读取内容。请直接告知用户该附件无法处理。）`,
+            })
+          } else {
+            contentParts.push({
+              type: "text",
+              text: `（用户上传了文件 ${att.name}，当前版本暂不支持解析该类型）`,
+            })
+          }
         }
       }
       if (contentParts.length > 0) {
@@ -448,6 +475,9 @@ export async function POST(req: NextRequest) {
   const webSearchEnabled = webSearch === true
   const engine: SearchEngineId = searchEngine ?? "qianfan"
   let searchApiKey: string | null = null
+  // 工具调用明细收集:onStepFinish 逐步累积,流结束后随 metadata 入库,
+  // 供前端历史消息回显工具调用卡片(kind='tool_calls')。
+  const collectedToolCalls: Array<{ tool: string; input: unknown; output: unknown }> = []
   let searchTool: ReturnType<typeof createWebSearchTool> | null = null
   if (webSearchEnabled) {
     try {
@@ -515,6 +545,34 @@ export async function POST(req: NextRequest) {
   // Ensure a conversation exists
   let convId = conversationId
   let isNewConversation = false
+
+  // A 流式恢复: 单聊(非对比)在生成开始前落一条 streaming 草稿行,
+  // 流式期间节流快照已生成文本,刷新/换端后客户端轮询续显,
+  // onFinish 定格为最终内容。快照写入经 snapChain 串行化,
+  // 保证在途快照先落地、最终落库后执行,避免旧快照覆盖最终内容。
+  let draftMessageId: string | null = null
+  let snapText = ""
+  let snapReasoning = ""
+  let lastSnapAt = 0
+  let snapStopped = false
+  let snapChain: Promise<void> = Promise.resolve()
+  const scheduleDraftSnapshot = (): void => {
+    if (!draftMessageId || snapStopped) return
+    snapChain = snapChain
+      .then(async () => {
+        if (!draftMessageId || snapStopped) return
+        try {
+          await prisma.message.update({
+            where: { id: draftMessageId },
+            data: { content: snapText, reasoning: snapReasoning || null },
+          })
+          lastSnapAt = Date.now()
+        } catch {
+          // 快照失败不影响流式主流程
+        }
+      })
+      .catch(() => {})
+  }
   if (!convId) {
     const conv = await prisma.conversation.create({
       data: {
@@ -554,6 +612,11 @@ export async function POST(req: NextRequest) {
         }
       })
     } else {
+      // C 分支轻量版: 编辑产生的新 user 消息带 editedFrom 指向被编辑消息,
+      // 供前端"查看历史版本"回看入口使用(仅写入该字段,不透传任意 metadata)
+      const editedFrom = (
+        lastRawUserMsg?.metadata as { editedFrom?: unknown } | undefined
+      )?.editedFrom
       await prisma.message.create({
         data: {
           conversationId: convId,
@@ -562,8 +625,30 @@ export async function POST(req: NextRequest) {
           ...(attachments.length > 0
             ? { attachments: JSON.stringify(attachments) }
             : {}),
+          ...(typeof editedFrom === "string" && editedFrom
+            ? { metadata: JSON.stringify({ editedFrom }) }
+            : {}),
         },
       })
+    }
+  }
+
+  // A 流式恢复: 单聊时生成开始前先落草稿行(失败不阻塞对话)。
+  // 放在用户消息落库之后,保证列表时序:用户消息在前,草稿行在后。
+  if (!groupId) {
+    try {
+      const draft = await prisma.message.create({
+        data: {
+          conversationId: convId!,
+          role: "assistant",
+          content: "",
+          model: modelId,
+          streaming: true,
+        },
+      })
+      draftMessageId = draft.id
+    } catch (err) {
+      console.error("[chat] Failed to create streaming draft message:", err)
     }
   }
 
@@ -596,9 +681,10 @@ export async function POST(req: NextRequest) {
   if (branchSummaryInjected > 0) {
     console.log(`[chat] injected ${branchSummaryInjected} branch_summary into system prompt`)
   }
-  // Mask persona:面具人格放最前(人格层优先于摘要/记忆/风格/能力说明)
+  // Mask persona:面具人格放最前(人格层优先于摘要/记忆/风格/能力说明)。
+  // 末尾统一追加逃生舱暗号(见 MASK_ESCAPE_HATCH),内置与自定义面具都适用
   if (effectiveMask) {
-    systemParts.unshift(effectiveMask.systemPrompt)
+    systemParts.unshift(`${effectiveMask.systemPrompt}\n\n${MASK_ESCAPE_HATCH}`)
     console.log(`[chat] Mask persona injected: ${effectiveMask.ref}`)
   }
 
@@ -621,8 +707,35 @@ export async function POST(req: NextRequest) {
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
     stopWhen: stepCountIs(5),
+    // A 流式恢复: 累积快照文本并节流(600ms)写库。
+    // 注意: onChunk 返回 Promise 会暂停流处理,这里保持同步 + fire-and-forget。
+    // AI SDK v7 中 text-delta / reasoning-delta 的文本字段为 `text`。
+    onChunk: ({ chunk }) => {
+      const c = chunk as { type?: string; text?: unknown }
+      if (c.type === "text-delta" && typeof c.text === "string") {
+        snapText += c.text
+      } else if (c.type === "reasoning-delta" && typeof c.text === "string") {
+        snapReasoning += c.text
+      }
+      if (draftMessageId && Date.now() - lastSnapAt > 600) {
+        scheduleDraftSnapshot()
+      }
+    },
     onStepFinish: ({ stepType, toolCalls, toolResults, finishReason }: { stepType?: string; toolCalls?: unknown[]; toolResults?: unknown[]; finishReason?: string }) => {
       console.log(`[chat] step finished: type=${stepType}, toolCalls=${toolCalls?.length ?? 0}, toolResults=${toolResults?.length ?? 0}, finishReason=${finishReason}`)
+      // 收集工具调用与结果(AI SDK v7: call={toolCallId,toolName,input}, result={toolCallId,output})
+      const stepResults = Array.isArray(toolResults) ? toolResults : []
+      for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
+        const c = call as { toolCallId?: string; toolName?: string; input?: unknown }
+        const r = stepResults.find((x) => (x as { toolCallId?: string }).toolCallId === c.toolCallId) as
+          | { output?: unknown; result?: unknown }
+          | undefined
+        collectedToolCalls.push({
+          tool: c.toolName ?? 'unknown',
+          input: c.input ?? null,
+          output: r ? (r.output ?? r.result ?? null) : null,
+        })
+      }
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {
       // 诊断日志:记录流异常结束,便于排查偶发"模型没思考"问题
@@ -632,8 +745,23 @@ export async function POST(req: NextRequest) {
         )
       }
 
-      // 流出错且无任何内容时不落库,避免历史中出现空白助手消息
-      if (finishReason === 'error' && !text && !reasoningText) return
+      // 流出错且无任何内容时不落库,避免历史中出现空白助手消息。
+      // A 流式恢复: 先等在途快照落地,草稿行已有快照内容则定格保留,
+      // 完全为空则删除,不留空白消息或永久 streaming 的残留行。
+      if (finishReason === 'error' && !text && !reasoningText) {
+        snapStopped = true
+        await snapChain
+        if (draftMessageId) {
+          if (snapText.trim() || snapReasoning.trim()) {
+            await prisma.message
+              .update({ where: { id: draftMessageId }, data: { streaming: false } })
+              .catch(() => {})
+          } else {
+            await prisma.message.delete({ where: { id: draftMessageId } }).catch(() => {})
+          }
+        }
+        return
+      }
 
       // Ensure content is always a non-null string (Prisma schema requires String, not String?)
       let content = text ?? ""
@@ -706,7 +834,18 @@ export async function POST(req: NextRequest) {
       // 移除模型输出被截断时残留的未闭合标记(避免原始标记入库)
       content = content.replace(/\[IMG:[^\]]*$/g, "")
 
+      // A 流式恢复: 停止新快照并等在途快照完成,避免旧快照覆盖最终内容
+      snapStopped = true
+      await snapChain
+
       try {
+        // 工具调用明细随消息入库:前端历史回显工具卡片;极端大结果(>32KB)放弃入库防膨胀
+        let toolCallsMetadata: string | undefined
+        if (collectedToolCalls.length > 0) {
+          const json = JSON.stringify({ kind: 'tool_calls', version: 1, toolCalls: collectedToolCalls })
+          if (json.length <= 32768) toolCallsMetadata = json
+          else console.warn(`[chat] toolCalls metadata too large (${json.length}B), skipped`)
+        }
         if (groupId) {
           // 对比模式: 重新生成时先删除本泳道同组旧消息,避免重复入库
           await prisma.message.deleteMany({
@@ -714,19 +853,31 @@ export async function POST(req: NextRequest) {
           })
         }
         // Persist assistant response (with reasoning + token usage if available)
-        await prisma.message.create({
-          data: {
-            conversationId: convId!,
-            role: "assistant",
-            content,
-            reasoning: savedReasoning,
-            model: modelId,
-            // token 消耗统计(某些提供商可能不返回 usage)
-            promptTokens: usage?.inputTokens,
-            completionTokens: usage?.outputTokens,
-            ...(groupId ? { groupId } : {}),
-          },
-        })
+        // A 流式恢复: 单聊时更新草稿行为最终内容并置 streaming=false;
+        // 草稿行已不存在(被清理/超时 finalize)时兜底重新插入,不丢消息。
+        // 对比模式无草稿行(draftMessageId 恒为 null),保持原 create 行为。
+        const persistData = {
+          conversationId: convId!,
+          role: "assistant" as const,
+          content,
+          reasoning: savedReasoning,
+          model: modelId,
+          // token 消耗统计(某些提供商可能不返回 usage)
+          promptTokens: usage?.inputTokens,
+          completionTokens: usage?.outputTokens,
+          ...(toolCallsMetadata ? { metadata: toolCallsMetadata } : {}),
+          ...(groupId ? { groupId } : {}),
+          streaming: false,
+        }
+        if (draftMessageId) {
+          try {
+            await prisma.message.update({ where: { id: draftMessageId }, data: persistData })
+          } catch {
+            await prisma.message.create({ data: persistData })
+          }
+        } else {
+          await prisma.message.create({ data: persistData })
+        }
         // Update conversation: timestamp + auto-generate title on first message
         const titleUpdate = isNewConversation
           ? { title: userContent.slice(0, 30) || "新对话" }
@@ -765,7 +916,7 @@ export async function POST(req: NextRequest) {
         // 不在对比模式下触发(多泳道并发写入易产生状态竞争)。
         if (!groupId && convId) {
           const totalMessages = await prisma.message.count({
-            where: { conversationId: convId, role: { in: ["user", "assistant"] } },
+            where: { conversationId: convId, archived: false, role: { in: ["user", "assistant"] } },
           })
           maybeCompressContext({
             conversationId: convId,

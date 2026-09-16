@@ -34,6 +34,18 @@ export async function GET(
 
   const { id } = params
 
+  // A 流式恢复: 超时兜底——超过 10 分钟仍处于 streaming 的草稿行视为已中断,
+  // 定格为普通消息,避免前端无限轮询(快照周期 600ms,正常生成远短于该阈值)。
+  // 对比模式无草稿行,此 updateMany 无副作用。
+  await prisma.message.updateMany({
+    where: {
+      conversationId: id,
+      streaming: true,
+      createdAt: { lt: new Date(Date.now() - 10 * 60 * 1000) },
+    },
+    data: { streaming: false },
+  })
+
   const conversation = await prisma.conversation.findFirst({
     where: {
       id,
@@ -41,6 +53,8 @@ export async function GET(
     },
     include: {
       messages: {
+        // C 分支轻量版: 归档消息不在正常列表中展示(仅回看端点可见)
+        where: { archived: false },
         orderBy: { createdAt: 'asc' },
       },
     },
@@ -77,6 +91,7 @@ export async function GET(
       reasoning: m.reasoning,
       model: m.model,
       groupId: m.groupId,
+      streaming: m.streaming,
       attachments,
       // 结构化 UI 提示:{kind, sourceId, sourceTitle, ...}
       // 仅由后端写入;前端按 kind 分发渲染分支
@@ -97,6 +112,13 @@ export async function GET(
     }
   }
 
+  // E 对比模式投票: 返回最新一轮投票(对比模式回显高亮用)
+  const latestVote = await prisma.compareVote.findFirst({
+    where: { conversationId: id, userId: session.user.id },
+    orderBy: { updatedAt: 'desc' },
+    select: { groupId: true, votedModel: true },
+  })
+
   return NextResponse.json({
     id: conversation.id,
     title: conversation.title,
@@ -106,6 +128,7 @@ export async function GET(
     stylePreset: conversation.stylePreset ?? null, // 新版 preset(null = balanced)
     maskId: conversation.maskId ?? null, // 面具(null = 无面具)
     compareModels,
+    latestVote: latestVote ?? null,
     messages,
   })
 }

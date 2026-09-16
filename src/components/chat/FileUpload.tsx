@@ -41,6 +41,11 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+function formatChars(count: number): string {
+  if (count < 1000) return `${count} 字`
+  return `${(count / 1000).toFixed(1)}k 字`
+}
+
 function uploadFile(file: File, onProgress: (pct: number) => void): Promise<Attachment> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -99,10 +104,6 @@ export function FileUpload({
         setUploading((prev) => [...prev, entry])
 
         try {
-          // 客户端前置校验:本期暂不支持 PDF
-          if (file.type === 'application/pdf') {
-            throw new Error('本期暂不支持 PDF,请上传图片或文本文件')
-          }
           const result = await uploadFile(file, (pct) => {
             setUploading((prev) =>
               prev.map((u) => (u.id === id ? { ...u, progress: pct } : u))
@@ -166,7 +167,7 @@ export function FileUpload({
         ref={inputRef}
         type="file"
         multiple
-        accept="image/*,text/*"
+        accept="image/*,text/*,application/pdf"
         className="hidden"
         onChange={(e) => {
           if (e.target.files) handleFiles(e.target.files)
@@ -197,9 +198,21 @@ export function FileUpload({
                     <p className="text-xs text-content-primary truncate">
                       {att.name}
                     </p>
-                    <p className="text-[10px] text-content-muted">
-                      {formatSize(att.size)}
-                    </p>
+                    {att.type === 'application/pdf' ? (
+                      att.parseStatus === 'failed' ? (
+                        <p className="text-[10px] text-red-500 truncate">
+                          解析失败{att.parseError ? `：${att.parseError}` : ''}
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-content-muted">
+                          {att.pageCount ?? '?'} 页 · {formatChars(att.charCount ?? 0)}
+                        </p>
+                      )
+                    ) : (
+                      <p className="text-[10px] text-content-muted">
+                        {formatSize(att.size)}
+                      </p>
+                    )}
                   </div>
                   <button
                     onClick={() => handleRemove(idx)}
@@ -265,7 +278,7 @@ export function FileUpload({
             'disabled:opacity-50 disabled:cursor-not-allowed'
           )}
           aria-label="添加附件"
-          title="添加附件 (图片、文本文件, 最大10MB)"
+          title="添加附件 (图片、文本、PDF, 最大10MB)"
         >
           <Paperclip className="w-3.5 h-3.5" />
         </button>

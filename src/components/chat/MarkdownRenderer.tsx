@@ -41,7 +41,20 @@ const mdComponents: Components = {
   h4: ({ children }) => (
     <h4 className="mb-1.5 mt-3 text-sm font-semibold text-content-secondary first:mt-0">{children}</h4>
   ),
-  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+  p: ({ children }) => {
+    // 独立成段的行内公式(模型常把 $..$ 单独成行,看起来夹在正文里很难受):
+    // 段内仅一个 .katex 元素、其余为空白 → 渲染成公式卡片(样式见 globals.css .math-card);
+    // 「文字+公式」混排段不命中,保持普通段落
+    const nodes = React.Children.toArray(children)
+    const math = nodes.find(
+      (n): n is React.ReactElement<{ className?: string }> =>
+        React.isValidElement(n) && n.props.className === 'katex',
+    )
+    if (math && nodes.every((n) => n === math || (typeof n === 'string' && !n.trim()))) {
+      return <p className="math-card">{math}</p>
+    }
+    return <p className="my-2 first:mt-0 last:mb-0">{children}</p>
+  },
   ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
   ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
@@ -84,10 +97,49 @@ const mdComponents: Components = {
   ),
 }
 
+/**
+ * 把「独占一行」的行内公式($..$)提升为块级($$..$$):
+ * 行内公式走 KaTeX textstyle,分数/求和类被渲染得非常紧凑(分子分母挤在分数线两侧);
+ * displayStyle 用全尺寸参数,上下舒展。模型单行输出 $..$ 很常见,语义上就是展示公式。
+ * 逐行扫描,跳过 fenced code block 内的行,避免误改代码示例;
+ * 单行的 $$x$$ 也顺手展开为三行(标准 flow 语法),防 micromark 解析异常。
+ */
+function promoteStandaloneMath(md: string): string {
+  const lines = md.split('\n')
+  let inFence = false
+  let fenceChar = ''
+  for (let i = 0; i < lines.length; i++) {
+    const fence = lines[i].trim().match(/^(`{3,}|~{3,})/)
+    if (fence) {
+      if (!inFence) {
+        inFence = true
+        fenceChar = fence[1][0]
+      } else if (fence[1][0] === fenceChar) {
+        inFence = false
+        fenceChar = ''
+      }
+      continue
+    }
+    if (inFence) continue
+    // $$x$$ 单行 → 三行块级
+    const block = lines[i].match(/^\s*\$\$(.+)\$\$\s*$/)
+    if (block) {
+      lines[i] = `$$\n${block[1]}\n$$`
+      continue
+    }
+    // 单 $ 包裹且独占一行(内容不含裸 $,支持 \\ 转义)
+    const inline = lines[i].match(/^\s*\$(?!\$)((?:\\.|[^$\\])+?)\$\s*$/)
+    if (inline) lines[i] = `$$\n${inline[1]}\n$$`
+  }
+  return lines.join('\n')
+}
+
 function RichMarkdown({ content }: { content: string }) {
   // 插件数组引用固定(memo),避免父组件重渲染导致 ReactMarkdown 反复重新解析
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], [])
   const rehypePlugins = useMemo<PluggableList>(() => [[rehypeKatex, { throwOnError: false, strict: false }]], [])
+  // 内容稳定后才进富渲染,预处理只跑一次
+  const promoted = useMemo(() => promoteStandaloneMath(content), [content])
   return (
     <div className="rich-md">
       <ReactMarkdown
@@ -95,7 +147,7 @@ function RichMarkdown({ content }: { content: string }) {
         rehypePlugins={rehypePlugins}
         components={mdComponents}
       >
-        {content}
+        {promoted}
       </ReactMarkdown>
     </div>
   )

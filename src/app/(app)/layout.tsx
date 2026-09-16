@@ -1,10 +1,21 @@
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { Sidebar } from '@/components/sidebar/Sidebar'
-import { SettingsModal } from '@/components/SettingsModal'
 import { TopBar } from '@/components/TopBar'
+import { SettingsModal } from '@/components/SettingsModal'
 
-export default async function ImagesLayout({
+/**
+ * 四个主 tab(chat/images/explore/study)共享的 shell layout。
+ *
+ * 此前每个 tab 各持有一份一模一样的独立 layout,导致跨 tab 导航时
+ * Next.js 视为"不同 layout 之间的跳转"——整棵 Sidebar/TopBar 子树
+ * 被卸载重建:侧边栏逐条淡入动画每次重播、会话/面具/模型等 6+ 个
+ * 接口每次重发、auth() 每次重跑,体感"每切一次卡一下"。
+ *
+ * 放进同一个 route group(route group 不改变 URL)后,tab 间导航
+ * 只替换 children,shell 与其中所有客户端状态完整保留。
+ */
+export default async function AppLayout({
   children,
 }: {
   children: React.ReactNode

@@ -550,14 +550,10 @@ export function Sidebar() {
           </div>
         )}
 
-        <div className={cn(
-          'mt-auto pt-1 pb-2 flex flex-col items-center',
-          sidebarEffectiveOpen
-            ? 'px-2'
-            : 'px-0 border-t border-line/40'
-        )}>
-          {!sidebarEffectiveOpen && session?.user && (
-            session.user.image ? (
+        {/* 底部:折叠态头像占位(设置入口已移至顶栏最右侧) */}
+        {!sidebarEffectiveOpen && session?.user && (
+          <div className="mt-auto pt-1 pb-2 px-0 border-t border-line/40 flex flex-col items-center">
+            {session.user.image ? (
               <img
                 src={session.user.image}
                 alt={session.user.name || '头像'}
@@ -568,29 +564,9 @@ export function Sidebar() {
               <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-[11px] font-medium text-accent shrink-0 mb-1.5">
                 {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
               </div>
-            )
-          )}
-          {sidebarEffectiveOpen ? (
-            <button
-              onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}
-              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm text-content-secondary hover:text-content-primary hover:bg-surface-subtle/60 transition-all active:scale-[0.98] touch-manipulation"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              设置
-            </button>
-          ) : (
-            <button
-              onClick={() => { setSettingsOpen(true) }}
-              className="p-1.5 rounded-lg text-content-secondary hover:text-content-primary hover:bg-surface-subtle/60 transition-all active:scale-95 touch-manipulation"
-              aria-label="设置"
-              title="设置"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </aside>
 
       <SearchDialog

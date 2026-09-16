@@ -26,12 +26,15 @@ model User {
   searchApiKeys  SearchApiKey[]
   courses       Course[]
   providerModelOverrides ProviderModelOverride[]
+  compareVotes  CompareVote[]
   memoryEnabled Boolean   @default(true)
   clarifyEnabled Boolean  @default(true)
   imageModel    String   @default("builtin:wanx2.1-t2i-turbo")
   imageSize     String   @default("1024*1024")
   imageModels   ImageModel[]
   masks         Mask[]
+  uploadFiles   UploadFile[]
+  studyNotes    StudyNote[]
 }
 
 model Account {
@@ -98,8 +101,27 @@ model Conversation {
   user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages   Message[]
   summaries  ConversationSummary[]
+  compareVotes CompareVote[]
 
   @@index([userId, updatedAt])
+}
+
+// E 对比模式投票: 用户对某一轮对比(groupId)选出更满意的模型回答。
+// 每轮一票(可改票 = upsert);会话删除时级联清理。
+model CompareVote {
+  id             String   @id @default(cuid())
+  userId         String
+  conversationId String
+  groupId        String   // 一轮对比的分组 id(Message.groupId)
+  votedModel     String   // 被投票的模型 id(Message.model)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, groupId])
+  @@index([userId])
 }
 
 // 用户自定义面具 (P1): maskId = 'user:<cuid>' 前缀
@@ -158,12 +180,22 @@ model Message {
   groupId          String?  // 同一轮对比共享的分组 id
   promptTokens     Int?     // 本轮输入 token 数（assistant 消息）
   completionTokens Int?     // 本轮输出 token 数（assistant 消息）
+  // 流式草稿标志(A 流式恢复): 生成开始即落 streaming=true 的 assistant 行,
+  // 流式过程中定期快照已生成文本;onFinish 更新为最终内容并置 false。
+  // 加载端点对超过 5 分钟仍 streaming 的行兜底 finalize(进程崩溃场景)。
+  streaming        Boolean  @default(false)
+  // C 分支轻量版: 编辑消息时旧消息及之后的消息不再物理删除,改为归档。
+  // archivedRoot 记录被编辑消息 id,回看端点按它查询旧版本链。
+  // 归档消息不参与正常读取/上下文压缩/搜索,但保留数据与附件文件。
+  archived         Boolean  @default(false)
+  archivedRoot     String?
   createdAt        DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
   @@index([conversationId, groupId])
+  @@index([archivedRoot])
 }
 
 model Memory {
@@ -299,6 +331,27 @@ model SearchApiKey {
   @@index([userId])
 }
 
+// 文件中转站:上传文件的元数据与解析结果。
+// 上传时即解析(PDF→文本 / 文本→全文),聊天发送时按 fileName 查本表取解析结果注入。
+// 生命周期与磁盘文件同步:未被消息引用且超时的记录随孤儿清理一起删除。
+model UploadFile {
+  id           String   @id @default(cuid())
+  userId       String
+  fileName     String   @unique // nanoid(12)+ext,与 public/uploads 磁盘文件一一对应
+  originalName String
+  mimeType     String
+  size         Int
+  parseStatus  String   // done | failed | skipped(图片无需解析文本)
+  parseError   String?
+  parseText    String?  // 提取文本全文(入库不截断,注入时按 20000 字符截断)
+  pageCount    Int?     // PDF 专有
+  charCount    Int?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
 // ===================== 教学模式(teach mode) =====================
 // 课程(Course) 与某个 Conversation 一一对应,用于把对话生成的结构化课程
 // (chapters) 持久化下来,便于 CourseProgress 跟踪学习进度,
@@ -347,4 +400,48 @@ model WrongQuestion {
   course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
   @@index([userId, courseId, resolved])
+}
+
+// ===================== 学习功能: 错题本 + 间隔复习 =====================
+// 错题本: 一条记录 = 一道存入的题(题干 + 可选 AI 讲解),附带掌握度与 FSRS 间隔复习状态。
+// 复习调度用 ts-fsrs 官方包,下列 FSRS 字段与其 Card 一一对应,复习时重建后调 repeat()。
+model StudyNote {
+  id              String    @id @default(cuid())
+  userId          String
+  sourceMessageId String?   // 来源消息 id,保留追溯(聊天气泡一键存入)
+  subject         String?   // 学科: math/english/chinese/physics/chemistry/biology/other(AI 打标)
+  topic           String?   // 考点标签,如「十字相乘」(AI 打标)
+  title           String    // 题干摘要
+  content         String    // 完整题目 + 我的解答
+  analysis        String?   // AI 解析(markdown,含 LaTeX),复习卡背面展示
+  mastery         Float     @default(0) // 掌握度 0-1,复习自评与变式判卷驱动
+  // —— FSRS 状态(与 ts-fsrs Card 对应) ——
+  stability       Float?
+  difficulty      Float?
+  state           Int       @default(0) // 0=New 1=Learning 2=Review 3=Relearning
+  dueAt           DateTime? // 下次复习时间;建卡时=now,直接进入今日队列
+  lastReviewAt    DateTime?
+  reps            Int       @default(0)
+  lapses          Int       @default(0) // 遗忘次数,lapses>=2 时写入长期记忆
+  createdAt       DateTime  @default(now())
+
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewLogs StudyNoteReviewLog[]
+
+  @@index([userId, dueAt])
+  @@index([userId, subject])
+}
+
+// 复习/自评流水: 阶段 B 每次自评写入一行,阶段 C 掌握度曲线的数据源
+model StudyNoteReviewLog {
+  id            String   @id @default(cuid())
+  noteId        String
+  rating        Int      // 1=Again(卡住了) 3=Good(想起来了),即 FSRS Rating 枚举值
+  masteryBefore Float
+  masteryAfter  Float
+  ratedAt       DateTime @default(now())
+
+  note StudyNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId, ratedAt])
 }

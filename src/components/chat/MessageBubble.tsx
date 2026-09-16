@@ -16,12 +16,17 @@ import {
   Code2,
   Reply,
   ExternalLink,
+  BookmarkPlus,
+  CheckCircle2,
   Layers,
+  History,
+  Loader2,
 } from 'lucide-react'
 import { cn, splitReasoningTail } from '@/lib/utils'
 import { useTypewriter } from '@/lib/useTypewriter'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { ChartCard } from './ChartCard'
+import { ToolCallCard, extractToolCallViews } from './ToolCallCard'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { toast } from '@/lib/toast'
 import { useChatStore } from '@/store/chat-store'
@@ -248,6 +253,14 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/** C 分支轻量版: 归档旧版本消息(回看端点返回结构) */
+interface ArchivedMessage {
+  id: string
+  role: string
+  content: string
+  createdAt?: string
+}
+
 interface MessageBubbleProps {
   message: UIMessage
   isStreaming?: boolean
@@ -260,6 +273,8 @@ interface MessageBubbleProps {
   isFocused?: boolean
   /** 外层 ref callback，用于滚动到视野 */
   wrapperRef?: (el: HTMLDivElement | null) => void
+  /** 前一条用户消息的文本(存错题本时,assistant 消息用它配对题干;null/undefined = 无) */
+  prevUserContent?: string | null
 }
 
 function MessageBubbleInner({
@@ -272,6 +287,7 @@ function MessageBubbleInner({
   onEdit,
   isFocused,
   wrapperRef,
+  prevUserContent,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -282,6 +298,15 @@ function MessageBubbleInner({
   const messageMeta = getMessageMetadata(message)
   const isSummaryCard =
     isSystem && messageMeta?.kind === 'branch_summary' && !!messageMeta.sourceId
+
+  // C 分支轻量版: 编辑产生的新消息带 editedFrom(指向被编辑消息),
+  // 据此提供"查看历史版本"回看入口(旧版本链存在服务端归档表中)
+  const editedFrom =
+    isUser &&
+    messageMeta &&
+    typeof (messageMeta as { editedFrom?: unknown }).editedFrom === 'string'
+      ? ((messageMeta as { editedFrom?: unknown }).editedFrom as string)
+      : null
   // 卡片用的"摘要正文":剥掉首行 `## 来自上文的上下文摘要...`,
   // 因为卡片头部已经有自己的标题,避免重复
   const summaryContent = useMemo(() => {
@@ -316,6 +341,30 @@ function MessageBubbleInner({
   const [htmlMirrorActive, setHtmlMirrorActive] = useState(false)
   const htmlMirrorRef = useRef<HTMLDivElement>(null)
   const htmlMirrorResolveRef = useRef<((html: string | null) => void) | null>(null)
+
+  // ── 旧版本回看(C 分支轻量版)────────────────────────
+  const currentConversationId = useChatStore((s) => s.currentConversationId)
+  const [archivedOpen, setArchivedOpen] = useState(false)
+  const [archivedLoading, setArchivedLoading] = useState(false)
+  const [archivedMessages, setArchivedMessages] = useState<ArchivedMessage[] | null>(null)
+
+  const toggleArchived = useCallback(() => {
+    if (archivedOpen) {
+      setArchivedOpen(false)
+      return
+    }
+    setArchivedOpen(true)
+    if (archivedMessages || !editedFrom) return
+    setArchivedLoading(true)
+    fetch(`/api/conversations/${currentConversationId}/archived?rootId=${editedFrom}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data) => setArchivedMessages(Array.isArray(data?.messages) ? data.messages : []))
+      .catch(() => {
+        toast.error('历史版本加载失败', { title: '提示' })
+        setArchivedOpen(false)
+      })
+      .finally(() => setArchivedLoading(false))
+  }, [archivedOpen, archivedMessages, editedFrom, currentConversationId])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Extract reasoning parts from message (for deep thinking / reasoning models)
@@ -339,6 +388,13 @@ function MessageBubbleInner({
   const isCurrentlyStreaming = isStreaming && isAssistant && lastPart?.state === 'streaming'
   const isWaitingForReasoning = isStreaming && isAssistant && !reasoningText && !text
 
+  // 工具调用视图(联网搜索等):流式期间来自 message.parts,历史消息来自 metadata.toolCalls。
+  // 渲染在 reasoning 与正文之间,时间线上与"模型先查资料后回答"的顺序一致。
+  const toolCallViews = useMemo(
+    () => (isAssistant ? extractToolCallViews(message) : []),
+    [message, isAssistant]
+  )
+
   // 兜底:模型偶发把全部内容(含最终答案)都放进 <think> 标签,导致正文为空。
   // 流式期间也尝试拆分(只要看到明确标记就立即切分),避免用户看到空白几秒到几十秒。
   // 用正则限定只切分明确标记,避免误切普通的"答案"二字。
@@ -350,6 +406,33 @@ function MessageBubbleInner({
     (!isStreaming || streamingFallbackMarker.test(reasoningText))
   const bodySplit = needsBodyFallback ? splitReasoningTail(reasoningText) : null
   const bodyText = bodySplit ? bodySplit.tail : text
+
+  // 存错题本:用户消息存题干;assistant 消息配对存(prevUserContent 为题干,自身为解析)
+  const [studySaveState, setStudySaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const handleSaveToStudy = useCallback(async () => {
+    if (studySaveState !== 'idle') return
+    const questionText = isUser ? bodyText : (prevUserContent ?? '')
+    const analysisText = isAssistant ? bodyText : ''
+    if (!questionText.trim() && !analysisText.trim()) {
+      toast.error('未找到可保存的题干', { title: '错题本' })
+      return
+    }
+    setStudySaveState('saving')
+    try {
+      const res = await fetch('/api/study/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceMessageId: message.id, questionText, analysisText }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStudySaveState('saved')
+      toast.success('已存入错题本', { title: '错题本' })
+    } catch (err) {
+      console.error('[MessageBubble] save to study failed:', err)
+      setStudySaveState('idle')
+      toast.error('存入失败,请重试', { title: '错题本' })
+    }
+  }, [studySaveState, isUser, isAssistant, bodyText, prevUserContent, message.id])
   const displayReasoningText = bodySplit ? bodySplit.head : reasoningText
 
   // 思考过程默认展开(深度思考用户需要一眼看到推理),用户可手动折叠
@@ -688,6 +771,14 @@ function MessageBubbleInner({
               </div>
             )}
             {/* Main response */}
+            {/* 工具调用卡片:联网搜索过程可视化(搜索中 spinner / 完成后来源列表) */}
+            {toolCallViews.length > 0 && (
+              <div className="mb-2 flex flex-col gap-1.5">
+                {toolCallViews.map((v, i) => (
+                  <ToolCallCard key={v.toolCallId ?? `${v.tool}-${i}`} view={v} />
+                ))}
+              </div>
+            )}
             {displayText ? (
               <div className="relative text-sm text-content-primary leading-relaxed">
                 <MarkdownRenderer content={displayText} messageId={message.id} rich={isAssistant && !showCursor} />
@@ -718,7 +809,7 @@ function MessageBubbleInner({
               if (!Array.isArray(chart.data) || !chart.type) return null
               return (
                 <div className="mt-3">
-                  <ChartCard chart={chart as Parameters<typeof ChartCard>[0]['chart']} />
+                  <ChartCard chart={chart as unknown as Parameters<typeof ChartCard>[0]['chart']} />
                 </div>
               )
             })()}
@@ -767,6 +858,46 @@ function MessageBubbleInner({
             <div className="rounded-lg bg-accent px-3 py-1.5 rounded-br-sm">
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-accent-foreground">{text}</p>
             </div>
+          </div>
+        )}
+
+        {/* C 分支轻量版: 编辑过的消息提供旧版本回看(仅 user 且有 editedFrom) */}
+        {isUser && editedFrom && (
+          <div className="mt-1 rounded-lg border border-line/50 bg-surface/60 p-2">
+            <button
+              onClick={toggleArchived}
+              className="inline-flex items-center gap-1 text-[11px] text-content-muted hover:text-content-secondary transition-colors"
+              aria-expanded={archivedOpen}
+            >
+              {archivedLoading ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <History className="w-3 h-3" />
+              )}
+              <span>已编辑 · {archivedOpen ? '收起历史版本' : '查看历史版本'}</span>
+              <ChevronDown className={cn('w-3 h-3 transition-transform', archivedOpen ? '' : '-rotate-90')} />
+            </button>
+            {archivedOpen && archivedMessages && archivedMessages.length > 0 && (
+              <div className="mt-2 space-y-1.5">
+                {archivedMessages.map((m) => (
+                  <div key={m.id} className="rounded-md bg-surface-muted/70 px-2 py-1.5">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted">
+                        {m.role === 'user' ? '用户' : 'AI'}
+                      </span>
+                      {m.createdAt && (
+                        <span className="text-[10px] text-content-muted/70">
+                          {formatFullDateTime(new Date(m.createdAt))}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-content-secondary break-words leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
+                      {m.content}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -892,6 +1023,23 @@ function MessageBubbleInner({
             >
               <Reply className="w-3.5 h-3.5" />
             </button>
+            {/* 存错题本:流式结束才可点;已存过显示 ✓ */}
+            {!isStreaming && (isUser || isAssistant) && (
+              <button
+                onClick={handleSaveToStudy}
+                disabled={studySaveState === 'saving'}
+                className="p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors active:scale-95 touch-manipulation"
+                title="存入错题本"
+                aria-label="存入错题本"
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                {studySaveState === 'saved' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-accent" />
+                ) : (
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
             </>
           )}
         </div>
@@ -945,7 +1093,19 @@ function areMessageBubblePropsEqual(
   if (prev.onRegenerate !== next.onRegenerate) return false
   if (prev.onEdit !== next.onEdit) return false
   if (prev.isFocused !== next.isFocused) return false
+  if (prev.prevUserContent !== next.prevUserContent) return false
   // wrapperRef 不必比较(它只用来滚动,变化不影响渲染结果)
+
+  // 附件挂载由异步 effect 注入(引用变化): 不比较会导致文件卡片永远不出现。
+  // 引用相同直接跳过(url 唯一,长度+url 指纹足以覆盖增删场景)
+  const paAtt = (prev.message as UIMessageWithAttachments).attachments
+  const pbAtt = (next.message as UIMessageWithAttachments).attachments
+  if (paAtt !== pbAtt) {
+    if (!paAtt || !pbAtt || paAtt.length !== pbAtt.length) return false
+    for (let i = 0; i < paAtt.length; i++) {
+      if (paAtt[i].url !== pbAtt[i].url) return false
+    }
+  }
 
   // 关键: parts 的"形状指纹" —— 流式追加时 text 变化不算(我们靠 state 字段触发重渲)
   const pa = prev.message.parts

@@ -363,6 +363,25 @@ export function ChatInput({
                 onWebSearchChange={onWebSearchChange}
                 webSearchAvailable={webSearchAvailable}
               />
+              {/* 对比模式开关: welcome 变体同样可达(样式与 standard 变体一致) */}
+              {compareModeAvailable && onCompareModeChange && (
+                <button
+                  onClick={() => onCompareModeChange(!compareMode)}
+                  disabled={isLoading}
+                  className={cn(
+                    'hidden md:inline-flex items-center h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors shrink-0',
+                    compareMode
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
+                    isLoading && 'opacity-50 cursor-not-allowed'
+                  )}
+                  title="对比模式"
+                  aria-label="对比模式"
+                  aria-pressed={compareMode}
+                >
+                  对比
+                </button>
+              )}
               <div className="w-px h-7 bg-line shrink-0" />
               <textarea
                 key="welcome-single"

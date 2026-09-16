@@ -288,9 +288,28 @@ body {
   padding: 0;
   border-radius: 0;
 }
+/* 块级公式($$..$$)与独立成段的行内公式卡片: 与代码块同视觉语言(浅底+细边框),
+   公式与正文视觉分离。上下留足呼吸空间(分数/求和类公式较高,小边距会显拥挤);
+   首/末张卡片去外边距,对应 mdComponents 的 first:mt-0/last:mb-0 */
+.rich-md .katex-display,
+.rich-md .math-card {
+  margin: 1.25em 0;
+  padding: 1.25rem 1rem;
+  background: rgb(var(--code-bg));
+  border: 1px solid rgb(var(--line));
+  border-radius: 0.5rem;
+  text-align: center;
+}
+.rich-md .katex-display:first-child,
+.rich-md .math-card:first-child {
+  margin-top: 0;
+}
+.rich-md .katex-display:last-child,
+.rich-md .math-card:last-child {
+  margin-bottom: 0;
+}
 /* 长公式横向滚动,防溢出气泡 */
 .rich-md .katex-display {
-  margin: 0.75em 0;
   overflow-x: auto;
   overflow-y: hidden;
 }

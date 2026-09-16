@@ -58,15 +58,15 @@ export default function LoginPage() {
               htmlFor="email"
               className="block text-sm font-medium text-content-secondary mb-1.5"
             >
-              邮箱
+              邮箱或用户名
             </label>
             <input
               id="email"
-              type="email"
+              type="text"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              placeholder="you@example.com 或用户名"
               className="w-full px-4 py-2.5 rounded-lg border border-line-strong bg-surface text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong focus:border-transparent transition"
             />
           </div>

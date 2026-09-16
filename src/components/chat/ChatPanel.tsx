@@ -11,6 +11,7 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
 import { OutlineSidebar } from './OutlineSidebar'
+import { ContextMeter } from './ContextMeter'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import { toast } from '@/lib/toast'
@@ -55,6 +56,8 @@ interface ChatPanelProps {
   initialStylePreset?: string | null
   /** 当前会话已保存的面具 id(内置面具);null 表示无面具 */
   initialMaskId?: string | null
+  /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
+  initialCompareVote?: { groupId: string; votedModel: string } | null
 }
 
 export function ChatPanel({
@@ -68,9 +71,24 @@ export function ChatPanel({
   laneInitialMessages,
   initialStylePreset,
   initialMaskId,
+  initialCompareVote,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
   const [conversationId, setConversationId] = useState(initialConversationId)
+
+  // A 流式恢复: 页面加载时若历史里最后一条 assistant 消息带 streaming 标记,
+  // 说明服务端可能仍在生成(草稿行快照中),进入轮询续显模式。
+  // 正常流式由 useChat 的流直接驱动,此值保持 null,轮询只在恢复场景激活。
+  const [remoteStreamingId, setRemoteStreamingId] = useState<string | null>(() => {
+    for (let i = initialMessages.length - 1; i >= 0; i--) {
+      const m = initialMessages[i]
+      if (m.role === 'assistant') {
+        const meta = m.metadata as { streaming?: unknown } | undefined
+        return meta?.streaming === true ? m.id : null
+      }
+    }
+    return null
+  })
   const conversationStylePreset = useChatStore(state => state.conversationStylePreset)
   const setConversationStylePreset = useChatStore(state => state.setConversationStylePreset)
   const conversationMaskId = useChatStore(state => state.conversationMaskId)
@@ -444,7 +462,9 @@ export function ChatPanel({
   // setMessages 引用稳定(来自 useChat),挂到 ref 上供 onFinish 内的最终内容同步使用
   setMessagesRef.current = setMessages
 
-  const isLoading = status === 'submitted' || status === 'streaming'
+  // A 流式恢复: 远端仍在生成(轮询续显中)也算生成中,输入框保持禁用/停止按钮可见,
+  // 新消息按 F 方案入队,待定格后自动发出
+  const isLoading = status === 'submitted' || status === 'streaming' || remoteStreamingId != null
 
   // 生成开始时(stop → send 或 regenerate)清掉"接着说"横幅
   const prevStatusRef = useRef(status)
@@ -457,34 +477,140 @@ export function ChatPanel({
     }
   }, [status, pendingContinuation, setPendingContinuation])
 
-  // 发送时把附件注入到最后一条用户消息(附件在发送前已写入 attachmentsRef,
-  // 这里用 setMessages 把它补到 UI 消息上,让用户立即看到预览)。
-  // 不走 useEffect 依赖 messages,避免 setMessages → 新 messages → effect 再跑 的死循环。
-  const attachPendingToLastUserMessage = useCallback((attachments: Attachment[]) => {
+  // 排队发送(F): isLoading 期间用户发送的消息先入队,本轮结束(status 回到 ready)后自动发出。
+  // isLoadingRef 供 handleSend 判断当前是否生成中;按项目惯例 ref 声明与赋值分开,赋值在 effect。
+  const isLoadingRef = useRef(false)
+  useEffect(() => {
+    isLoadingRef.current = isLoading
+  }, [isLoading])
+
+  const pendingSendQueueRef = useRef<{ text: string; attachments?: Attachment[] }[]>([])
+  const [pendingSendQueue, setPendingSendQueue] = useState<{ count: number; preview: string } | null>(null)
+
+  const cancelPendingSendQueue = useCallback(() => {
+    pendingSendQueueRef.current = []
+    setPendingSendQueue(null)
+  }, [])
+
+  // 当前模型的上下文窗口(B): 供 ContextMeter 计算占用百分比
+  const currentContextWindow = useMemo(
+    () => mergedModels.find((m) => m.id === currentModel)?.contextWindow ?? 0,
+    [mergedModels, currentModel]
+  )
+
+  // 待注入附件: handleSend 先记录,等 sendMessage 把新 user 消息 push 进 messages 后,
+  // 由下方 useEffect 把附件挂到最后一条 user 消息上(与 CompareLane 同款时序)。
+  // 不能在 sendMessage 前同步 setMessages —— 那时新 user 消息还不存在,
+  // 附件会挂到上一条消息上(或无消息可挂),当轮气泡永远看不到附件卡片。
+  const pendingAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
+
+  // 消费后置空:挂载后 atts 为 undefined 会早退,不会因依赖 messages 而死循环。
+  useEffect(() => {
+    const atts = pendingAttachmentsRef.current
+    if (!atts || atts.length === 0) return
     setMessages((prev) => {
       const next = [...prev]
       for (let i = next.length - 1; i >= 0; i--) {
         if (next[i].role === 'user') {
-          next[i] = { ...next[i], attachments } as UIMessage
+          next[i] = { ...next[i], attachments: atts } as UIMessage
           break
         }
       }
       return next
     })
-  }, [setMessages])
+    pendingAttachmentsRef.current = undefined
+  }, [messages, setMessages])
 
   const handleSend = useCallback(
     (text: string, attachments?: Attachment[]) => {
+      // 生成中不丢弃输入:入队,本轮结束后由下方 effect 自动发出
+      if (isLoadingRef.current) {
+        pendingSendQueueRef.current.push({ text, attachments })
+        const queue = pendingSendQueueRef.current
+        setPendingSendQueue({ count: queue.length, preview: queue[0].text.slice(0, 40) })
+        return
+      }
       attachmentsRef.current = attachments
       if (attachments && attachments.length > 0) {
-        attachPendingToLastUserMessage(attachments)
+        pendingAttachmentsRef.current = attachments
       }
       sendMessage({ text })
-      // Clear after send so it's not included in subsequent messages
-      attachmentsRef.current = undefined
+      // 注意: 此处不能清空 attachmentsRef —— AI SDK sendMessages 首行 await resolve2(body)
+      // 会先让出微任务,若本处同步清空,getter 求值时附件已丢失(实测所有附件类型均发送为 undefined)。
+      // 保留本次值: 下一次发送由上方赋值覆盖(无附件时为 undefined);
+      // regenerate 时 getter 仍返回本次附件,服务端注入到最后一条 user 消息,行为正确。
     },
-    [sendMessage, attachPendingToLastUserMessage]
+    [sendMessage]
   )
+
+  // 出队: 本轮生成结束(isLoading true→false)且 status 回到 ready 时,自动发出最早一条排队消息。
+  // 出错(status='error')不出队,避免连环失败;用户修复后手动发送的下一轮成功结束时继续消化队列。
+  const prevIsLoadingRef = useRef(false)
+  useEffect(() => {
+    const was = prevIsLoadingRef.current
+    prevIsLoadingRef.current = isLoading
+    if (!was || isLoading || status !== 'ready') return
+    const queue = pendingSendQueueRef.current
+    if (queue.length === 0) return
+    const next = queue.shift()
+    setPendingSendQueue(
+      queue.length > 0 ? { count: queue.length, preview: queue[0].text.slice(0, 40) } : null
+    )
+    if (next) handleSend(next.text, next.attachments)
+  }, [isLoading, status, handleSend])
+
+  // A 流式恢复: 轮询服务端草稿行快照(1.2s),streaming=false 时定格。
+  // 定格内容以库中为准(可能是最终内容,比本地快照新)。
+  useEffect(() => {
+    if (!remoteStreamingId || !conversationId) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/messages?limit=1`)
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        const latest = data.messages?.[0]
+        if (cancelled || !latest || latest.role !== 'assistant') return
+        if (latest.id !== remoteStreamingId) {
+          // 草稿行已消失(流出错且无快照时被服务端删除):停止轮询
+          setRemoteStreamingId(null)
+          return
+        }
+        const stillStreaming = latest.streaming === true
+        if (!stillStreaming) {
+          setRemoteStreamingId(null)
+          bumpConversationVersion()
+        }
+        const text = typeof latest.content === 'string' ? latest.content : ''
+        const reasoning =
+          typeof latest.reasoning === 'string' && latest.reasoning.trim() ? latest.reasoning : null
+        if (!text && !reasoning) return
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id !== remoteStreamingId
+              ? m
+              : {
+                  ...m,
+                  parts: [
+                    ...(reasoning
+                      ? [{ type: 'reasoning' as const, text: reasoning, state: 'done' as const }]
+                      : []),
+                    ...(text ? [{ type: 'text' as const, text, state: 'done' as const }] : []),
+                  ],
+                } as UIMessage
+          )
+        )
+      } catch {
+        // 网络抖动:下个周期重试
+      }
+    }
+    void poll()
+    const timer = setInterval(poll, 1200)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [remoteStreamingId, conversationId, setMessages, bumpConversationVersion])
 
   const handleStop = useCallback(() => {
     // 在真正停止前,记录最后一条 assistant 文本到 store,
@@ -509,8 +635,18 @@ export function ChatPanel({
     } else {
       setPendingContinuation(null)
     }
+    if (remoteStreamingId) {
+      // A 流式恢复: 轮询续显期间没有活动流可 abort,
+      // 改为请求服务端定格草稿行,并立即停止本地轮询
+      const convId = conversationIdRef.current
+      if (convId) {
+        fetch(`/api/conversations/${convId}/finalize-draft`, { method: 'POST' }).catch(() => {})
+      }
+      setRemoteStreamingId(null)
+      return
+    }
     stop()
-  }, [stop, messages, currentModel, setPendingContinuation])
+  }, [stop, messages, currentModel, setPendingContinuation, remoteStreamingId])
 
   /**
    * 「接着说」:把停下来的最后一段作为上下文,发送一条提示让模型接着输出。
@@ -600,14 +736,31 @@ export function ChatPanel({
 
   const handleEditMessage = useCallback(
     async (messageId: string, newText: string) => {
+      // C 分支轻量版: 刚发送的消息持有 AI SDK 本地临时 id(与服务端 cuid 不同),
+      // 服务端按 id 查不到时会用旧文本回退定位,所以这里附带旧文本一起传
+      const oldMessage = messages.find((m) => m.id === messageId)
+      const oldText = oldMessage
+        ? oldMessage.parts
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text)
+            .join('')
+        : ''
+
       // Delete the old message and all subsequent messages from the DB
       const convId = conversationIdRef.current
+      // 服务端定位到的真实数据库 id(客户端传临时 id 时与本地 id 不同),
+      // 回看链路(archivedRoot / editedFrom)必须用真实 id
+      let editedFromId = messageId
       if (convId) {
         try {
-          await fetch(
-            `/api/conversations/${convId}/messages?messageId=${messageId}`,
+          const res = await fetch(
+            `/api/conversations/${convId}/messages?messageId=${encodeURIComponent(messageId)}&content=${encodeURIComponent(oldText)}`,
             { method: 'DELETE' }
           )
+          const data = await res.json().catch(() => ({}))
+          if (typeof data?.archivedRootId === 'string' && data.archivedRootId) {
+            editedFromId = data.archivedRootId
+          }
         } catch (err) {
           console.error('Failed to delete old messages:', err)
           toast.error('编辑失败:无法清理旧消息', { title: '编辑消息' })
@@ -615,13 +768,15 @@ export function ChatPanel({
       }
 
       // Truncate local messages to before the edited message
+      // 注意: 本地查找必须用原始本地 id(临时 id 或历史 cuid),不能用 editedFromId
       const editIndex = messages.findIndex((m) => m.id === messageId)
       if (editIndex === -1) return
       const truncated = messages.slice(0, editIndex)
       setMessages(truncated)
 
-      // Send the edited text as a new message
-      sendMessage({ text: newText })
+      // C 分支轻量版: 新消息带 editedFrom 指向被编辑消息(真实数据库 id),服务端落库后
+      // MessageBubble 据此显示"查看历史版本"回看入口
+      sendMessage({ text: newText, metadata: { editedFrom: editedFromId } })
     },
     [messages, setMessages, sendMessage]
   )
@@ -665,6 +820,7 @@ export function ChatPanel({
         onCompareModeChange={handleCompareModeChange}
         compareModeAvailable={!conversationId}
         onConversationCreated={handleCompareConversationCreated}
+        initialVote={initialCompareVote ?? null}
       />
     )
   }
@@ -822,6 +978,9 @@ export function ChatPanel({
           webSearch={webSearch}
           onWebSearchChange={handleWebSearchChange}
           webSearchAvailable={webSearchAvailable}
+          compareMode={false}
+          compareModeAvailable={!conversationId}
+          onCompareModeChange={handleCompareModeChange}
           welcomeHeader={(
             <div className="text-center mb-8">
               <h2
@@ -856,6 +1015,39 @@ export function ChatPanel({
               <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
             </div>
           </div>
+
+          {/* 输入区上方的辅助行: 左侧排队发送横幅(F),右侧上下文用量仪表(B)。
+              与输入框同宽对齐(ChatInput 内层同为 max-w-2xl 居中),仪表贴在输入框右缘正上方 */}
+          {(pendingSendQueue || (conversationId && currentContextWindow > 0)) && (
+            <div className="px-3 pb-1">
+              <div className="mx-auto flex w-full max-w-2xl items-end justify-between gap-2">
+                {pendingSendQueue ? (
+                  <div className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface-subtle/60 px-2.5 py-1 text-[11px] text-content-secondary">
+                    <span className="truncate">
+                      AI 回复后将自动发送
+                      {pendingSendQueue.count > 1 ? `（排队 ${pendingSendQueue.count} 条）` : ''}：
+                      {pendingSendQueue.preview}
+                    </span>
+                    <button
+                      onClick={cancelPendingSendQueue}
+                      className="shrink-0 rounded px-1 text-[10px] text-content-muted transition-colors hover:text-content-primary"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <span />
+                )}
+                {conversationId && currentContextWindow > 0 && (
+                  <ContextMeter
+                    conversationId={conversationId}
+                    contextWindow={currentContextWindow}
+                    refreshSignal={messages.length}
+                  />
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Input area - fixed at bottom */}
           <ChatInput

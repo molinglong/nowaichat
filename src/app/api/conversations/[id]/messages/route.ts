@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
-import { deleteReferencedFiles } from "@/lib/uploads"
 
 export async function GET(
   req: NextRequest,
@@ -29,7 +28,8 @@ export async function GET(
   }
 
   const messages = await prisma.message.findMany({
-    where: { conversationId: id, ...(model ? { model } : {}) },
+    // C 分支轻量版: 归档消息不在正常列表中展示(仅回看端点可见)
+    where: { conversationId: id, archived: false, ...(model ? { model } : {}) },
     orderBy: { createdAt: "desc" },
     take: limit + 1, // fetch one extra to determine if there's a next page
     ...(cursor
@@ -44,7 +44,9 @@ export async function GET(
       content: true,
       attachments: true,
       reasoning: true,
+      metadata: true,
       model: true,
+      streaming: true,
       createdAt: true,
     },
   })
@@ -60,9 +62,11 @@ export async function GET(
 }
 
 /**
- * Delete a message and all messages after it in the conversation.
+ * Archive a message and all messages after it in the conversation.
  * Used when a user edits a message — the old message and its
- * subsequent responses are removed before the new message is sent.
+ * subsequent responses are archived (C 分支轻量版) before the new
+ * message is sent, so the old branch stays retrievable via the
+ * archived endpoint (?rootId=<messageId>) instead of being lost.
  *
  * Query: ?messageId=<id>
  */
@@ -97,37 +101,48 @@ export async function DELETE(
   }
 
   // Find the target message to get its createdAt timestamp
-  const targetMessage = await prisma.message.findFirst({
+  let targetMessage = await prisma.message.findFirst({
     where: { id: messageId, conversationId: id },
-    select: { createdAt: true },
+    select: { id: true, createdAt: true },
   })
+
+  if (!targetMessage) {
+    // C 分支轻量版回退: 刚发送的消息在客户端持有 AI SDK 本地临时 id(与服务端 cuid 不同),
+    // 直接按 id 查必 404。客户端会附带旧文本,按 内容+角色+最近10分钟 定位真实行。
+    // 10 分钟窗口将误匹配风险压到几乎为零(临时 id 消息都是刚发送的)。
+    const content = searchParams.get("content")
+    if (content) {
+      targetMessage = await prisma.message.findFirst({
+        where: {
+          conversationId: id,
+          role: "user",
+          content,
+          createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, createdAt: true },
+      })
+    }
+  }
 
   if (!targetMessage) {
     return NextResponse.json({ error: "Message not found" }, { status: 404 })
   }
 
-  // 删除前收集将删除消息引用的附件文件(编辑消息时级联清理)
-  const doomed = await prisma.message.findMany({
-    where: {
-      conversationId: id,
-      createdAt: { gte: targetMessage.createdAt },
-      attachments: { not: null },
-    },
-    select: { attachments: true },
-  })
-
-  // Delete the target message and all messages after it
-  await prisma.message.deleteMany({
+  // C 分支轻量版: 归档代替物理删除,附件文件一并保留(旧版本图片不裂)。
+  // archivedRoot 记被编辑消息的**真实数据库 id**(客户端传来的可能是本地临时 id),
+  // 回看端点按它拉取旧版本链;返回 archivedRootId 供客户端作为新消息的 editedFrom。
+  await prisma.message.updateMany({
     where: {
       conversationId: id,
       createdAt: { gte: targetMessage.createdAt },
     },
+    data: { archived: true, archivedRoot: targetMessage.id },
   })
 
-  // 库删除完成后清理磁盘文件
-  for (const m of doomed) {
-    await deleteReferencedFiles(m.attachments)
-  }
-
-  return NextResponse.json({ success: true })
+  return NextResponse.json({
+    success: true,
+    archived: true,
+    archivedRootId: targetMessage.id,
+  })
 }

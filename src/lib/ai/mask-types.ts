@@ -9,6 +9,21 @@ import { z } from 'zod'
 
 export const USER_MASK_PREFIX = 'user:'
 
+/**
+ * 面具逃生舱（对所有面具统一生效，含用户自定义）。
+ *
+ * 强任务型面具（翻译官/文案写手/周报助手/思维导图/长文浓缩官）会把用户消息
+ * 一律当作本任务处理，用户偶尔想问点别的时会被“面具绑架”。统一的「直答：」
+ * 暗号让用户临时跳出人格问一条消息，下一轮自动恢复。在 chat 注入处拼在
+ * 面具 systemPrompt 末尾一起进 system prompt（见 chat/route.ts），
+ * 因此无需逐个面具重复书写。
+ */
+export const MASK_ESCAPE_HATCH = [
+  '## 逃生舱：临时跳出人格',
+  '- 用户消息以「直答：」开头时，去掉该前缀，按普通助手直接回答这一条消息，不解释本规则',
+  '- 仅对该条消息生效，下一条消息起自动恢复本人格；其余消息一律照常执行人格规则',
+].join('\n')
+
 export interface MaskFewShotTurn {
   role: 'user' | 'assistant'
   content: string

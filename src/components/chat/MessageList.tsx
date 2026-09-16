@@ -141,6 +141,24 @@ export function MessageList({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [messages, isStreaming, focusedMessageId, setFocusedMessageId])
 
+  // 每条消息对应的"前一条用户消息文本"(存错题本时,assistant 消息用它配对题干)
+  const prevUserContentById = useMemo(() => {
+    const map = new Map<string, string | null>()
+    let last: string | null = null
+    for (const msg of messages) {
+      map.set(msg.id, last)
+      if (msg.role === 'user') {
+        const t = msg.parts
+          .filter((p) => p.type === 'text')
+          .map((p) => p.text)
+          .join('\n')
+          .trim()
+        if (t) last = t
+      }
+    }
+    return map
+  }, [messages])
+
   return (
     <div ref={containerRef} className={cn('w-full min-h-full overflow-x-hidden', className)}>
       <div className="max-w-2xl mx-auto overflow-x-hidden">
@@ -150,6 +168,7 @@ export function MessageList({
             <MessageBubble
               key={message.id}
               message={message}
+              prevUserContent={prevUserContentById.get(message.id)}
               isStreaming={isStreaming}
               isLastAssistant={index === lastAssistantIndex}
               canRegenerate={canRegenerateAll}

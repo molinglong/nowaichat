@@ -527,6 +527,10 @@ export function SettingsModal() {
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null)
+  // ── 记忆单条编辑(D) ────────────────────────────────────
+  const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
+  const [memoryEditDraft, setMemoryEditDraft] = useState('')
+  const [memorySavingEdit, setMemorySavingEdit] = useState(false)
   // ── 记忆导入（从 ChatGPT / Claude 等其他 AI 导入）──────────────
   const [memoryImportOpen, setMemoryImportOpen] = useState(false)
   const [memoryImportSource, setMemoryImportSource] = useState('')
@@ -1048,6 +1052,40 @@ export function SettingsModal() {
       toast.error('删除失败，请重试')
     } finally {
       setMemoryDeleting(null)
+    }
+  }
+
+  // ── 记忆单条编辑(D) ────────────────────────────────────
+  function startMemoryEdit(m: MemoryInfo) {
+    setMemoryEditingId(m.id)
+    setMemoryEditDraft(m.content)
+  }
+
+  function cancelMemoryEdit() {
+    setMemoryEditingId(null)
+    setMemoryEditDraft('')
+  }
+
+  async function handleSaveMemoryEdit(id: string) {
+    const content = memoryEditDraft.trim()
+    if (!content) return
+    setMemorySavingEdit(true)
+    try {
+      const res = await fetch(`/api/memories/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '保存失败')
+      setMemories((prev) => prev.map((m) => (m.id === id ? { ...m, content } : m)))
+      setMemoryEditingId(null)
+      setMemoryEditDraft('')
+      toast.success('记忆已更新')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : '保存失败，请重试')
+    } finally {
+      setMemorySavingEdit(false)
     }
   }
 
@@ -3528,36 +3566,83 @@ export function SettingsModal() {
                             key={m.id}
                             className="flex items-start gap-2 px-2.5 py-2 rounded-lg bg-surface-muted/60 border border-line/40"
                           >
-                            <div className="flex-1 min-w-0 text-left">
-                              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted shrink-0">
-                                  {MEMORY_CATEGORY_LABELS[m.category] ?? '其他'}
-                                </span>
-                                {m.source === 'manual' && (
-                                  <span className="text-[10px] text-content-muted shrink-0">手动添加</span>
-                                )}
-                                {m.source === 'imported' && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 shrink-0">
-                                    导入自 {m.sourceDetail || '其他 AI'}
-                                  </span>
-                                )}
+                            {memoryEditingId === m.id ? (
+                              <div className="flex-1 min-w-0 space-y-1.5">
+                                <textarea
+                                  value={memoryEditDraft}
+                                  onChange={(e) => setMemoryEditDraft(e.target.value)}
+                                  rows={2}
+                                  maxLength={200}
+                                  autoFocus
+                                  className={cn(
+                                    'w-full text-xs rounded-md border border-line/60 bg-surface px-2 py-1.5',
+                                    'text-content-primary placeholder:text-content-muted resize-none',
+                                    'focus:outline-none focus:ring-2 focus:ring-line-strong/30 focus:border-line-strong'
+                                  )}
+                                />
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    onClick={cancelMemoryEdit}
+                                    className="px-2 py-1 rounded-md text-[11px] text-content-muted hover:text-content-primary hover:bg-surface-subtle/80 transition-colors"
+                                  >
+                                    取消
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveMemoryEdit(m.id)}
+                                    disabled={!memoryEditDraft.trim() || memorySavingEdit}
+                                    className={cn(
+                                      'px-2.5 py-1 rounded-md text-[11px] font-medium transition-all flex items-center gap-1',
+                                      memoryEditDraft.trim() && !memorySavingEdit
+                                        ? 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                                        : 'bg-surface-subtle/80 text-content-muted cursor-not-allowed'
+                                    )}
+                                  >
+                                    {memorySavingEdit ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                    保存
+                                  </button>
+                                </div>
                               </div>
-                              <p className="text-xs text-content-secondary break-words leading-relaxed">
-                                {m.content}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => handleDeleteMemory(m.id)}
-                              disabled={memoryDeleting === m.id}
-                              className="shrink-0 p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-                              aria-label="删除记忆"
-                            >
-                              {memoryDeleting === m.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Trash2 className="w-3.5 h-3.5" />
-                              )}
-                            </button>
+                            ) : (
+                              <>
+                                <div className="flex-1 min-w-0 text-left">
+                                  <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted shrink-0">
+                                      {MEMORY_CATEGORY_LABELS[m.category] ?? '其他'}
+                                    </span>
+                                    {m.source === 'manual' && (
+                                      <span className="text-[10px] text-content-muted shrink-0">手动添加</span>
+                                    )}
+                                    {m.source === 'imported' && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 shrink-0">
+                                        导入自 {m.sourceDetail || '其他 AI'}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-content-secondary break-words leading-relaxed">
+                                    {m.content}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => startMemoryEdit(m)}
+                                  className="shrink-0 p-1 rounded-md text-content-muted hover:text-accent hover:bg-surface-subtle/80 transition-colors"
+                                  aria-label="编辑记忆"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteMemory(m.id)}
+                                  disabled={memoryDeleting === m.id}
+                                  className="shrink-0 p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                                  aria-label="删除记忆"
+                                >
+                                  {memoryDeleting === m.id ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </>
+                            )}
                           </li>
                         ))}
                       </ul>

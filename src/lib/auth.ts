@@ -18,9 +18,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email as string },
-        })
+        // 登录标识兼容邮箱与用户名:先按 email 查,查不到再按 name 兑底
+        const identifier = credentials.email as string
+        const user =
+          (await prisma.user.findUnique({
+            where: { email: identifier },
+          })) ??
+          (await prisma.user.findFirst({
+            where: { name: identifier },
+          }))
 
         if (!user || !user.passwordHash) return null
 

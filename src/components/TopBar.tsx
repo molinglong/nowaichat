@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, MessageSquarePlus } from 'lucide-react'
+import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, MessageSquarePlus, BookOpen, Settings as SettingsIcon } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/store/chat-store'
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -8,7 +8,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useIsTauri } from '@/lib/tauri'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { queryKeys, STALE } from '@/lib/query/keys'
+import { queryKeys, STALE, IMAGES_PAGE_SIZE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
 
@@ -21,6 +21,7 @@ export function TopBar() {
   const toggleSidebar = useChatStore((s) => s.toggleSidebar)
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const bumpConversationVersion = useChatStore((s) => s.bumpConversationVersion)
+  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
   const [title, setTitle] = useState(conversationTitle)
   // 极窄屏(<381px)折叠菜单的开关
   const [menuOpen, setMenuOpen] = useState(false)
@@ -89,6 +90,18 @@ export function TopBar() {
       // 已有会话的内容由 React Query 的 staleTime(10s)自动管理,不强 prefetch
 
       if (tab === 'images') {
+        // 生图历史列表:生图页主体用本地 state 渲染、首次挂载必拉接口。
+        // 这里预热首页数据(生图页拉完也会写回同一 key),切到生图页时
+        // 直接从缓存同步回填,不再主区空白 1.5s。
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.images.list(IMAGES_PAGE_SIZE, 0),
+          queryFn: () =>
+            fetchJson<{ items?: unknown[]; total?: number }>(
+              `/api/images?limit=${IMAGES_PAGE_SIZE}&offset=0`
+            ),
+          staleTime: STALE.images,
+        })
+
         queryClient.prefetchQuery({
           queryKey: queryKeys.images.settings(),
           queryFn: () =>
@@ -135,10 +148,12 @@ export function TopBar() {
   // 在 /images 页面显示固定的页面标题
   const isImagesPage = pathname?.startsWith('/images')
   const isExplorePage = pathname?.startsWith('/explore')
-  const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : (title || '新对话')
+  const isStudyPage = pathname?.startsWith('/study')
+  const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : isStudyPage ? '错题本' : (title || '新对话')
 
   // 活跃态
-  const isChatActive = (!isImagesPage && !isExplorePage) || pendingTab === 'chat'
+  const isChatActive = (!isImagesPage && !isExplorePage && !isStudyPage) || pendingTab === 'chat'
+  const isStudyActive = Boolean(isStudyPage)
   const isImagesActive = Boolean(isImagesPage) || pendingTab === 'images'
   const isExploreActive = Boolean(isExplorePage) || pendingTab === 'explore'
 
@@ -315,6 +330,23 @@ export function TopBar() {
             <Scale className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">探索</span>
           </button>
+          <button
+            onClick={() => {
+              if (!isStudyActive) router.push('/study')
+            }}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
+              isStudyActive
+                ? 'bg-surface text-content-primary shadow-sm'
+                : 'text-content-secondary hover:text-content-primary active:scale-95'
+            )}
+            aria-label="错题本"
+            title="错题本"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">错题本</span>
+          </button>
         </div>
 
         {/* <381px: 极窄屏折叠菜单 */}
@@ -386,13 +418,32 @@ export function TopBar() {
                 <span className="flex-1">观点探索</span>
                 {isExploreActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
               </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false)
+                  if (!isStudyActive) router.push('/study')
+                }}
+                className={cn(
+                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                  isStudyActive
+                    ? 'bg-surface-subtle text-content-primary'
+                    : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
+                )}
+              >
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="flex-1">错题本</span>
+                {isStudyActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
+              </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Right: 「在新对话继续」按钮(仅在已有具体对话时显示) + 镜像占位 */}
-      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[40%] justify-end">
+      {/* Right: 「在新对话继续」按钮(仅在已有具体对话时显示) + 设置(固定最右侧)。
+          不设 max-w 上限:flex-1 吸收左侧剩余空间,justify-end 把内容钉在右边缘,
+          中间胶囊是绝对定位不受影响 */}
+      <div className="flex items-center gap-0.5 min-w-0 flex-1 justify-end">
         {canBranch && (
           <button
             onClick={handleBranchConversation}
@@ -410,6 +461,15 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+          aria-label="设置"
+          title="设置"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          <SettingsIcon className="w-3.5 h-3.5" />
+        </button>
       </div>
     </header>
   )

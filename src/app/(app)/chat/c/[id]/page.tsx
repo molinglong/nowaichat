@@ -24,6 +24,8 @@ interface ApiMessage {
   attachments: unknown[]
   /** 后端写入的结构化 UI 提示: { kind: 'branch_summary', sourceId, sourceTitle, ... } */
   metadata?: unknown
+  /** A 流式恢复: 服务端仍在生成(草稿行快照中)的 assistant 消息 */
+  streaming?: boolean
   promptTokens?: number | null
   completionTokens?: number | null
   createdAt?: string | Date
@@ -43,6 +45,8 @@ interface ApiConversation {
   stylePreset: string | null
   maskId: string | null
   compareModels: string[]
+  /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
+  latestVote?: { groupId: string; votedModel: string } | null
   messages: ApiMessage[]
 }
 
@@ -104,13 +108,17 @@ function toUIMessage(msg: ApiMessage): UIMessage {
         )
       : undefined
 
+  // A 流式恢复: streaming 标记合入 metadata,供 ChatPanel 启动轮询续显
+  const baseMeta = parseMessageMetadata(msg.metadata)
+  const mergedMeta = msg.streaming ? { ...(baseMeta ?? {}), streaming: true } : baseMeta
+
   return {
     id: msg.id,
     role: msg.role as 'user' | 'assistant' | 'system',
     parts,
     createdAt: msg.createdAt ? new Date(msg.createdAt) : undefined,
     ...(attachments ? { attachments } : {}),
-    ...(parseMessageMetadata(msg.metadata) ? { metadata: parseMessageMetadata(msg.metadata)! } : {}),
+    ...(mergedMeta ? { metadata: mergedMeta } : {}),
     ...(msg.promptTokens != null || msg.completionTokens != null
       ? { tokens: { prompt: msg.promptTokens ?? 0, completion: msg.completionTokens ?? 0 } }
       : {}),
@@ -296,6 +304,7 @@ function ConversationClientContent() {
       laneInitialMessages={initialState.laneInitialMessages}
       initialStylePreset={conversation.stylePreset ?? undefined}
       initialMaskId={conversation.maskId ?? undefined}
+      initialCompareVote={conversation.latestVote ?? null}
     />
   )
 }

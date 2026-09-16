@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { useSuspenseQuery } from '@tanstack/react-query'
+import { useSuspenseQuery, useQueryClient } from '@tanstack/react-query'
 import Image from 'next/image'
 import {
   Loader2,
@@ -21,7 +21,8 @@ import {
   Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { queryKeys, STALE } from '@/lib/query/keys'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { queryKeys, STALE, IMAGES_PAGE_SIZE as PAGE_SIZE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import { deleteUploadedFile } from '@/components/chat/FileUpload'
 
@@ -42,7 +43,6 @@ interface GeneratedImage {
 type EditTab = 'edit' | 'inpaint' | 'variation'
 type MaskRect = { x: number; y: number; w: number; h: number } // 归一化坐标 0~1
 
-const PAGE_SIZE = 24
 const PROMPT_PRESETS = [
   '赛博朋克风格的城市夜景,霓虹灯,雨后街道',
   '一只可爱的橘猫坐在窗台,水彩画风格',
@@ -51,6 +51,7 @@ const PROMPT_PRESETS = [
 ]
 
 function ImagesContent() {
+  const queryClient = useQueryClient()
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,17 +111,37 @@ function ImagesContent() {
     setTotal(data.total ?? 0)
     setHasMore(offset + (data.items?.length ?? 0) < (data.total ?? 0))
     setImages((prev) => (append ? [...prev, ...(data.items ?? [])] : data.items ?? []))
+    return data as { items?: GeneratedImage[]; total?: number }
   }, [])
 
   useEffect(() => {
+    // 先用缓存回填(TopBar 预热/上次拉取写回的同一 key):切回本页时
+    // 立即有内容可渲染,不再主区空白等待接口;后台仍会刷新最新数据。
+    const cached = queryClient.getQueryData<{
+      items?: GeneratedImage[]
+      total?: number
+    }>(queryKeys.images.list(PAGE_SIZE, 0))
+    if (cached?.items?.length || cached?.total) {
+      setImages(cached.items ?? [])
+      setTotal(cached.total ?? 0)
+      setHasMore((cached.items?.length ?? 0) < (cached.total ?? 0))
+      setLoadingList(false)
+    }
     setLoadingList(true)
     fetchPage(0, false)
+      .then((data) => {
+        // 写回缓存,供下次切回本页时秒开
+        queryClient.setQueryData(queryKeys.images.list(PAGE_SIZE, 0), {
+          items: data.items ?? [],
+          total: data.total ?? 0,
+        })
+      })
       .catch((err) => {
         console.error(err)
         setError(err instanceof Error ? err.message : '加载失败')
       })
       .finally(() => setLoadingList(false))
-  }, [fetchPage])
+  }, [fetchPage, queryClient])
 
   // ── 图片设置(模型 + 尺寸) ─────────────────────────────────
   // 5 分钟 staleTime 内跨路由共享,首次进入切到 images 时几乎秒开。
@@ -1490,9 +1511,26 @@ function ImageCard({
 // 用 Suspense 包住 ImagesContent:useSuspenseQuery 在 cache miss 时抛 promise,
 // Next.js App Router 的 Router Suspense 自动用 loading.tsx 兜底;
 // cache hit(TopBar hover/click 已预热)则同步渲染,体感"瞬间"。
+// 设置查询 cache miss 时的本页 fallback:无缓存时 useSuspenseQuery 抛 promise,
+// 没有 fallback 则整个内容区空白直到请求返回(实测 ~1.5s)。给个轻骨架;
+// cache hit(TopBar 预热/二次进入)则同步渲染,不经过此 fallback。
+function ImagesSuspenseFallback() {
+  return (
+    <div className="h-full flex flex-col px-4 py-3">
+      <div className="flex items-center gap-2 shrink-0">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="h-7 w-32 ml-auto" rounded="lg" />
+      </div>
+      <div className="flex-1 min-h-0 pt-3">
+        <Skeleton className="h-28 w-full" rounded="lg" />
+      </div>
+    </div>
+  )
+}
+
 export default function ImagesPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<ImagesSuspenseFallback />}>
       <ImagesContent />
     </Suspense>
   )

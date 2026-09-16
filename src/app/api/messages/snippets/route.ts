@@ -70,6 +70,8 @@ export async function GET(req: Request) {
   const matched = await prisma.message.findMany({
     where: {
       conversationId: { in: convIds },
+      // C 分支轻量版: 归档消息不参与全局搜索
+      archived: false,
       content: { contains: q, mode: 'insensitive' },
     },
     select: {

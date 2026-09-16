@@ -4,7 +4,7 @@ import { useRef, useEffect, useMemo } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, MessageSquarePlus, RefreshCw, RotateCw, Settings as SettingsIcon } from 'lucide-react'
+import { AlertCircle, MessageSquarePlus, RefreshCw, RotateCw, Settings as SettingsIcon, ThumbsUp } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { MessageList } from './MessageList'
@@ -36,6 +36,10 @@ interface CompareLaneProps {
   onLoadingChange: (isLoading: boolean) => void
   /** 请求与当前泳道模型单独继续聊天(由父级弹窗确认) */
   onRequestSolo?: (modelId: string) => void
+  /** E 对比模式投票: 本泳道是否为最新一轮的胜出者 */
+  isVoted?: boolean
+  /** E 对比模式投票: 给本泳道最新一轮回答投票 */
+  onVote?: (modelId: string) => void
 }
 
 export function CompareLane({
@@ -52,6 +56,8 @@ export function CompareLane({
   registerApi,
   onLoadingChange,
   onRequestSolo,
+  isVoted,
+  onVote,
 }: CompareLaneProps) {
   // 每个泳道独立持有自己的 attachmentsRef —— 避免父组件共享 ref 导致多泳道并发 fetch 时
   // 第一个泳道把 ref 清掉、后续泳道 fetch 时读到 undefined 的竞态
@@ -236,15 +242,35 @@ export function CompareLane({
             {modelDef.name}
           </span>
         </div>
-        <button
-          onClick={handleRegenerate}
-          disabled={isLoading}
-          className="p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-          title="重新生成"
-          aria-label="重新生成"
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onVote && (
+            <button
+              onClick={() => onVote(modelId)}
+              disabled={isLoading || !conversationIdRef.current}
+              className={cn(
+                'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0',
+                isVoted
+                  ? 'text-accent bg-accent-soft'
+                  : 'text-content-muted hover:text-accent hover:bg-accent-soft'
+              )}
+              title="这个模型的回答更好"
+              aria-label="投票"
+              aria-pressed={isVoted}
+            >
+              <ThumbsUp className="w-3.5 h-3.5" />
+              {isVoted ? '已选' : '更好'}
+            </button>
+          )}
+          <button
+            onClick={handleRegenerate}
+            disabled={isLoading}
+            className="p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            title="重新生成"
+            aria-label="重新生成"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
         {onRequestSolo && conversationIdRef.current && (
           <button
             onClick={() => onRequestSolo(modelId)}
