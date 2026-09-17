@@ -50,6 +50,12 @@ interface ChatState {
   /** 会话列表刷新信号：新会话创建时 +1，侧边栏监听此值重新拉取列表 */
   conversationVersion: number
   bumpConversationVersion: () => void
+  /** 新对话重置信号:每次「开新对话」动作 +1.
+   *  chat/page.tsx 把它拼进 ChatPanel 的 key —— 即使 React 因
+   *  history.replaceState 造成的路由状态与树不一致而复用同一棵 page
+   *  子树,key 变化也会强制 ChatPanel 卸载重建,彻底回到空白新对话. */
+  newChatNonce: number
+  bumpNewChatNonce: () => void
   /** 当前对话的风格预设 id(balanced/practical/dev/editor/mentor/scholar). 默认 balanced. */
   conversationStylePreset: string
   setConversationStylePreset: (preset: string) => void
@@ -144,6 +150,9 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   conversationVersion: 0,
   bumpConversationVersion: () =>
     set((state) => ({ conversationVersion: state.conversationVersion + 1 })),
+  newChatNonce: 0,
+  bumpNewChatNonce: () =>
+    set((state) => ({ newChatNonce: state.newChatNonce + 1 })),
   conversationStylePreset: 'balanced',
   setConversationStylePreset: (preset) => set({ conversationStylePreset: preset }),
   conversationMaskId: null,

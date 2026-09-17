@@ -438,8 +438,17 @@ export function ChatPanel({
         setMessagesRef.current?.((prev: UIMessage[]) =>
           prev.map((m) => {
             if (m.id !== message.id) return m
+            // 澄清问答: parts 替换会丢掉本地流式的 tool part,
+            // 合并库中 metadata(含 ask_clarification 明细)让卡片经历史回放路径继续渲染
+            let latestMeta: unknown = null
+            try {
+              latestMeta = typeof latest.metadata === 'string' ? JSON.parse(latest.metadata) : latest.metadata
+            } catch {
+              latestMeta = null
+            }
             return {
               ...m,
+              ...(latestMeta && typeof latestMeta === 'object' ? { metadata: latestMeta } : {}),
               // 以库中最终数据为准:reasoning 可能被兜底拆分(答案从推理尾部移入正文)
               parts: [
                 ...(typeof latest.reasoning === 'string' && latest.reasoning.trim()
@@ -720,13 +729,18 @@ export function ChatPanel({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ maskId }),
-        }).catch((err) => {
-          console.error('Failed to persist mask:', err)
-          toast.error('面具切换保存失败', { title: '提示' })
         })
+          .then(() => {
+            // 面具已持久化,通知侧边栏刷新列表(尾随面具徽标同步更新)
+            bumpConversationVersion()
+          })
+          .catch((err) => {
+            console.error('Failed to persist mask:', err)
+            toast.error('面具切换保存失败', { title: '提示' })
+          })
       }
     },
-    [setConversationMaskId]
+    [setConversationMaskId, bumpConversationVersion]
   )
 
   const handleRegenerate = useCallback(() => {
@@ -1011,6 +1025,7 @@ export function ChatPanel({
                 className="min-h-full flex-1"
                 onRegenerate={handleRegenerate}
                 onEditMessage={handleEditMessage}
+                onClarifySubmit={handleSend}
               />
               <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
             </div>

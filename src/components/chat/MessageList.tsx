@@ -12,6 +12,8 @@ interface MessageListProps {
   className?: string
   onRegenerate?: () => void
   onEditMessage?: (messageId: string, newText: string) => void
+  /** 澄清问答:提交回答文本(通常接 ChatPanel 的 handleSend,复用排队/发送全链路) */
+  onClarifySubmit?: (answersText: string) => void
 }
 
 export function MessageList({
@@ -20,6 +22,7 @@ export function MessageList({
   className,
   onRegenerate,
   onEditMessage,
+  onClarifySubmit,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -159,6 +162,19 @@ export function MessageList({
     return map
   }, [messages])
 
+  // 澄清问答"已答"判定:该 assistant 消息之后存在任意 user 消息
+  // (无论用户是点选卡片提交还是直接打字,都视为已回答)
+  const answeredAssistantIds = useMemo(() => {
+    const set = new Set<string>()
+    let seenUser = false
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.role === 'user') seenUser = true
+      else if (msg.role === 'assistant' && seenUser) set.add(msg.id)
+    }
+    return set
+  }, [messages])
+
   return (
     <div ref={containerRef} className={cn('w-full min-h-full overflow-x-hidden', className)}>
       <div className="max-w-2xl mx-auto overflow-x-hidden">
@@ -175,6 +191,8 @@ export function MessageList({
               onRegenerate={onRegenerate}
               canEdit={canEditAll}
               onEdit={onEditMessage}
+              onClarifySubmit={onClarifySubmit}
+              clarifyAnswered={answeredAssistantIds.has(message.id)}
               isFocused={isFocused}
               wrapperRef={(el) => {
                 if (el) {

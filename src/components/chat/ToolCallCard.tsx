@@ -4,6 +4,8 @@ import { memo, useState } from 'react'
 import { ChevronDown, Globe, Loader2, Search, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { UIMessage } from 'ai'
+import { ClarifyCard } from './ClarifyCard'
+import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 
 /**
  * 工具调用卡片 —— 渲染 AI 工具调用过程,让"模型查资料"对用户可见可信。
@@ -98,7 +100,21 @@ function hostOf(url: string): string {
   }
 }
 
-function ToolCallCardInner({ view }: { view: ToolCallView }) {
+/** ToolCallCard 渲染入参:除工具视图外,携带澄清卡片的交互回调与已答状态 */
+interface ToolCallCardProps {
+  view: ToolCallView
+  /** ask_clarification:该消息之后是否已有 user 消息(已答则卡片锁定) */
+  clarifyAnswered?: boolean
+  /** ask_clarification:提交回答文本(走 sendMessage 全链路);缺省则卡片只读 */
+  onClarifySubmit?: (answersText: string) => void
+}
+
+function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallCardProps) {
+  // 澄清提问:专用交互卡片(问题+选项点选),不进通用工具卡分支
+  if (view.tool === CLARIFY_TOOL_NAME) {
+    return <ClarifyCard view={view} answered={clarifyAnswered ?? false} onSubmit={onClarifySubmit} />
+  }
+
   // 状态驱动展开:搜索中默认展开(填补等待时间的信息空白),完成后自动收起为摘要行;
   // 用户手动切换后交还控制权,不再自动变化。
   const [manual, setManual] = useState(false)

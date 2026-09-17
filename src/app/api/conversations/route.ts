@@ -24,8 +24,16 @@ export async function GET(req: Request) {
   //   并依靠 Message.content 上的 pg_trgm GIN 索引(见对应迁移)加速。
   //   ?type=title 仅按标题过滤(供"仅标题"模式备用)。
   const type = (searchParams.get('type') ?? '').trim().toLowerCase()
+  // 面具筛选:'none' 表示无面具;其余值按原始 maskId 精确匹配(内置裸 id / user:<cuid>)。
+  // 与 q 关键词为 AND 关系;只传筛选不传 q 时等于浏览该面具的全部对话。
+  const maskFilter = (searchParams.get('maskId') ?? '').trim()
   const where = {
     userId: session.user.id,
+    ...(maskFilter
+      ? maskFilter === 'none'
+        ? { maskId: null }
+        : { maskId: maskFilter }
+      : {}),
     ...(q
       ? type === 'title'
         ? { title: { contains: q, mode: 'insensitive' as const } }
@@ -54,6 +62,7 @@ export async function GET(req: Request) {
         title: true,
         model: true,
         mode: true,
+        maskId: true, // 列表尾随面具徽标用(ConversationItem)
         updatedAt: true,
       },
       skip: offset,

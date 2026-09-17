@@ -402,7 +402,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'providers' | 'models' | 'search' | 'memory' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy'
+type SectionId = 'overview' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -429,6 +429,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'search', label: '联网搜索', icon: Globe },
       { id: 'image', label: '生图', icon: ImageIcon },
       { id: 'memory', label: '记忆', icon: Brain },
+      { id: 'clarify', label: '澄清提问', icon: HelpCircle },
       { id: 'masks', label: '面具管理', icon: VenetianMask },
     ],
   },
@@ -524,6 +525,7 @@ export function SettingsModal() {
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({})
   const [memories, setMemories] = useState<MemoryInfo[]>([])
   const [memoryEnabled, setMemoryEnabled] = useState(true)
+    const [clarifyEnabled, setClarifyEnabled] = useState(true)
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null)
@@ -701,12 +703,14 @@ export function SettingsModal() {
       fetch('/api/custom-models').then((r) => r.json()),
       fetch('/api/image-settings').then((r) => r.json()).catch(() => null),
       fetch('/api/usage').then((r) => r.json()).catch(() => null),
+      fetch('/api/settings/clarify').then((r) => r.json()).catch(() => null),
     ])
-      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData]) => {
+      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData]) => {
         setProviders(provs)
         setKeys(keyList)
         setMemories(memoryData?.memories ?? [])
         setMemoryEnabled(memoryData?.memoryEnabled ?? true)
+        setClarifyEnabled(clarifyData?.clarifyEnabled ?? true)
         setUsageStats(usageData?.chat && usageData?.image ? usageData : null)
         // Parse custom models: assume cmList is already ModelDefinition format from API
         if (Array.isArray(cmList)) {
@@ -1016,6 +1020,22 @@ export function SettingsModal() {
       toast.success(enabled ? '跨对话记忆已开启' : '跨对话记忆已关闭')
     } catch {
       setMemoryEnabled(!enabled)
+      toast.error('切换失败，请重试')
+    }
+  }
+
+  async function handleToggleClarify(enabled: boolean) {
+    setClarifyEnabled(enabled)
+    try {
+      const res = await fetch('/api/settings/clarify', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success(enabled ? '澄清提问已开启' : '澄清提问已关闭')
+    } catch {
+      setClarifyEnabled(!enabled)
       toast.error('切换失败，请重试')
     }
   }
@@ -3647,6 +3667,38 @@ export function SettingsModal() {
                         ))}
                       </ul>
                     )}
+                  </div>
+                )}
+
+                {/* 澄清提问 */}
+                {activeSection === 'clarify' && (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">澄清提问</p>
+                        <p className="text-[11px] text-content-muted">信息不足时 AI 先以选项卡片向你确认，再正式回答</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={clarifyEnabled}
+                        onClick={() => handleToggleClarify(!clarifyEnabled)}
+                        className={cn(
+                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                          clarifyEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                            clarifyEnabled && 'translate-x-4'
+                          )}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
+                      关闭后 AI 直接回答，不再反问。事实、代码、翻译类问题始终直接回答，不会触发确认。
+                    </p>
                   </div>
                 )}
 

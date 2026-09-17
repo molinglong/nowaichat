@@ -80,3 +80,5 @@ diag-*.cjs
 pg-diag.cjs
 list-users.cjs
 apply-mask-mig.cjs
+# 根目录测试/验证截图（不进仓库）
+/*.png

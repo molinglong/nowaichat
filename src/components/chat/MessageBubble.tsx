@@ -275,6 +275,10 @@ interface MessageBubbleProps {
   wrapperRef?: (el: HTMLDivElement | null) => void
   /** 前一条用户消息的文本(存错题本时,assistant 消息用它配对题干;null/undefined = 无) */
   prevUserContent?: string | null
+  /** 澄清问答:提交回答文本(透传给 ToolCallCard 内的 ClarifyCard) */
+  onClarifySubmit?: (answersText: string) => void
+  /** 澄清问答:该消息之后是否已有 user 消息(已答则卡片锁定为摘要行) */
+  clarifyAnswered?: boolean
 }
 
 function MessageBubbleInner({
@@ -288,6 +292,8 @@ function MessageBubbleInner({
   isFocused,
   wrapperRef,
   prevUserContent,
+  onClarifySubmit,
+  clarifyAnswered,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -775,7 +781,12 @@ function MessageBubbleInner({
             {toolCallViews.length > 0 && (
               <div className="mb-2 flex flex-col gap-1.5">
                 {toolCallViews.map((v, i) => (
-                  <ToolCallCard key={v.toolCallId ?? `${v.tool}-${i}`} view={v} />
+                  <ToolCallCard
+                    key={v.toolCallId ?? `${v.tool}-${i}`}
+                    view={v}
+                    clarifyAnswered={clarifyAnswered}
+                    onClarifySubmit={onClarifySubmit}
+                  />
                 ))}
               </div>
             )}

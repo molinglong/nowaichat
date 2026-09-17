@@ -2,15 +2,17 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import type { CSSProperties } from 'react'
-import { useRouter, usePathname } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat-store'
 import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
-import type { MaskDTO } from '@/lib/ai/mask-types'
+import { resolveMaskBadge, type MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
-import { useUnreadToastNotifier } from '@/hooks/useUnreadToastNotifier'
+import { useStartNewChat } from '@/hooks/useStartNewChat'
+// 暂时下线新消息提醒(如需恢复,连同下方调用一起取消注释)
+// import { useUnreadToastNotifier } from '@/hooks/useUnreadToastNotifier'
 import { useIsTauri } from '@/lib/tauri'
 import { TrafficLights } from '@/components/TrafficLights'
 import { cn } from '@/lib/utils'
@@ -23,6 +25,7 @@ interface ConversationData {
   id: string
   title: string
   mode?: string
+  maskId?: string | null
   updatedAt: string
 }
 
@@ -126,7 +129,6 @@ export function Sidebar() {
   // 面具选择菜单(仅在展开态渲染,折叠态点击先展开侧边栏)
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
   const router = useRouter()
-  const pathname = usePathname()
 
   const loading = isLoading
   const loadingMore = isFetchingNextPage
@@ -138,7 +140,8 @@ export function Sidebar() {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   // Toast on unread change
-  useUnreadToastNotifier(conversations)
+  // 暂时下线新消息提醒(恢复时取消注释,并恢复顶部 import)
+  // useUnreadToastNotifier(conversations)
 
   // Cmd/Ctrl + K opens the search dialog
   useEffect(() => {
@@ -160,19 +163,17 @@ export function Sidebar() {
    * which triggered a full page reload — Sidebar/TopBar rebuilt, fonts
    * re-downloaded, store rehydrated. Perceived as "a hitch".
    *
-   * Now: always soft-navigate.
-   *   1) router.push('/chat') (client navigation, no page reload)
-   *   2) We don't actively mutate store here — ChatPanel re-mounts with
-   *      initialConversationId=undefined when the new page renders, so
-   *      useChat enters "new conversation" mode naturally.
+   * Now: startNewChat (see useStartNewChat for why a bare router.push
+   * is not enough — replaceState-made URLs make Next.js reuse the same
+   * page subtree, or no-op entirely when already on /chat).
+   * ChatPanel re-mounts with a fresh key when the new page renders,
+   * so useChat enters "new conversation" mode deterministically.
    */
+  const startNewChat = useStartNewChat()
   const handleNewConversation = useSingleFlight(() => {
     setSidebarOpen(false)
-    // Always soft navigation; Router-level transition handled by Next.js
-    // Even when the current path is /chat/c/[id], this triggers React
-    // tree reconciliation rather than a full reload.
-    router.push('/chat')
-  }, [pathname, router, setSidebarOpen])
+    startNewChat()
+  }, [setSidebarOpen, startNewChat])
 
   // 选面具开新对话:写入 store + localStorage,复用单飞导航。
   // ChatPanel 挂载后会从 localStorage 恢复,首条消息发送时服务端将 maskId 写入会话。
@@ -495,18 +496,23 @@ export function Sidebar() {
                 </div>
               ) : (
                 <>
-                  {conversations.map((conv, index) => (
-                    <ConversationItem
-                      key={conv.id}
-                      id={conv.id}
-                      title={conv.title}
-                      mode={conv.mode}
-                      index={index}
-                      lastMessageAt={new Date(conv.updatedAt).getTime()}
-                      onDelete={handleDeleteConversation}
-                      onRename={handleRenameConversation}
-                    />
-                  ))}
+                  {conversations.map((conv, index) => {
+                    const badge = resolveMaskBadge(conv.maskId, userMasks)
+                    return (
+                      <ConversationItem
+                        key={conv.id}
+                        id={conv.id}
+                        title={conv.title}
+                        mode={conv.mode}
+                        maskAvatar={badge?.avatar}
+                        maskName={badge?.name}
+                        index={index}
+                        lastMessageAt={new Date(conv.updatedAt).getTime()}
+                        onDelete={handleDeleteConversation}
+                        onRename={handleRenameConversation}
+                      />
+                    )
+                  })}
                   {hasMore && (
                     <button
                       onClick={handleLoadMore}

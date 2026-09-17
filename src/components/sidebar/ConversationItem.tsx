@@ -13,6 +13,10 @@ interface ConversationItemProps {
   id: string
   title: string
   mode?: string
+  /** 会话面具徽标（头像 emoji）；无面具 / 面具已删时不传，不显示 */
+  maskAvatar?: string | null
+  /** 面具名，用于 hover 提示 */
+  maskName?: string | null
   /** 列表中的索引,用于逐个淡入的错峰延迟 */
   index?: number
   /** 该会话最后一条消息时间(ms 数字).来自会话的 updatedAt. */
@@ -25,7 +29,7 @@ interface ConversationItemProps {
 const STAGGER_STEP_MS = 20
 const STAGGER_MAX_INDEX = 15
 
-function ConversationItemInner({ id, title, mode, index = 0, lastMessageAt, onDelete, onRename }: ConversationItemProps) {
+function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 0, lastMessageAt, onDelete, onRename }: ConversationItemProps) {
   const staggerDelay = Math.min(index, STAGGER_MAX_INDEX) * STAGGER_STEP_MS
   const pathname = usePathname()
   const currentConversationId = useChatStore((s) => s.currentConversationId)
@@ -153,6 +157,15 @@ function ConversationItemInner({ id, title, mode, index = 0, lastMessageAt, onDe
         />
       )}
       <span className="flex-1 truncate">{title}</span>
+      {maskAvatar && (
+        <span
+          className="shrink-0 text-xs leading-none"
+          title={maskName ? `面具：${maskName}` : undefined}
+          aria-label={maskName ? `面具：${maskName}` : undefined}
+        >
+          {maskAvatar}
+        </span>
+      )}
       {mode === 'compare' && (
         <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-accent-soft text-content-secondary font-medium">
           对比
@@ -195,6 +208,8 @@ function areConversationItemPropsEqual(
   if (prev.id !== next.id) return false
   if (prev.title !== next.title) return false
   if (prev.mode !== next.mode) return false
+  if (prev.maskAvatar !== next.maskAvatar) return false
+  if (prev.maskName !== next.maskName) return false
   if (prev.index !== next.index) return false
   if (prev.lastMessageAt !== next.lastMessageAt) return false
   if (prev.onDelete !== next.onDelete) return false

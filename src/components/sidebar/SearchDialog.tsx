@@ -2,13 +2,19 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
 import { Search, X, Loader2, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
+import { resolveMaskBadge, type MaskDTO } from '@/lib/ai/mask-types'
+import { queryKeys, STALE } from '@/lib/query/keys'
+import { fetchJson } from '@/lib/query/fetcher'
 
 interface ConversationData {
   id: string
   title: string
   mode?: string
+  maskId?: string | null
   updatedAt: string
   // 搜索模式下,由 /api/messages/snippets 注入的"消息级命中"预览
   matchedFragment?: string | null
@@ -36,6 +42,17 @@ const GROUP_ORDER: GroupKey[] = ['今天', '昨天', '本周', '本月', '更早
 
 // 每页拉取条数(分段加载的"段")
 const PAGE_SIZE = 20
+
+/** 面具筛选胶囊折叠时默认显示的 emoji 数(使用次数最多的前 N 个) */
+const COLLAPSED_VISIBLE = 2
+
+/** 筛选用的面具条目(内置 + 自定义,附使用次数) */
+interface MaskFilterItem {
+  id: string
+  avatar: string
+  name: string
+  count: number
+}
 
 function getGroupKey(updatedAt: string, now: Date = new Date()): GroupKey {
   const d = new Date(updatedAt)
@@ -66,6 +83,38 @@ function groupConversations(items: ConversationData[]) {
   }))
 }
 
+/** 筛选胶囊的值:null = 全部;'none' = 无面具;其余为面具 id(内置裸 id / user:<cuid>) */
+type MaskFilter = string | null
+
+/** 筛选胶囊;中性灰极简风格,选中态与侧边栏激活项一致 */
+function MaskFilterChip({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        'shrink-0 px-2 py-0.5 rounded-full text-[11px] leading-5 whitespace-nowrap transition-colors',
+        active
+          ? 'bg-accent-soft text-content-primary'
+          : 'bg-surface-subtle/60 text-content-muted hover:text-content-primary hover:bg-surface-subtle'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 interface SearchDialogProps {
   open: boolean
   onClose: () => void
@@ -75,6 +124,7 @@ interface SearchDialogProps {
 
 export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
   const [query, setQuery] = useState('')
+  const [filterMask, setFilterMask] = useState<MaskFilter>(null)
   const [results, setResults] = useState<ConversationData[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -90,6 +140,24 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 自定义面具列表(筛选胶囊用;打开时才启用,与侧边栏共享缓存)
+  const { data: userMasks } = useQuery({
+    queryKey: queryKeys.masks.list(),
+    queryFn: () => fetchJson<MaskDTO[]>('/api/masks'),
+    enabled: open,
+    staleTime: STALE.masks,
+  })
+  // 各面具的对话使用数(折叠排序用)
+  const { data: maskUsage } = useQuery({
+    queryKey: queryKeys.masks.usage(),
+    queryFn: () =>
+      fetchJson<{ usage: { maskId: string; count: number }[] }>('/api/masks/usage'),
+    enabled: open,
+    staleTime: STALE.masks,
+  })
+  // 折叠/展开态:默认折叠,只显示使用次数最多的前 N 个 emoji
+  const [maskFilterExpanded, setMaskFilterExpanded] = useState(false)
   // 同步当前结果长度,供 runSearch 在追加模式下计算 offset
   const itemsRef = useRef<ConversationData[]>([])
   useEffect(() => {
@@ -102,6 +170,8 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
       setTimeout(() => inputRef.current?.focus(), 30)
     } else {
       setQuery('')
+      setFilterMask(null)
+      setMaskFilterExpanded(false)
       setResults([])
       setFragmentsByConv(new Map())
       setActiveIndex(0)
@@ -147,6 +217,7 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
         params.set('limit', String(PAGE_SIZE))
         params.set('offset', reset ? '0' : String(itemsRef.current.length))
         if (trimmed) params.set('q', trimmed)
+        if (filterMask) params.set('maskId', filterMask)
         const res = await fetch(`/api/conversations?${params.toString()}`)
         if (res.ok) {
           const data = await res.json()
@@ -171,10 +242,10 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
         else setLoadingMore(false)
       }
     },
-    []
+    [filterMask]
   )
 
-  // 防抖触发首次/重置查询(query 变化)
+  // 防抖触发首次/重置查询(query 或筛选变化)
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
@@ -183,7 +254,7 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, runSearch])
+  }, [query, filterMask, runSearch])
 
   // 当搜索结果或关键词变化时,拉取消息级命中片段。
   // 翻页加载也会重新触发,保证新增会话也能拿到片段。
@@ -290,6 +361,39 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
 
   // 把结果按时间分组(最新在上,已经在 API 层按 updatedAt desc 排好)
   const grouped = useMemo(() => groupConversations(results), [results])
+
+  // 全部面具(内置 + 自定义)按使用次数降序;稳定排序,同次数保持内置顺序,0 次垫底
+  const sortedMasks = useMemo<MaskFilterItem[]>(() => {
+    const usageMap = new Map(
+      (maskUsage?.usage ?? []).map((u) => [u.maskId, u.count])
+    )
+    return [
+      ...BUILTIN_MASKS.map((m) => ({ id: m.id, avatar: m.avatar, name: m.name })),
+      ...(userMasks ?? []).map((m) => ({ id: m.id, avatar: m.avatar, name: m.name })),
+    ]
+      .map((m) => ({ ...m, count: usageMap.get(m.id) ?? 0 }))
+      .sort((a, b) => b.count - a.count)
+  }, [maskUsage, userMasks])
+
+  // 折叠态可见集合:使用次数前 N 的 emoji;当前选中的面具若不在其中则追加(保证选中态可见)
+  const visibleMasks = useMemo<MaskFilterItem[]>(() => {
+    if (maskFilterExpanded) return sortedMasks
+    const top = sortedMasks.filter((m) => m.count > 0).slice(0, COLLAPSED_VISIBLE)
+    const selected =
+      filterMask && filterMask !== 'none'
+        ? sortedMasks.find((m) => m.id === filterMask)
+        : undefined
+    if (selected && !top.includes(selected)) top.push(selected)
+    return top
+  }, [sortedMasks, maskFilterExpanded, filterMask])
+
+  // 折叠时可展开的剩余数量(有使用的面具数 - 折叠态已显示数);为 0 时不渲染展开按钮
+  const hiddenUsedCount = useMemo(() => {
+    if (maskFilterExpanded) return 0
+    const usedTotal = sortedMasks.filter((m) => m.count > 0).length
+    const visibleUsed = visibleMasks.filter((m) => m.count > 0).length
+    return usedTotal - visibleUsed
+  }, [sortedMasks, visibleMasks, maskFilterExpanded])
   // 扁平化用于键盘导航(activeIndex 跨组工作)
   const flatResults = useMemo(
     () => grouped.flatMap((g) => g.items),
@@ -347,6 +451,56 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
           </button>
         </div>
 
+        {/* Mask filter chips */}
+        <div
+          className="flex items-center gap-1 px-3.5 py-2 border-b border-line/50 overflow-x-auto"
+          role="group"
+          aria-label="按面具筛选"
+        >
+          <MaskFilterChip
+            active={filterMask === null}
+            onClick={() => setFilterMask(null)}
+            title="显示全部对话"
+          >
+            全部
+          </MaskFilterChip>
+          {visibleMasks.map((m) => (
+            <MaskFilterChip
+              key={m.id}
+              active={filterMask === m.id}
+              onClick={() => setFilterMask(m.id)}
+              title={m.count > 0 ? `${m.name}（${m.count} 次对话）` : m.name}
+            >
+              {m.avatar}
+            </MaskFilterChip>
+          ))}
+          {hiddenUsedCount > 0 && (
+            <MaskFilterChip
+              active={false}
+              onClick={() => setMaskFilterExpanded(true)}
+              title={`展开其余 ${hiddenUsedCount} 个面具`}
+            >
+              +{hiddenUsedCount}
+            </MaskFilterChip>
+          )}
+          {maskFilterExpanded && (
+            <MaskFilterChip
+              active={false}
+              onClick={() => setMaskFilterExpanded(false)}
+              title="只显示最常用的面具"
+            >
+              收起
+            </MaskFilterChip>
+          )}
+          <MaskFilterChip
+            active={filterMask === 'none'}
+            onClick={() => setFilterMask('none')}
+            title="只看未使用面具的对话"
+          >
+            无面具
+          </MaskFilterChip>
+        </div>
+
         {/* Results */}
         <div
           ref={scrollRef}
@@ -389,6 +543,7 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
                     {group.items.map((conv) => {
                       const flatIdx = flatResults.indexOf(conv)
                       const fragment = fragmentsByConv.get(conv.id)
+                      const badge = resolveMaskBadge(conv.maskId, userMasks)
                       return (
                         <li key={conv.id}>
                           <button
@@ -403,9 +558,14 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
                           >
                             <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60 mt-1" />
                             <div className="flex-1 min-w-0">
-                              {/* 标题行(支持高亮) */}
+                              {/* 标题行(支持高亮,尾随面具徽标) */}
                               <div className="text-sm truncate">
                                 {highlightMatch(conv.title || '新对话', query)}
+                                {badge && (
+                                  <span className="ml-1 text-xs" title={`面具：${badge.name}`} aria-label={`面具：${badge.name}`}>
+                                    {badge.avatar}
+                                  </span>
+                                )}
                               </div>
                               {/* 消息级命中片段:仅搜索模式下显示,无命中时退化隐藏 */}
                               {fragment && (

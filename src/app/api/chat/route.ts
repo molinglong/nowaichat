@@ -23,6 +23,7 @@ import { getMaskById } from '@/lib/ai/mask-resolve'
 import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
+import { CLARIFY_TOOL_NAME, CLARIFY_TOOL_PROMPT, createClarifyTool } from "@/lib/ai/clarify"
 import { loadLatestSummary, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
@@ -444,12 +445,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 自助反问:告诉模型在缺少关键信息时先提问,而不是直接下结论
-  const clarifySystemPrompt = [
-    '## 自助反问',
-    '用户提出个人决策/推荐类问题（如"我该选哪个""适不适合买 X"）且缺少关键信息时，先提 2-4 个简短问题再作答：编号列表、用用户语言、覆盖预算/场景/现状等关键维度。最多追问两轮、不重复已问的问题，两轮后必须给出结论并说明假设。',
-    '事实/知识/代码/翻译类问题，或信息已足够时直接回答，不要反问。',
-  ].join('\n')
+  // 澄清提问:告诉模型何时调用 ask_clarification 工具(工具本体随下方 tools 注入)。
+  // 升级自旧版"自助反问"纯文本反问:现在以结构化卡片呈现,用户点选回答。
+  const clarifySystemPrompt = CLARIFY_TOOL_PROMPT
 
   // Deep thinking: for non-reasoning models, add a system prompt and extract thinking via middleware
   let model = provider(realModelId)
@@ -496,6 +494,9 @@ export async function POST(req: NextRequest) {
       console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine '${engine}'`)
     }
   }
+  // 澄清提问工具(无 execute:输出 tool call 后本轮流结束,等用户在前端卡片上回答)。
+  // 对比模式不注入:多泳道各自触发澄清卡片会互相踩踏,v1 仅单聊启用。
+  const clarifyTool = clarifyEnabled && !groupId ? createClarifyTool() : null
   if (searchTool) {
     const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
@@ -703,7 +704,14 @@ export async function POST(req: NextRequest) {
     model,
     messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
-    ...(searchTool ? { tools: { web_search: searchTool } } : {}),
+    ...((searchTool || clarifyTool)
+      ? {
+          tools: {
+            ...(searchTool ? { web_search: searchTool } : {}),
+            ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
+          },
+        }
+      : {}),
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
     stopWhen: stepCountIs(5),

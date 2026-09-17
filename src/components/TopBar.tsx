@@ -6,6 +6,7 @@ import { useChatStore } from '@/store/chat-store'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useIsTauri } from '@/lib/tauri'
+import { useStartNewChat } from '@/hooks/useStartNewChat'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { queryKeys, STALE, IMAGES_PAGE_SIZE } from '@/lib/query/keys'
@@ -162,21 +163,16 @@ export function TopBar() {
     go()
   }, [])
 
+  // 「聊天」tab / 新对话入口:走统一的重置流程。
+  // 旧的 router.replace('/chat') + router.refresh() 对 client page 无效:
+  // replace 同路径是 no-op,refresh 重拉 RSC 但客户端状态全保留,
+  // 表现为点击后毫无反应。见 useStartNewChat 的注释。
+  const startNewChat = useStartNewChat()
   const handleNewChat = useCallback(() => {
-    navigateTo('chat', () => {
-      // 同样的路径 — soft refresh
-      if (pathname === '/chat') {
-        router.replace('/chat')
-        router.refresh()
-        return
-      }
-      if (pathname?.startsWith('/chat/')) {
-        router.push('/chat')
-        return
-      }
-      router.push('/chat')
-    })
-  }, [navigateTo, pathname, router])
+    // 跨 tab 进入时给高亮过渡反馈;已在 /chat 时 nonce 重置本身立即生效
+    if (pathname !== '/chat') setPendingTab('chat')
+    startNewChat()
+  }, [pathname, startNewChat])
 
   const handleGoImages = useCallback(() => {
     if (pathname?.startsWith('/images')) return

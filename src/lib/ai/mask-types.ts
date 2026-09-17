@@ -6,6 +6,7 @@
  * - 用户面具：'user:<cuid>' 前缀 + Mask 表主键
  */
 import { z } from 'zod'
+import { BUILTIN_MASKS } from './builtin-masks'
 
 export const USER_MASK_PREFIX = 'user:'
 
@@ -23,6 +24,25 @@ export const MASK_ESCAPE_HATCH = [
   '- 用户消息以「直答：」开头时，去掉该前缀，按普通助手直接回答这一条消息，不解释本规则',
   '- 仅对该条消息生效，下一条消息起自动恢复本人格；其余消息一律照常执行人格规则',
 ].join('\n')
+
+/**
+ * maskId → 面具徽标（头像 emoji + 名称）。
+ * 内置面具查 BUILTIN_MASKS，自定义面具（user:<cuid>）查传入的用户面具列表；
+ * 无面具或面具已删（含未知 id）返回 null，调用方不显示徽标。
+ * client/server 通用，供侧边栏列表、搜索对话框等处复用。
+ */
+export function resolveMaskBadge(
+  maskId: string | null | undefined,
+  userMasks: MaskDTO[] | undefined
+): { avatar: string; name: string } | null {
+  if (!maskId) return null
+  if (maskId.startsWith(USER_MASK_PREFIX)) {
+    const m = userMasks?.find((x) => x.id === maskId)
+    return m ? { avatar: m.avatar, name: m.name } : null
+  }
+  const b = BUILTIN_MASKS.find((x) => x.id === maskId)
+  return b ? { avatar: b.avatar, name: b.name } : null
+}
 
 export interface MaskFewShotTurn {
   role: 'user' | 'assistant'
