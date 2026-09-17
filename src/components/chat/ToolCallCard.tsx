@@ -1,11 +1,16 @@
 'use client'
 
 import { memo, useState } from 'react'
-import { ChevronDown, Globe, Loader2, Search, TriangleAlert, Wrench } from 'lucide-react'
+import { Brain, Check, ChevronDown, Globe, Loader2, Search, Settings2, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { UIMessage } from 'ai'
 import { ClarifyCard } from './ClarifyCard'
+import { GenerateMaskCard } from './GenerateMaskCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
+import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
+import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
+import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
+import { getSettingDef, formatSettingValue } from '@/lib/settings/registry'
 
 /**
  * 工具调用卡片 —— 渲染 AI 工具调用过程,让"模型查资料"对用户可见可信。
@@ -92,6 +97,46 @@ function extractQuery(view: ToolCallView): string {
   return typeof q === 'string' ? q : ''
 }
 
+/**
+ * 一行式工具卡片基础件:统一容器/图标/文案/状态反馈。
+ * 中性灰规范:反馈色仅小面积 —— 失败态容器保持中性灰,红色只落在
+ * 右侧「未生效」文案与警号图标上;成功态用 muted 色 Check,不打扰。
+ * 流式(input-streaming)显示 spinner,提示"参数正在生成/正在执行"。
+ */
+function ToolRow({
+  icon,
+  text,
+  streaming = false,
+  failed = false,
+}: {
+  icon: React.ReactNode
+  text: string
+  streaming?: boolean
+  failed?: boolean
+}) {
+  return (
+    <div
+      className="flex items-center gap-1.5 rounded-lg border border-line/60 bg-surface-muted px-2.5 py-1.5 text-xs"
+      title={text}
+    >
+      <span className="flex shrink-0 items-center text-content-secondary">{icon}</span>
+      <span className="min-w-0 truncate text-content-secondary">{text}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1">
+        {streaming ? (
+          <Loader2 className="w-3 h-3 animate-spin text-content-muted" />
+        ) : failed ? (
+          <>
+            <span className="text-red-500">未生效</span>
+            <TriangleAlert className="w-3 h-3 text-red-500" />
+          </>
+        ) : (
+          <Check className="w-3 h-3 text-content-muted" />
+        )}
+      </span>
+    </div>
+  )
+}
+
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname
@@ -110,15 +155,53 @@ interface ToolCallCardProps {
 }
 
 function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallCardProps) {
+  // hooks 置顶(web_search 的展开状态),避免条件 return 造成 hooks 顺序不稳定
+  const [manual, setManual] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
   // 澄清提问:专用交互卡片(问题+选项点选),不进通用工具卡分支
   if (view.tool === CLARIFY_TOOL_NAME) {
     return <ClarifyCard view={view} answered={clarifyAnswered ?? false} onSubmit={onClarifySubmit} />
   }
 
-  // 状态驱动展开:搜索中默认展开(填补等待时间的信息空白),完成后自动收起为摘要行;
+  // 面具工坊:专用交互卡片(草稿预览+一键添加),不进通用工具卡分支
+  if (view.tool === MASK_TOOL_NAME) {
+    return <GenerateMaskCard view={view} />
+  }
+
+  // AI 设置控制:一行式卡片,列出全部操作(注册表中文映射);白名单拒绝时右侧标「未生效」
+  if (view.tool === SETTINGS_TOOL_NAME) {
+    const ops =
+      (view.input as { operations?: Array<{ key: string; value: string }> } | undefined)?.operations ?? []
+    const failed =
+      view.state === 'output-error' || (view.output as { ok?: boolean } | undefined)?.ok === false
+    const text =
+      ops.length > 0
+        ? `应用设置：${ops
+            .map((op) => `${getSettingDef(op.key)?.label ?? op.key}→${formatSettingValue(op.key, op.value)}`)
+            .join('、')}`
+        : '应用设置'
+    return <ToolRow icon={<Settings2 className="w-3.5 h-3.5" />} text={text} streaming={view.state === 'input-streaming'} failed={failed} />
+  }
+
+  // 显式记忆添加:一行式卡片列出已保存的记忆内容;服务端写库,这里只展示
+  if (view.tool === MEMORY_TOOL_NAME) {
+    const items =
+      (view.input as { memories?: Array<{ content?: string }> } | undefined)?.memories ?? []
+    const out = view.output as { ok?: boolean; saved?: string[] } | undefined
+    const failed = view.state === 'output-error' || out?.ok === false
+    // 展示优先用服务端确认的实际入库内容(execute 会去重/拒超长),流式期间回退到 input
+    const contents = out?.saved?.length ? out.saved : items.map((m) => m.content ?? '').filter(Boolean)
+    const text =
+      contents.length > 0
+        ? `${view.state === 'output-available' && !failed ? '已记住' : '记住'}：${contents.join('；')}`
+        : view.state === 'input-streaming'
+          ? '正在保存记忆…'
+          : '保存记忆'
+    return <ToolRow icon={<Brain className="w-3.5 h-3.5" />} text={text} streaming={view.state === 'input-streaming'} failed={failed} />
+  }
+
   // 用户手动切换后交还控制权,不再自动变化。
-  const [manual, setManual] = useState(false)
-  const [expanded, setExpanded] = useState(false)
   const autoOpen = view.state !== 'output-available'
   const isOpen = manual ? expanded : autoOpen
   const toggle = () => {
@@ -129,13 +212,12 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
   // ---- 未知工具兜底 ----
   if (view.tool !== 'web_search') {
     return (
-      <div className="flex items-center gap-1.5 rounded-lg border border-line/60 bg-surface-muted px-2.5 py-1.5 text-xs text-content-secondary">
-        <Wrench className="w-3.5 h-3.5 shrink-0 text-content-muted" />
-        <span>调用了 {view.tool}</span>
-        {view.state === 'output-error' && (
-          <TriangleAlert className="w-3.5 h-3.5 shrink-0 text-red-500" />
-        )}
-      </div>
+      <ToolRow
+        icon={<Wrench className="w-3.5 h-3.5 text-content-muted" />}
+        text={`调用了 ${view.tool}`}
+        streaming={view.state === 'input-streaming'}
+        failed={view.state === 'output-error'}
+      />
     )
   }
 
@@ -181,7 +263,14 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
         </span>
       </button>
 
-      {isOpen && (
+      {/* 展开区:常驻 DOM + grid-rows 过渡,收起/展开有顺滑的高度动画 */}
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows] duration-200 ease-out',
+          isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        )}
+      >
+        <div className="overflow-hidden">
         <div className="px-2.5 pb-2 pt-0.5 flex flex-col gap-1.5">
           {/* 错误信息(工具执行失败或搜索 API 报错) */}
           {(hasError || view.errorText) && (
@@ -236,7 +325,8 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
             )
           })}
         </div>
-      )}
+        </div>
+      </div>
     </div>
   )
 }

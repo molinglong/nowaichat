@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { STYLE_PRESETS } from '@/lib/ai/style-presets'
 import { getMaskById } from '@/lib/ai/mask-resolve'
+import { isEphemeralSession } from '@/lib/ephemeral'
 
 export async function GET(req: Request) {
   const session = await auth()
@@ -10,8 +11,12 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // 限量分页: ?limit=20&offset=0,limit 上限 100;?q=关键词支持按标题搜索
+  // 会话隔离:临时会话只返回临时对话,正常会话只返回正常对话。
+  // 例外:正常模式下 ?scope=ephemeral 查看隔离区(设置→账号信息 临时聊天找回专区)。
+  const ephemeral = isEphemeralSession(session)
   const { searchParams } = new URL(req.url)
+  const scope = (searchParams.get('scope') ?? '').trim().toLowerCase()
+  const listEphemeral = ephemeral || scope === 'ephemeral'
   const parsedLimit = parseInt(searchParams.get('limit') ?? '20', 10)
   const parsedOffset = parseInt(searchParams.get('offset') ?? '0', 10)
   const limit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 100)
@@ -29,6 +34,7 @@ export async function GET(req: Request) {
   const maskFilter = (searchParams.get('maskId') ?? '').trim()
   const where = {
     userId: session.user.id,
+    isEphemeral: listEphemeral,
     ...(maskFilter
       ? maskFilter === 'none'
         ? { maskId: null }
@@ -84,11 +90,13 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json().catch(() => ({}))
+  // 临时模式(访客密码登录)下创建的对话一律打隔离标记,进隔离区
+  const isEphemeral = isEphemeralSession(session)
 
   // 另存为新对话: 从对比会话克隆(用户消息 + 所选模型的回答)
   if (body.cloneFrom) {
     const source = await prisma.conversation.findFirst({
-      where: { id: body.cloneFrom, userId: session.user.id },
+      where: { id: body.cloneFrom, userId: session.user.id, isEphemeral },
       include: { messages: { orderBy: { createdAt: 'asc' } } },
     })
     if (!source) {
@@ -102,6 +110,7 @@ export async function POST(req: Request) {
     const conversation = await prisma.conversation.create({
       data: {
         userId: session.user.id,
+        isEphemeral,
         title: body.title || source.title || '新对话',
         model: targetModel,
         styleOffset: source.styleOffset,
@@ -136,6 +145,7 @@ export async function POST(req: Request) {
   const conversation = await prisma.conversation.create({
     data: {
       userId: session.user.id,
+      isEphemeral,
       title: body.title || '新对话',
       model: body.model || 'gpt-4o',
       styleOffset: legacyOffset,

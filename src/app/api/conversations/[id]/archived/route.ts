@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { ephemeralScope } from '@/lib/ephemeral'
 
 /**
  * GET /api/conversations/[id]/archived?rootId=<messageId>
@@ -24,9 +25,9 @@ export async function GET(
     return NextResponse.json({ error: 'rootId query parameter is required' }, { status: 400 })
   }
 
-  // 归属校验:只允许查看本人会话的归档
+  // 归属校验(含临时区隔离):只允许查看本人同区会话的归档
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
   if (!conversation) {

@@ -46,6 +46,9 @@ server {
         alias /var/www/uploads/;
         expires 7d;
         add_header Cache-Control "public, max-age=604800, immutable";
+        # 注意:location 内一旦声明 add_header,server 级安全头不再继承,必须在此重复
+        add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "default-src 'none'; sandbox" always;
         try_files $uri =404;
     }
 

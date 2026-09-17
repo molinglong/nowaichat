@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { ephemeralScope } from "@/lib/ephemeral"
 
 export async function PATCH(req: NextRequest) {
   const session = await auth()
@@ -36,6 +37,7 @@ export async function PATCH(req: NextRequest) {
         where: {
           id: convId,
           userId,
+          ...ephemeralScope(session),
         },
         data: {
           styleOffset,

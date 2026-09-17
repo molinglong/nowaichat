@@ -3,8 +3,10 @@ import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { BUILTIN_MODELS, getBuiltinModel } from "@/lib/ai/image"
 import { encrypt } from "@/lib/crypto"
+import { IMAGE_SIZE_WHITELIST } from "@/lib/settings/registry"
 
-const VALID_SIZES = ["1024*1024", "720*1280", "1280*720"]
+// 尺寸白名单单一数据源在 settings/registry(AI 设置控制共用),避免两处清单漂移
+const VALID_SIZES: string[] = [...IMAGE_SIZE_WHITELIST]
 
 // 内置模型的有效 ID 列表
 const BUILTIN_IDS = BUILTIN_MODELS.map((m) => m.id)

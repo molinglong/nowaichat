@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { ephemeralScope } from '@/lib/ephemeral'
 
 /**
  * POST /api/conversations/[id]/finalize-draft
@@ -21,9 +22,9 @@ export async function POST(
 
   const { id } = params
 
-  // 归属校验:草稿行只允许在本人会话内定格
+  // 归属校验(含临时区隔离):草稿行只允许在本人同区会话内定格
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
   if (!conversation) {

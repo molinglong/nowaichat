@@ -11,15 +11,17 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
 import { OutlineSidebar } from './OutlineSidebar'
+import { MaskPickerMenu } from './MaskPickerMenu'
 import { ContextMeter } from './ContextMeter'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
+import { buildSettingsSnapshot, executeSettingsOps } from '@/lib/settings/executor'
 import { toast } from '@/lib/toast'
 import { useVisualViewport } from '@/hooks/useVisualViewport'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
-import { BUILTIN_MASKS, getBuiltinMask } from '@/lib/ai/builtin-masks'
+import { getBuiltinMask } from '@/lib/ai/builtin-masks'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import type { Attachment } from './FileUpload'
 
@@ -38,6 +40,12 @@ function getGreeting(): string {
   if (hour < 18) return '下午好'
   if (hour < 21) return '晚上好'
   return '夜深了，注意休息'
+}
+
+/** 欢迎页副标题用日期行: 「9月17日 周四」 */
+function getDateLine(): string {
+  const now = new Date()
+  return `${now.getMonth() + 1}月${now.getDate()}日 周${'日一二三四五六'[now.getDay()]}`
 }
 
 interface ChatPanelProps {
@@ -381,6 +389,10 @@ export function ChatPanel({
           get searchEngine() { return searchEngineRef.current },
           get stylePreset() { return conversationStylePresetRef.current },
           get maskId() { return conversationMaskIdRef.current },
+          // AI 设置控制: 每次请求前读取最新客户端设置快照,服务端注入 system prompt(读写对称)
+          get settingsSnapshot() {
+            return buildSettingsSnapshot()
+          },
           // Attachments are read from ref at send time
           get attachments() {
             return attachmentsRef.current
@@ -507,6 +519,12 @@ export function ChatPanel({
     [mergedModels, currentModel]
   )
 
+  // 当前模型的展示名: 欢迎页副标题使用
+  const currentModelName = useMemo(
+    () => mergedModels.find((m) => m.id === currentModel)?.name,
+    [mergedModels, currentModel]
+  )
+
   // 待注入附件: handleSend 先记录,等 sendMessage 把新 user 消息 push 进 messages 后,
   // 由下方 useEffect 把附件挂到最后一条 user 消息上(与 CompareLane 同款时序)。
   // 不能在 sendMessage 前同步 setMessages —— 那时新 user 消息还不存在,
@@ -551,6 +569,28 @@ export function ChatPanel({
     },
     [sendMessage]
   )
+
+  // AI 设置控制: 监听 update_settings 工具调用并执行设置变更。
+  // 历史回放安全: 历史消息由 toUIMessage 重建,parts 仅含 text/reasoning(工具明细走
+  // metadata),不会出现 tool-update_settings part,因此不会误触发执行。
+  // 不依赖 status: 工具若发生在流的最后一步,finish 后 status 已回 ready,依赖
+  // status==='streaming' 会漏执行;用 toolCallId 去重保证只执行一次。
+  const executedSettingsCallIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const last = messages[messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    for (const part of last.parts) {
+      if ((part as { type?: string }).type !== 'tool-update_settings') continue
+      const p = part as { state?: string; toolCallId?: string; input?: unknown; output?: { ok?: boolean } }
+      if (p.state !== 'output-available') continue
+      // 服务端 execute 白名单校验未通过(ok=false):前端不再执行
+      if (p.output && p.output.ok === false) continue
+      const callId = p.toolCallId
+      if (!callId || executedSettingsCallIdsRef.current.has(callId)) continue
+      executedSettingsCallIdsRef.current.add(callId)
+      void executeSettingsOps(p.input)
+    }
+  }, [messages])
 
   // 出队: 本轮生成结束(isLoading true→false)且 status 回到 ready 时,自动发出最早一条排队消息。
   // 出错(status='error')不出队,避免连环失败;用户修复后手动发送的下一轮成功结束时继续消化队列。
@@ -892,8 +932,8 @@ export function ChatPanel({
         </div>
       )}
 
-      {/* Mask bar - 当前生效的面具 chip(欢迎态与对话态共用),点击弹出切换面板 */}
-      {activeMask && (
+      {/* Mask bar - 当前生效的面具 chip(仅对话态;欢迎态由输入框下方胶囊行承担入口),点击弹出切换面板 */}
+      {activeMask && messages.length > 0 && (
         <div className="px-4 pt-2">
           <div className="relative inline-block">
             <button
@@ -914,62 +954,13 @@ export function ChatPanel({
                     rounded-xl border border-line bg-surface shadow-lg py-1.5"
                   role="menu"
                 >
-                  {BUILTIN_MASKS.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => handleMaskChange(m.id)}
-                      role="menuitem"
-                      className={`w-full flex items-start gap-2.5 px-3 py-2 text-left transition-colors
-                        ${m.id === activeMask.id ? 'bg-surface-muted' : 'hover:bg-surface-subtle'}`}
-                    >
-                      <span className="text-base leading-5 shrink-0" aria-hidden>{m.avatar}</span>
-                      <span className="min-w-0">
-                        <span className="block text-xs font-medium text-content-primary">{m.name}</span>
-                        <span className="block text-[11px] text-content-muted truncate">{m.description}</span>
-                      </span>
-                    </button>
-                  ))}
-                  {(userMasks?.length ?? 0) > 0 && (
-                    <>
-                      <div className="px-3 pt-2 pb-1 text-[10px] font-medium text-content-muted/70 uppercase tracking-wide">
-                        我的面具
-                      </div>
-                      {(userMasks ?? []).map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => handleMaskChange(m.id)}
-                          role="menuitem"
-                          className={`w-full flex items-start gap-2.5 px-3 py-2 text-left transition-colors
-                            ${m.id === activeMask.id ? 'bg-surface-muted' : 'hover:bg-surface-subtle'}`}
-                        >
-                          <span className="text-base leading-5 shrink-0" aria-hidden>{m.avatar}</span>
-                          <span className="min-w-0">
-                            <span className="block text-xs font-medium text-content-primary">{m.name}</span>
-                            <span className="block text-[11px] text-content-muted truncate">{m.description}</span>
-                          </span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  <div className="my-1 border-t border-line" />
-                  <button
-                    onClick={() => { setSettingsSection('masks'); setSettingsOpen(true); setMaskPickerOpen(false) }}
-                    role="menuitem"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs text-content-muted
-                      hover:bg-surface-subtle transition-colors"
-                  >
-                    <SettingsIcon className="w-4 h-4 shrink-0" aria-hidden />
-                    <span>管理面具（新增/编辑/删除）</span>
-                  </button>
-                  <button
-                    onClick={() => handleMaskChange(null)}
-                    role="menuitem"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs text-content-muted
-                      hover:bg-surface-subtle transition-colors"
-                  >
-                    <span className="text-base leading-5" aria-hidden>✕</span>
-                    <span>不使用面具</span>
-                  </button>
+                  <MaskPickerMenu
+                    activeMaskId={activeMask.id}
+                    userMasks={userMasks}
+                    onSelect={handleMaskChange}
+                    onManage={() => { setSettingsSection('masks'); setSettingsOpen(true); setMaskPickerOpen(false) }}
+                    onClear={() => handleMaskChange(null)}
+                  />
                 </div>
               </>
             )}
@@ -995,6 +986,10 @@ export function ChatPanel({
           compareMode={false}
           compareModeAvailable={!conversationId}
           onCompareModeChange={handleCompareModeChange}
+          mask={activeMask}
+          onMaskChange={handleMaskChange}
+          userMasks={userMasks}
+          onManageMasks={() => { setSettingsSection('masks'); setSettingsOpen(true) }}
           welcomeHeader={(
             <div className="text-center mb-8">
               <h2
@@ -1009,6 +1004,11 @@ export function ChatPanel({
               >
                 {getGreeting()}，今天能为你做些什么？
               </h2>
+              {/* 副标题: 日期 + 当前模型,给问候语增加层次 */}
+              <p className="mt-3 text-xs text-content-muted tracking-wide">
+                {getDateLine()}
+                {currentModelName ? ` · ${currentModelName}` : ''}
+              </p>
             </div>
           )}
         />

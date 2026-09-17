@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db'
 import { z } from 'zod'
 import { deleteReferencedFiles } from '@/lib/uploads'
 import { getMaskById } from '@/lib/ai/mask-resolve'
+import { ephemeralScope } from '@/lib/ephemeral'
 
 /**
  * GET /api/conversations/[id]
@@ -33,6 +34,9 @@ export async function GET(
   }
 
   const { id } = params
+  // 双向隔离:临时会话只能访问临时对话,反之亦然(防 id 直达穿透);
+  // 不匹配时自然落入 404 分支
+  const scope = ephemeralScope(session)
 
   // A 流式恢复: 超时兜底——超过 10 分钟仍处于 streaming 的草稿行视为已中断,
   // 定格为普通消息,避免前端无限轮询(快照周期 600ms,正常生成远短于该阈值)。
@@ -50,6 +54,7 @@ export async function GET(
     where: {
       id,
       userId: session.user.id,
+      ...scope,
     },
     include: {
       messages: {
@@ -155,7 +160,7 @@ export async function PATCH(
   const { id } = params
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
   })
 
   if (!conversation) {
@@ -214,7 +219,7 @@ export async function DELETE(
   const { id } = params
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
   })
 
   if (!conversation) {

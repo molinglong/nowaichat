@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { signIn } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
@@ -12,116 +13,85 @@ import {
   primaryButtonClass,
 } from "@/components/auth-controls"
 
-export default function RegisterPage() {
+/**
+ * 临时聊天登录入口(/login/ephemeral):
+ * - 仅接受访客密码(主密码在此入口会被拒绝,防止公共电脑上误泄露)
+ * - 登录成功进入临时模式:空历史、无账户设置,对话进隔离区
+ * - 隔离区对话可在正常模式 设置→账号信息 中找回
+ */
+export default function EphemeralLoginPage() {
   const router = useRouter()
-  const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [confirmPassword, setConfirmPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError("")
-
-    if (password !== confirmPassword) {
-      setError("两次输入的密码不一致")
-      return
-    }
-
-    if (password.length < 6) {
-      setError("密码长度至少为 6 位")
-      return
-    }
-
     setLoading(true)
 
-    try {
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
-      })
+    const res = await signIn("credentials", {
+      email,
+      password,
+      // 临时入口标志:服务端 authorize 据此拒绝主密码、允许访客密码
+      ephemeralEntry: "1",
+      redirect: false,
+    })
 
-      const data = await res.json()
+    setLoading(false)
 
-      if (!res.ok) {
-        setError(data.error || "注册失败")
-        setLoading(false)
-        return
+    if (res?.error) {
+      if (res.error === "EPHEMERAL_ENTRY_MAIN_PASSWORD") {
+        setError("此入口仅支持访客密码，主密码请使用正常登录入口")
+      } else if (res.error === "RATE_LIMITED") {
+        setError("尝试次数过多，请一分钟后再试")
+      } else {
+        setError("邮箱/用户名或访客密码错误")
       }
-
-      router.push("/login?registered=1")
-    } catch {
-      setError("网络错误，请稍后重试")
-      setLoading(false)
+      return
     }
+
+    router.push("/chat")
+    router.refresh()
   }
 
   return (
     <div>
       <h2 className="font-ultra auth-reveal auth-delay-1 text-[30px] tracking-[0.06em] text-content-primary">
-        创建账户
+        临时聊天
       </h2>
       <p className="auth-reveal auth-delay-2 mb-7 mt-2 text-[13.5px] text-content-secondary">
-        注册以开始使用
+        使用访客密码登录。对话将隔离保存，不会出现在正常历史记录中，且无法访问账户设置
       </p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {error && <ErrorBar message={error} />}
 
         <div className="auth-reveal auth-delay-3">
-          <label htmlFor="name" className={labelClass}>
-            用户名
-          </label>
-          <input
-            id="name"
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="你的名字"
-            className={inputClass}
-          />
-        </div>
-
-        <div className="auth-reveal auth-delay-3">
           <label htmlFor="email" className={labelClass}>
-            邮箱
+            邮箱或用户名
           </label>
           <input
             id="email"
-            type="email"
+            type="text"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
+            placeholder="you@example.com 或用户名"
             className={inputClass}
           />
         </div>
 
         <div className="auth-reveal auth-delay-4">
           <label htmlFor="password" className={labelClass}>
-            密码
+            访客密码
           </label>
           <PasswordInput
             id="password"
-            placeholder="至少 6 位"
+            placeholder="••••••••"
             value={password}
             onChange={setPassword}
-          />
-        </div>
-
-        <div className="auth-reveal auth-delay-4">
-          <label htmlFor="confirmPassword" className={labelClass}>
-            确认密码
-          </label>
-          <PasswordInput
-            id="confirmPassword"
-            placeholder="再次输入密码"
-            value={confirmPassword}
-            onChange={setConfirmPassword}
           />
         </div>
 
@@ -131,19 +101,19 @@ export default function RegisterPage() {
             {loading ? (
               <>
                 <span className="h-[15px] w-[15px] animate-spin rounded-full border-2 border-accent-foreground/35 border-t-accent-foreground" />
-                <span className="ml-2">注册中…</span>
+                <span className="ml-2">登录中…</span>
               </>
             ) : (
-              "注 册"
+              "进入临时聊天"
             )}
           </button>
         </div>
       </form>
 
       <p className="auth-reveal auth-delay-5 mt-6 text-center text-[13.5px] text-content-secondary">
-        已有账户？{" "}
+        账号主人？{" "}
         <Link href="/login" className={footerLinkClass}>
-          立即登录
+          使用主密码登录
         </Link>
       </p>
     </div>

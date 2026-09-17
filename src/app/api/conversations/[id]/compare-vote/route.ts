@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { ephemeralScope } from '@/lib/ephemeral'
 
 /**
  * POST /api/conversations/[id]/compare-vote
@@ -21,7 +22,7 @@ export async function POST(
 
   const { id } = params
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
   if (!conversation) {

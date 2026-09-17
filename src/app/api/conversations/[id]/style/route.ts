@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style-presets"
+import { ephemeralScope } from "@/lib/ephemeral"
 
 /**
  * PATCH /api/conversations/[id]/style
@@ -44,7 +45,7 @@ export async function PATCH(
   }
 
   const conversation = await prisma.conversation.updateMany({
-    where: { id: params.id, userId: session.user.id },
+    where: { id: params.id, userId: session.user.id, ...ephemeralScope(session) },
     data: { stylePreset: nextPreset },
   })
 

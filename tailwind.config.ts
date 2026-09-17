@@ -47,6 +47,17 @@ const config: Config = {
         sans: ['var(--font-sans)', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
         mono: ['var(--font-geist-mono)', 'ui-monospace', 'monospace'],
       },
+      keyframes: {
+        // 发送按钮由禁用变为可用时的轻微弹入
+        'pop-in': {
+          '0%': { transform: 'scale(0.85)' },
+          '60%': { transform: 'scale(1.06)' },
+          '100%': { transform: 'scale(1)' },
+        },
+      },
+      animation: {
+        'pop-in': 'pop-in 240ms ease-out',
+      },
     },
   },
   plugins: [],

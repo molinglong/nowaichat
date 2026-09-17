@@ -37,10 +37,26 @@ const nextConfig = {
       ],
     },
   },
+  // 安全:关闭图片优化器(全站仅生图画廊用 next/image,且均为本站 /uploads 本地图)。
+  // 优化器端点无需登录即可访问,关闭后同时消除:
+  // - 任意远程源代理(remotePatterns '**')的 DoS/SSRF 面(GHSA-9g9p-9gw9-jx7f)
+  // - 优化器 API DoS 与磁盘缓存无限增长(GHSA-h64f / GHSA-3x4c)
+  // 桌面端静态导出(next.config.desktop.mjs)本就 unoptimized,行为一致。
   images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-    ],
+    unoptimized: true,
+  },
+  async headers() {
+    return [
+      {
+        // 上传文件响应加固:防 MIME 嗅探 + CSP 沙箱。
+        // 即使恶意 HTML/SVG 混入 uploads,也会被拒绝执行脚本(同源存储型 XSS 兜底)。
+        source: '/uploads/:path*',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Content-Security-Policy', value: "default-src 'none'; sandbox" },
+        ],
+      },
+    ]
   },
   webpack: (config, { isServer, nextRuntime }) => {
     // Handle node: protocol imports that Prisma v7 uses

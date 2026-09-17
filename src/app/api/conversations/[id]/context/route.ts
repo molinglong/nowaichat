@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { estimateMessagesTokens } from "@/lib/context-compression"
+import { ephemeralScope } from "@/lib/ephemeral"
 
 /**
  * GET /api/conversations/[id]/context - 上下文用量面板数据
@@ -20,9 +21,9 @@ export async function GET(
 
   const { id } = params
 
-  // Verify the conversation belongs to the user
+  // Verify the conversation belongs to the user (with ephemeral scope)
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
   if (!conversation) {

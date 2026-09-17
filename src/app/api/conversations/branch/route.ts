@@ -15,6 +15,7 @@ import {
 import { generateConversationTitle } from '@/lib/ai/title-generator'
 import type { ModelDefinition } from '@/lib/ai/types'
 import type { LanguageModel } from 'ai'
+import { isEphemeralSession } from '@/lib/ephemeral'
 
 export const maxDuration = 60 // 压缩一次 LLM 调用,给 60s 兜底
 
@@ -143,6 +144,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     const userId = session.user.id
+    // 临时区隔离:分支新对话继承会话模式(临时模式下只能分支临时对话,反之亦然)
+    const isEphemeral = isEphemeralSession(session)
 
     const body = (await req.json().catch(() => ({}))) as BranchRequestBody
     const sourceId = body?.sourceId
@@ -151,9 +154,9 @@ export async function POST(req: NextRequest) {
     }
     const draft = typeof body.draft === 'string' ? body.draft.trim() : ''
 
-    // 1) 读取源对话
+    // 1) 读取源对话(含临时区隔离:跨区分支视为不存在)
     const source = await prisma.conversation.findFirst({
-      where: { id: sourceId, userId },
+      where: { id: sourceId, userId, isEphemeral },
       include: { messages: { orderBy: { createdAt: 'asc' } } },
     })
     if (!source) {
@@ -206,6 +209,7 @@ export async function POST(req: NextRequest) {
       const newConv = await prisma.conversation.create({
         data: {
           userId,
+          isEphemeral,
           title: newTitle,
           model: source.model,
           styleOffset: source.styleOffset,
@@ -271,6 +275,7 @@ export async function POST(req: NextRequest) {
     const newConv = await prisma.conversation.create({
       data: {
         userId,
+        isEphemeral,
         title: newTitle,
         model: source.model,
         styleOffset: source.styleOffset,

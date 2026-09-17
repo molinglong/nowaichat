@@ -29,6 +29,14 @@ model User {
   compareVotes  CompareVote[]
   memoryEnabled Boolean   @default(true)
   clarifyEnabled Boolean  @default(true)
+  /// AI 设置控制总开关：关闭时 chat route 不注入 update_settings 工具（物理级关闭）；
+  /// 刻意不在 AI 可控注册表内，仅能通过 设置→通用 手动修改
+  aiSettingsControl Boolean @default(true)
+  /// 临时聊天:访客密码 hash(空=未启用)。访客密码登录进入临时模式(隔离区);
+  /// 设置时须与主密码不同,长期有效可随时更改
+  guestPasswordHash String?
+  /// 临时聊天模式下是否允许注入长期记忆(默认 false=不注入,防止借号场景暴露记忆内容)
+  ephemeralMemoryInjection Boolean @default(false)
   imageModel    String   @default("builtin:wanx2.1-t2i-turbo")
   imageSize     String   @default("1024*1024")
   imageModels   ImageModel[]
@@ -95,6 +103,10 @@ model Conversation {
   styleOffset   Int      @default(50)
   stylePreset   String?  // 新版风格预设:id 来自 STYLE_PRESETS(balanced/practical/dev/editor/mentor/scholar). 为 null 时视为 balanced
   maskId        String?  // 面具 id:内置面具 id 来自 BUILTIN_MASKS(如 translator);将来用户自定义面具用 user:<cuid> 前缀. 为 null 时不启用面具
+  /// 临时聊天标记:临时模式(访客密码登录)下创建的对话进入隔离区,
+  /// 正常模式列表不可见,设置→账号信息 的临时聊天专区可找回/转正/删除。
+  /// 隔离由服务端按 session 模式强制执行
+  isEphemeral   Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

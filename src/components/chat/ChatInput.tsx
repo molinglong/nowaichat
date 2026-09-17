@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
+import { MaskPickerMenu } from './MaskPickerMenu'
+import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useChatStore } from '@/store/chat-store'
 import { draftKeyFor, setDraft as persistDraft } from '@/lib/draft-storage'
@@ -30,6 +32,14 @@ export interface ChatInputProps {
   onCompareModeChange?: (enabled: boolean) => void
   compareModels?: string[]
   onCompareModelsChange?: (models: string[]) => void
+  /** 当前生效面具(欢迎页胶囊显示);空表示未使用面具 */
+  mask?: { id: string; name: string; avatar: string } | null
+  /** 切换/清除面具(欢迎页胶囊菜单) */
+  onMaskChange?: (maskId: string | null) => void
+  /** 自定义面具列表(欢迎页胶囊菜单「我的面具」分组) */
+  userMasks?: MaskDTO[]
+  /** 打开面具管理(设置页 masks 分区) */
+  onManageMasks?: () => void
   /** 「接着说」横幅:存在时显示在输入框上方 */
   pendingContinuationExists?: boolean
   onContinue?: () => void
@@ -37,7 +47,7 @@ export interface ChatInputProps {
   /**
    * 视觉变体:
    * - 'standard'(默认): 聊天页底部玻璃态卡片,支持附件 / 对比 / 接着说
-   * - 'welcome': 新对话页中央简洁卡片,只支持文本输入 + 模型选择器
+   * - 'welcome': 新对话页简洁卡片(中间偏上),附件/对比入口在输入框下方胶囊行
    */
   variant?: 'standard' | 'welcome'
   /** welcome 变体顶部可选问候语/引导(slot) */
@@ -62,6 +72,10 @@ export function ChatInput({
   onCompareModeChange,
   compareModels,
   onCompareModelsChange,
+  mask,
+  onMaskChange,
+  userMasks,
+  onManageMasks,
   pendingContinuationExists,
   onContinue,
   onDismissContinuation,
@@ -74,6 +88,8 @@ export function ChatInput({
   const [draftRestored, setDraftRestored] = useState(false)
   // 仅 welcome 变体使用:控制单行 / 多行 UI 切换
   const [isMultiline, setIsMultiline] = useState(false)
+  // 仅 welcome 变体使用:面具胶囊菜单开合
+  const [maskMenuOpen, setMaskMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 引用回复状态
@@ -286,15 +302,18 @@ export function ChatInput({
   if (variant === 'welcome') {
     return (
       <div
-        className={cn('flex-1 w-full flex flex-col md:justify-center px-4', className)}
+        className={cn('relative flex-1 w-full flex flex-col md:justify-center px-4', className)}
         style={{
           // 键盘弹出时让内容贴底(否则依旧被键盘遮住);
           // 没键盘时桌面垂直居中、移动也保持居中(只加 paddingBottom 占键盘)。
           paddingBottom: 'var(--keyboard-height, 0px)',
         }}
       >
-        <div className="w-full max-w-2xl mx-auto">
-          {/* 可选问候语(slot) */}
+        {/* 点阵背景: 中心(内容区)淡出、四周渐显,纯装饰 */}
+        <div className="dot-grid" aria-hidden="true" />
+
+        <div className="relative w-full max-w-2xl mx-auto md:-translate-y-[8vh]">
+          {/* 可选问候语(slot); md 以上整体上移 8vh,视觉重心中间偏上 */}
           {welcomeHeader}
 
           {/* 草稿已恢复提示 —— 仅在有草稿时短暂出现 */}
@@ -332,13 +351,16 @@ export function ChatInput({
 
           {/* 输入框容器: 单行 / 多行自动扩展 + 按钮沉底 */}
           <div
-            className="rounded-xl border border-line bg-surface shadow-sm overflow-hidden"
+            className="rounded-xl border border-line bg-surface shadow-sm overflow-hidden
+              focus-within:border-line-strong focus-within:shadow-md
+              transition-[border-color,box-shadow] duration-200"
             style={{
               position: 'relative',
               height: isMultiline ? undefined : '56px',
             }}
           >
-            {/* 顶栏: 单行时内联 flex 居中, 多行时隐藏 */}
+            {/* 顶栏: 单行时内联 flex 居中, 多行时隐藏。
+                附件/对比入口已统一下沉到输入框下方胶囊行 */}
             <div
               className="flex items-center gap-2 px-3"
               style={{
@@ -346,13 +368,6 @@ export function ChatInput({
                 display: isMultiline ? 'none' : 'flex',
               }}
             >
-              <FileUpload
-                attachments={attachments}
-                onAttachmentsChange={setAttachments}
-                disabled={isLoading}
-                hideAttachmentsPreview
-              />
-              <div className="w-px h-7 bg-line shrink-0" />
               <ModelSelector
                 models={models}
                 selectedModel={selectedModel}
@@ -363,25 +378,6 @@ export function ChatInput({
                 onWebSearchChange={onWebSearchChange}
                 webSearchAvailable={webSearchAvailable}
               />
-              {/* 对比模式开关: welcome 变体同样可达(样式与 standard 变体一致) */}
-              {compareModeAvailable && onCompareModeChange && (
-                <button
-                  onClick={() => onCompareModeChange(!compareMode)}
-                  disabled={isLoading}
-                  className={cn(
-                    'hidden md:inline-flex items-center h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors shrink-0',
-                    compareMode
-                      ? 'bg-accent text-accent-foreground'
-                      : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
-                    isLoading && 'opacity-50 cursor-not-allowed'
-                  )}
-                  title="对比模式"
-                  aria-label="对比模式"
-                  aria-pressed={compareMode}
-                >
-                  对比
-                </button>
-              )}
               <div className="w-px h-7 bg-line shrink-0" />
               <textarea
                 key="welcome-single"
@@ -416,7 +412,7 @@ export function ChatInput({
                   'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
                   'active:scale-95 touch-manipulation',
                   (input.trim() || attachments.length > 0) && !isLoading
-                    ? 'bg-accent text-white hover:bg-accent/90'
+                    ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
                     : 'bg-surface-subtle text-content-muted cursor-not-allowed'
                 )}
                 style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -505,15 +501,7 @@ export function ChatInput({
                   setIsMultiline(target.scrollHeight > 38)
                 }}
               />
-              <div className="shrink-0 flex items-center justify-between px-3 py-2.5">
-                <div className="flex items-center gap-1">
-                  <FileUpload
-                    attachments={attachments}
-                    onAttachmentsChange={setAttachments}
-                    disabled={isLoading}
-                    hideAttachmentsPreview
-                  />
-                </div>
+              <div className="shrink-0 flex items-center justify-end px-3 py-2.5">
                 <div className="flex items-center gap-1">
                   <ModelSelector
                     models={models}
@@ -533,7 +521,7 @@ export function ChatInput({
                       'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
                       'active:scale-95 touch-manipulation',
                       (input.trim() || attachments.length > 0) && !isLoading
-                        ? 'bg-accent text-white hover:bg-accent/90'
+                        ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
                         : 'bg-surface-subtle text-content-muted cursor-not-allowed'
                     )}
                     style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -543,6 +531,84 @@ export function ChatInput({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* 输入框下方胶囊行: 上传 / 对比统一入口(单行、多行态均可见) */}
+          <div className="flex items-center justify-center gap-2 mt-3">
+            <FileUpload
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
+              disabled={isLoading}
+              hideAttachmentsPreview
+              variant="pill"
+            />
+            {compareModeAvailable && onCompareModeChange && (
+              <button
+                onClick={() => onCompareModeChange(!compareMode)}
+                disabled={isLoading}
+                className={cn(
+                  'hidden md:inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
+                  compareMode
+                    ? 'bg-accent text-accent-foreground border-transparent'
+                    : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
+                  isLoading && 'opacity-50 cursor-not-allowed'
+                )}
+                title="对比模式"
+                aria-label="对比模式"
+                aria-pressed={compareMode}
+              >
+                <Columns2 className="w-3.5 h-3.5" />
+                对比
+              </button>
+            )}
+            {/* 面具胶囊: 未使用时显示入口,使用中反色显示 avatar + 名称 */}
+            {onMaskChange && (
+              <div className="relative">
+                <button
+                  onClick={() => setMaskMenuOpen((v) => !v)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full text-xs font-medium transition-colors shrink-0',
+                    mask
+                      ? 'bg-accent text-accent-foreground border border-transparent'
+                      : 'border border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong'
+                  )}
+                  title={mask ? '当前面具,点击切换' : '选择面具'}
+                  aria-label="选择面具"
+                  aria-haspopup="menu"
+                  aria-expanded={maskMenuOpen}
+                >
+                  {mask ? (
+                    <>
+                      <span aria-hidden>{mask.avatar}</span>
+                      <span className="max-w-[96px] truncate">{mask.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Drama className="w-3.5 h-3.5" aria-hidden />
+                      面具
+                    </>
+                  )}
+                </button>
+                {maskMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-50 w-64 max-h-80 overflow-y-auto
+                        rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                      role="menu"
+                    >
+                      <MaskPickerMenu
+                        activeMaskId={mask?.id ?? null}
+                        userMasks={userMasks}
+                        onSelect={(id) => { onMaskChange(id); setMaskMenuOpen(false) }}
+                        onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+                        onClear={() => { onMaskChange(null); setMaskMenuOpen(false) }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

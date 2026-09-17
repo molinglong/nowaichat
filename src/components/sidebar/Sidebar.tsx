@@ -3,8 +3,8 @@
 import { useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask } from 'lucide-react'
-import { useSession } from 'next-auth/react'
+import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses } from 'lucide-react'
+import { signOut, useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat-store'
 import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
@@ -62,6 +62,7 @@ export function Sidebar() {
   const hydrated = useChatStore((s) => s.hydrated)
   const setHydrated = useChatStore((s) => s.setHydrated)
   const currentConversationId = useChatStore((s) => s.currentConversationId)
+  const setConversationTitle = useChatStore((s) => s.setConversationTitle)
   const conversationMaskId = useChatStore((s) => s.conversationMaskId)
   const setConversationMaskId = useChatStore((s) => s.setConversationMaskId)
   const removeConversationRead = useChatStore((s) => s.removeConversationRead)
@@ -80,6 +81,9 @@ export function Sidebar() {
 
   const sidebarEffectiveOpen = hydrated ? sidebarOpen : true
   const { data: session } = useSession()
+  // 临时聊天模式(访客密码登录):侧边栏只显示隔离区临时对话,
+  // 隐藏账户设置入口;服务端 API 层已同步隔离,此处仅 UX 提示
+  const isEphemeral = session?.ephemeral === true
 
   // 自定义面具列表（面具菜单「我的面具」分组用）
   const { data: userMasks } = useQuery({
@@ -95,6 +99,7 @@ export function Sidebar() {
   const {
     data,
     isLoading,
+    isPending,
     isFetchingNextPage,
     hasNextPage,
     fetchNextPage,
@@ -128,9 +133,11 @@ export function Sidebar() {
   const [searchOpen, setSearchOpen] = useState(false)
   // 面具选择菜单(仅在展开态渲染,折叠态点击先展开侧边栏)
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
+  // 用户菜单(底部头像/用户行点击弹出:账号设置入口 + 退出登录)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const router = useRouter()
 
-  const loading = isLoading
+  const loading = isLoading || isPending
   const loadingMore = isFetchingNextPage
   const hasMore = !!hasNextPage
 
@@ -197,8 +204,49 @@ export function Sidebar() {
     setMaskMenuOpen(true)
   }, [setSidebarOpen])
 
+  // 折叠态点头像:先展开侧边栏再弹菜单(菜单在展开态渲染,避免被 aside overflow 裁剪)
+  const handleAvatarInCollapsed = useCallback(() => {
+    setSidebarOpen(true)
+    setUserMenuOpen(true)
+  }, [setSidebarOpen])
+
+  // 用户菜单 → 打开设置弹窗并定位到「账号信息」
+  const handleOpenAccountSettings = useCallback(() => {
+    setUserMenuOpen(false)
+    setSettingsSection('account')
+    setSettingsOpen(true)
+  }, [setSettingsSection, setSettingsOpen])
+
+  // 用户菜单 → 退出登录
+  const handleSignOut = useCallback(async () => {
+    setUserMenuOpen(false)
+    await signOut({ callbackUrl: '/login' })
+  }, [])
+
+  // 用户菜单:点击外部或 Esc 关闭。不用 fixed 遮罩——aside 的 backdrop-blur/transform
+  // 会使 fixed 相对 aside 而非视口定位,遮罩罩不住主内容区
+  useEffect(() => {
+    if (!userMenuOpen) return
+    function onPointerDown(e: PointerEvent) {
+      const el = e.target as HTMLElement | null
+      if (el?.closest('[data-user-menu-root]')) return
+      setUserMenuOpen(false)
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setUserMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [userMenuOpen])
+
   const handleDeleteConversation = useCallback(
     async (id: string) => {
+      // 二次确认:防止误点垃圾桶图标直接删除不可恢复的对话
+      if (!confirm('确定要删除这个对话吗？删除后不可恢复。')) return
       try {
         await fetchJson(`/api/conversations/${id}`, { method: 'DELETE' })
         // Directly remove from cache, avoiding an extra refetch
@@ -251,11 +299,23 @@ export function Sidebar() {
             }
           }
         )
+        // 同步会话详情缓存，否则正在浏览的会话页顶栏标题不同步
+        queryClient.setQueryData<
+          | { id: string; title: string; [key: string]: unknown }
+          | undefined
+        >(queryKeys.conversations.detail(id), (prev) =>
+          prev ? { ...prev, title: newTitle } : prev
+        )
+        // 新对话页(history.replaceState 后未导航到 /chat/c/[id])没有详情查询,
+        // 顶栏标题由 store 驱动，直接同步
+        if (currentConversationId === id) {
+          setConversationTitle(newTitle)
+        }
       } catch (err) {
         console.error('Failed to rename conversation:', err)
       }
     },
-    [queryClient]
+    [queryClient, currentConversationId, setConversationTitle]
   )
 
   return (
@@ -326,6 +386,24 @@ export function Sidebar() {
             </button>
           )}
         </div>
+
+        {/* 临时聊天模式标识条(中性灰极简风):明确当前处于隔离区 */}
+        {sidebarEffectiveOpen && isEphemeral && (
+          <div className="mx-3 mt-1 mb-0.5 px-2.5 py-1.5 rounded-lg bg-surface-subtle/70 border border-line/40">
+            <p className="text-[11px] font-medium text-content-secondary flex items-center gap-1.5">
+              <Glasses className="w-3 h-3 shrink-0" aria-hidden />
+              临时聊天
+            </p>
+            <p className="mt-0.5 text-[10px] leading-4 text-content-muted">
+              对话已隔离保存，可在正常模式 设置→账号信息 中找回
+            </p>
+          </div>
+        )}
+        {!sidebarEffectiveOpen && isEphemeral && (
+          <div className="flex justify-center pt-1" title="临时聊天模式">
+            <Glasses className="w-3.5 h-3.5 text-content-muted" aria-label="临时聊天模式" />
+          </div>
+        )}
 
         {!sidebarEffectiveOpen && (
           <div className="flex flex-col items-center gap-1 pt-2">
@@ -437,15 +515,18 @@ export function Sidebar() {
                     </>
                   )}
                   <div className="my-1 border-t border-line" />
-                  <button
-                    onClick={() => { setSettingsSection('masks'); setSettingsOpen(true); setMaskMenuOpen(false) }}
-                    role="menuitem"
-                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs text-content-muted
-                      hover:bg-surface-subtle transition-colors"
-                  >
-                    <Settings className="w-4 h-4 shrink-0" aria-hidden />
-                    <span>管理面具（新增/编辑/删除）</span>
-                  </button>
+                  {/* 临时模式隐藏面具管理入口(写操作已被服务端拦截) */}
+                  {!isEphemeral && (
+                    <button
+                      onClick={() => { setSettingsSection('masks'); setSettingsOpen(true); setMaskMenuOpen(false) }}
+                      role="menuitem"
+                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs text-content-muted
+                        hover:bg-surface-subtle transition-colors"
+                    >
+                      <Settings className="w-4 h-4 shrink-0" aria-hidden />
+                      <span>管理面具（新增/编辑/删除）</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => handleSelectMask(null)}
                     role="menuitem"
@@ -463,7 +544,9 @@ export function Sidebar() {
 
         {sidebarEffectiveOpen && (
           <div className="px-3.5 pt-2 pb-1 flex items-center justify-between">
-            <h2 className="text-[11px] font-medium text-content-muted/80">历史记录</h2>
+            <h2 className="text-[11px] font-medium text-content-muted/80">
+              {isEphemeral ? '临时对话' : '历史记录'}
+            </h2>
             <div className="flex items-center gap-1.5">
               {total > 0 && (
                 <span className="text-[11px] text-content-muted/60 tabular-nums">
@@ -530,47 +613,123 @@ export function Sidebar() {
 
         {/* User info region — hidden when collapsed */}
         {sidebarEffectiveOpen && session?.user && (
-          <div className="px-2 pt-2 pb-1 flex items-center gap-2 border-t border-line/40 mt-1">
-            {session.user.image ? (
-              <img
-                src={session.user.image}
-                alt={session.user.name || '头像'}
-                className="w-7 h-7 rounded-full shrink-0 object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-[11px] font-medium text-accent shrink-0">
-                {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
+          <div
+            className="relative px-2 pt-2 pb-2 mt-1 border-t border-line/40"
+            data-user-menu-root
+          >
+            <button
+              onClick={() => setUserMenuOpen((v) => !v)}
+              className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg text-left
+                hover:bg-surface-subtle/60 transition-colors touch-manipulation"
+              aria-label="账号菜单"
+              aria-expanded={userMenuOpen}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              {session.user.image ? (
+                <img
+                  src={session.user.image}
+                  alt={session.user.name || '头像'}
+                  className="w-7 h-7 rounded-full shrink-0 object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-[11px] font-medium text-accent shrink-0">
+                  {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-content-primary truncate">
+                  {session.user.name || session.user.email || '已登录'}
+                </p>
+                {session.user.email && session.user.name && (
+                  <p className="text-[10px] text-content-muted truncate">
+                    {session.user.email}
+                  </p>
+                )}
+              </div>
+            </button>
+
+            {/* 用户菜单:纯色浮层(遵循弹窗纯色背景规范),向上弹出 */}
+            {userMenuOpen && (
+              <div
+                className="absolute left-2 bottom-full mb-1.5 z-50 w-[13rem]
+                  rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                role="menu"
+              >
+                <div className="px-3 py-2 flex items-center gap-2.5">
+                  {session.user.image ? (
+                    <img
+                      src={session.user.image}
+                      alt={session.user.name || '头像'}
+                      className="w-9 h-9 rounded-full shrink-0 object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-accent/20 flex items-center justify-center text-sm font-medium text-accent shrink-0">
+                      {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-content-primary truncate">
+                      {session.user.name || '已登录'}
+                    </p>
+                    {session.user.email && (
+                      <p className="text-[11px] text-content-muted truncate">
+                        {session.user.email}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="my-1 border-t border-line" />
+                {/* 临时模式隐藏账号设置入口(账户管理写操作已被服务端拦截) */}
+                {!isEphemeral && (
+                  <button
+                    onClick={handleOpenAccountSettings}
+                    role="menuitem"
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs text-content-secondary
+                      hover:bg-surface-subtle transition-colors"
+                  >
+                    <User className="w-4 h-4 shrink-0" aria-hidden />
+                    <span>账号设置</span>
+                  </button>
+                )}
+                <button
+                  onClick={handleSignOut}
+                  role="menuitem"
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs text-red-500/70
+                    hover:text-red-500 hover:bg-surface-subtle transition-colors"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" aria-hidden />
+                  <span>退出登录</span>
+                </button>
               </div>
             )}
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-content-primary truncate">
-                {session.user.name || session.user.email || '已登录'}
-              </p>
-              {session.user.email && session.user.name && (
-                <p className="text-[10px] text-content-muted truncate">
-                  {session.user.email}
-                </p>
-              )}
-            </div>
           </div>
         )}
 
-        {/* 底部:折叠态头像占位(设置入口已移至顶栏最右侧) */}
+        {/* 底部:折叠态头像(点击展开侧边栏并弹出账号菜单) */}
         {!sidebarEffectiveOpen && session?.user && (
           <div className="mt-auto pt-1 pb-2 px-0 border-t border-line/40 flex flex-col items-center">
-            {session.user.image ? (
-              <img
-                src={session.user.image}
-                alt={session.user.name || '头像'}
-                className="w-7 h-7 rounded-full shrink-0 object-cover mb-1.5"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-[11px] font-medium text-accent shrink-0 mb-1.5">
-                {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
-              </div>
-            )}
+            <button
+              onClick={handleAvatarInCollapsed}
+              className="rounded-full transition-all active:scale-95 touch-manipulation"
+              aria-label="展开侧边栏并打开账号菜单"
+              title="账号"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              {session.user.image ? (
+                <img
+                  src={session.user.image}
+                  alt={session.user.name || '头像'}
+                  className="w-7 h-7 rounded-full shrink-0 object-cover mb-1.5"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-[11px] font-medium text-accent shrink-0 mb-1.5">
+                  {(session.user.name || session.user.email || '?').charAt(0).toUpperCase()}
+                </div>
+              )}
+            </button>
           </div>
         )}
       </aside>

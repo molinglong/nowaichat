@@ -197,6 +197,29 @@ body {
   animation: sidebar-item-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
+/* ── 欢迎页点阵背景 ─────────────────────────────────────
+   极淡中性圆点平铺;radial mask 让中心(内容区)淡出、四周渐显,
+   点阵只填充边缘留白,不与问候语/输入框抢视觉。
+   点色走 --content-muted 变量,明暗主题自动适配。 ───────────── */
+.dot-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, rgb(var(--content-muted) / 0.4) 1px, transparent 1px);
+  background-size: 22px 22px;
+  /* 桌面端:内容块垂直居中偏上(translate-y -8vh),淡出椭圆中心跟着略上移 */
+  -webkit-mask-image: radial-gradient(ellipse 62% 58% at 50% 45%, transparent 30%, black 82%);
+  mask-image: radial-gradient(ellipse 62% 58% at 50% 45%, transparent 30%, black 82%);
+}
+
+/* 移动端:内容贴顶(justify-start),淡出中心同步上移,避免点阵侵入问候区 */
+@media (max-width: 767px) {
+  .dot-grid {
+    -webkit-mask-image: radial-gradient(ellipse 92% 42% at 50% 14%, transparent 32%, black 86%);
+    mask-image: radial-gradient(ellipse 92% 42% at 50% 14%, transparent 32%, black 86%);
+  }
+}
+
 /* ── Tauri 桌面客户端专属样式 ─────────────────────────────
    [data-tauri] 属性由 Tauri WebView 自动注入到 <html>，
    浏览器开发时（npm run dev）永远不存在。
@@ -312,4 +335,64 @@ body {
 .rich-md .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* ── 认证页（登录/注册）品牌分栏共用样式 ─────────────────── */
+/* 极细展示字体：标题/Logo 徽标专用，复用上方已注册的苹方 Ultralight */
+.font-ultra {
+  font-family: 'PingFang Ultralight', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  font-weight: 100;
+}
+
+/* 认证页左栏点阵：整面均匀铺满、无遮罩（与欢迎页 .dot-grid 的中心淡出版区分），
+   点色用最浅的 --line + 柔边，低调纹理不抢文字 */
+.auth-dot-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.75;
+  background-image: radial-gradient(circle, rgb(var(--line)) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  background-position: 4px 6px;
+}
+
+/* 入场动画：元素错峰上浮（MacOS 风格缓动） */
+@keyframes auth-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-reveal {
+  animation: auth-fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.auth-delay-1 { animation-delay: 0.02s; }
+.auth-delay-2 { animation-delay: 0.1s; }
+.auth-delay-3 { animation-delay: 0.18s; }
+.auth-delay-4 { animation-delay: 0.26s; }
+.auth-delay-5 { animation-delay: 0.34s; }
+.auth-delay-6 { animation-delay: 0.42s; }
+
+/* 表单错误提示：出现时轻微摇晃 */
+@keyframes auth-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
+.auth-shake {
+  animation: auth-shake 0.4s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-reveal,
+  .auth-shake {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
 }

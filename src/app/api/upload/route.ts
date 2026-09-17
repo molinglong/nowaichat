@@ -18,10 +18,19 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 const ALLOWED_TYPE_PREFIXES = ["image/", "text/"]
 const EXTRA_MIME_TYPES = ["application/pdf", "application/json"]
 const TEXT_EXT_FALLBACK = new Set([".txt", ".md", ".markdown", ".csv", ".log", ".json"])
+// 可在浏览器上下文执行的类型一律拒绝(存储型 XSS 防线之一;响应层另有 CSP sandbox 兜底)。
+// MIME 与扩展名双重校验:防改后缀绕过 MIME 检查,也防嗅探。
+const BLOCKED_MIME_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml"])
+const BLOCKED_EXTENSIONS = new Set([
+  ".html", ".htm", ".xhtml", ".xht", ".svg", ".xml", ".xsl", ".xslt",
+  ".js", ".mjs", ".cjs", ".jse", ".hta", ".htc", ".swf",
+])
 
 /** 归类上传文件:图片 / 文本 / PDF;不支持返回 null */
 function resolveKind(mimeType: string, fileName: string): "image" | "text" | "pdf" | null {
   const ext = path.extname(fileName).toLowerCase()
+  // 先拦可执行/标记类类型(黑名单优先于前缀放行)
+  if (BLOCKED_MIME_TYPES.has(mimeType) || BLOCKED_EXTENSIONS.has(ext)) return null
   if (mimeType.startsWith("image/")) return "image"
   if (mimeType === "application/pdf") return "pdf"
   if (

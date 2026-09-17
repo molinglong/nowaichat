@@ -2,6 +2,7 @@
 
 import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, MessageSquarePlus, BookOpen, Settings as SettingsIcon } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
+import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -17,6 +18,9 @@ type TabKey = 'chat' | 'images' | 'explore'
 
 export function TopBar() {
   const inTauri = useIsTauri()
+  // 临时聊天模式(访客密码登录):隐藏设置入口(账户管理写操作已被服务端拦截)
+  const { data: session } = useSession()
+  const isEphemeral = session?.ephemeral === true
   // 从 store 读 currentConversationId:克隆分支时用 —— 用 selector 而非全量订阅(zustand v5 下避免过度渲染)
   const conversationTitle = useChatStore((s) => s.conversationTitle)
   const toggleSidebar = useChatStore((s) => s.toggleSidebar)
@@ -457,15 +461,17 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
-          aria-label="设置"
-          title="设置"
-          style={{ WebkitTapHighlightColor: 'transparent' }}
-        >
-          <SettingsIcon className="w-3.5 h-3.5" />
-        </button>
+        {!isEphemeral && (
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+            aria-label="设置"
+            title="设置"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <SettingsIcon className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </header>
   )

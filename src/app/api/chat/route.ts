@@ -24,12 +24,31 @@ import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
 import { CLARIFY_TOOL_NAME, CLARIFY_TOOL_PROMPT, createClarifyTool } from "@/lib/ai/clarify"
+import {
+  SETTINGS_TOOL_NAME,
+  SETTINGS_TOOL_PROMPT,
+  SETTINGS_DISABLED_PROMPT,
+  buildSettingsSnapshotSection,
+  createSettingsTool,
+} from "@/lib/ai/settings-tool"
+import {
+  MEMORY_TOOL_NAME,
+  MEMORY_TOOL_PROMPT,
+  MEMORY_DISABLED_PROMPT,
+} from "@/lib/ai/memory-tool"
+import { createMemoryTool } from "@/lib/ai/memory-tool.server"
+import {
+  MASK_TOOL_NAME,
+  MASK_TOOL_PROMPT,
+  createMaskGeneratorTool,
+} from "@/lib/ai/mask-tool"
 import { loadLatestSummary, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
 import { sanitizeUploadName, readUploadAsDataUrl } from "@/lib/uploads"
 import { SCANNED_PDF_MIN_CHARS } from "@/lib/file-parser"
 import type { ModelDefinition } from "@/lib/ai/types"
+import { isEphemeralSession } from "@/lib/ephemeral"
 
 export const maxDuration = 120 // seconds – 深度思考耗时较长,Vercel Pro 允许到 300
 
@@ -45,6 +64,7 @@ interface ChatRequestBody {
   maskId?: string // 面具 id(内置面具见 @/lib/ai/builtin-masks);不传时从会话读取
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
+  settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
 }
 
 /** 客户端传入的消息（UIMessage 格式的结构化子集） */
@@ -184,6 +204,9 @@ export async function POST(req: NextRequest) {
     }
 
     const userId = session.user.id
+    // 临时聊天模式(访客密码登录):对话打隔离标记进隔离区,
+    // 记忆写入/设置类工具全部物理级关闭,长期记忆注入由用户开关控制
+    const isEphemeral = isEphemeralSession(session)
 
     // 提前声明:长上下文摘要注入分支及多处 system 提示都需要读写 systemParts,
     // 在函数顶部集中声明一次,避免下游块式作用域里的 TDZ / use-before-define。
@@ -212,12 +235,16 @@ export async function POST(req: NextRequest) {
     let conversationStylePreset: string | null = null
     let conversationStyleOffset = 50
     let conversationMaskId: string | null = null
+    // 归属标记:conversationId 确实属于当前用户且区隔匹配(临时↔正常)才允许复用/读取其数据,
+    // 否则一律按"无会话"处理并新建,杜绝向他人会话写入(跨用户越权)与跨区写入
+    let conversationOwned = false
     if (conversationId) {
       try {
         const conv = await prisma.conversation.findFirst({
-          where: { id: conversationId, userId },
+          where: { id: conversationId, userId, isEphemeral },
           select: { styleOffset: true, stylePreset: true, maskId: true },
         })
+        conversationOwned = !!conv
         conversationStylePreset = conv?.stylePreset ?? null
         conversationStyleOffset = conv?.styleOffset ?? 50
         conversationMaskId = conv?.maskId ?? null
@@ -405,7 +432,8 @@ export async function POST(req: NextRequest) {
 
   // 长上下文压缩: 如果该会话已有"远期摘要",在 messages 头部注入一条 system
   // (即用摘要替代之前被压缩掉的早期原文,避免长对话撞模型 contextWindow)
-  if (conversationId) {
+  // 仅本人会话才读取摘要,避免把他人会话内容注入到本次请求(信息泄露)
+  if (conversationId && conversationOwned) {
     try {
       const latestSummary = await loadLatestSummary(conversationId)
       if (latestSummary?.content) {
@@ -428,13 +456,26 @@ export async function POST(req: NextRequest) {
   // Load the user's long-term memories (if the feature is enabled)
   const memorySettings = await prisma.user.findUnique({
     where: { id: userId },
-    select: { memoryEnabled: true, clarifyEnabled: true },
+    select: {
+      memoryEnabled: true,
+      clarifyEnabled: true,
+      aiSettingsControl: true,
+      imageModel: true,
+      imageSize: true,
+      ephemeralMemoryInjection: true,
+    },
   })
   const memoryEnabled = memorySettings?.memoryEnabled ?? true
   const clarifyEnabled = memorySettings?.clarifyEnabled ?? true
 
+  // 临时模式默认不注入长期记忆(防借号场景被"你还记得我什么"套出隐私),
+  // 用户可在正常模式 设置→账号信息 中打开"临时模式允许读取我的记忆"
+  const injectMemory =
+    memoryEnabled &&
+    (!isEphemeral || (memorySettings?.ephemeralMemoryInjection ?? false))
+
   let memorySystemPrompt = ""
-  if (memoryEnabled) {
+  if (injectMemory) {
     const memories = await prisma.memory.findMany({
       where: { userId },
       orderBy: { updatedAt: "desc" },
@@ -454,6 +495,40 @@ export async function POST(req: NextRequest) {
   const baseModel = model // 保留原始模型引用，用于标题生成等后台任务
   if (memorySystemPrompt) systemParts.push(memorySystemPrompt)
   if (clarifyEnabled) systemParts.push(clarifySystemPrompt)
+
+  // AI 设置控制:总开关开启且非对比模式时,注入快照段+规则段+update_settings 工具;
+  // 关闭时物理级不注入工具(总开关判定在服务端,模型无法影响),改注入降级提示。
+  // 对比模式(groupId)两条泳道各自请求,不注入避免重复消耗与多泳道重复执行。
+  const aiControlEnabled = memorySettings?.aiSettingsControl ?? true
+  if (aiControlEnabled && !isEphemeral && !groupId) {
+    systemParts.push(
+      buildSettingsSnapshotSection(body.settingsSnapshot, {
+        memoryEnabled,
+        clarifyEnabled,
+        imageModel: memorySettings?.imageModel,
+        imageSize: memorySettings?.imageSize,
+      })
+    )
+    systemParts.push(SETTINGS_TOOL_PROMPT)
+  } else if (!groupId && !isEphemeral) {
+    systemParts.push(SETTINGS_DISABLED_PROMPT)
+  }
+
+  // 显式记忆添加:记忆功能开启且非对比模式时注入 add_memory 工具+规则段;
+  // 关闭时物理级不注入,改注入降级提示(避免模型虚构已保存)。
+  // 与 onFinish 的自动记忆提取互补:自动靠模型判断"值得记",本工具响应显式指令。
+  if (memoryEnabled && !isEphemeral && !groupId) {
+    systemParts.push(MEMORY_TOOL_PROMPT)
+  } else if (!groupId) {
+    systemParts.push(MEMORY_DISABLED_PROMPT)
+  }
+
+  // 面具工坊:非对比模式全量注入(无用户开关;草稿需用户在卡片上确认才入库,
+  // 模型仅在用户明确要求生成面具时调用,与 update_settings 的 mask 项互斥分工)。
+  // 临时模式不注入:生成的面具会写入用户面具库(写入类,隔离)
+  if (!isEphemeral && !groupId) {
+    systemParts.push(MASK_TOOL_PROMPT)
+  }
 
   // Style prompt - 用 preset 渲染(新版)
   systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
@@ -497,6 +572,9 @@ export async function POST(req: NextRequest) {
   // 澄清提问工具(无 execute:输出 tool call 后本轮流结束,等用户在前端卡片上回答)。
   // 对比模式不注入:多泳道各自触发澄清卡片会互相踩踏,v1 仅单聊启用。
   const clarifyTool = clarifyEnabled && !groupId ? createClarifyTool() : null
+  const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
+  const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
+  const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   if (searchTool) {
     const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
@@ -574,10 +652,16 @@ export async function POST(req: NextRequest) {
       })
       .catch(() => {})
   }
-  if (!convId) {
+  // 传入的 conversationId 不属于当前用户时拒绝复用(不向他人会话写任何数据),
+  // 改为新建会话承接本次请求;归属查询抛错时同样视为无归属(fail-closed)。
+  if (conversationId && !conversationOwned) {
+    console.warn(`[chat] Conversation ${conversationId} not owned by user ${userId}; creating a new conversation instead`)
+  }
+  if (!convId || !conversationOwned) {
     const conv = await prisma.conversation.create({
       data: {
         userId,
+        isEphemeral,
         title: userContent.slice(0, 40) || "新对话",
         model: modelId,
         stylePreset: effectiveStylePreset,
@@ -704,11 +788,14 @@ export async function POST(req: NextRequest) {
     model,
     messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
-    ...((searchTool || clarifyTool)
+    ...((searchTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
             ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
+            ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
+            ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
+            ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
           },
         }
       : {}),
@@ -909,7 +996,8 @@ export async function POST(req: NextRequest) {
           })
         }
         // Extract long-term memories in the background (never blocks the chat)
-        if (memoryEnabled && content) {
+        // 临时模式永不提取:借号者的聊天不得污染长期记忆
+        if (memoryEnabled && !isEphemeral && content) {
           extractAndSaveMemories({
             userId,
             model: provider(realModelId),

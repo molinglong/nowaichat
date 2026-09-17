@@ -21,6 +21,8 @@ interface FileUploadProps {
   disabled?: boolean
   /** 隐藏已上传附件的预览(由 ChatInput 顶部统一展示),仅保留上传中进度 */
   hideAttachmentsPreview?: boolean
+  /** 视觉变体: 'icon'(默认) 28px 圆形图标按钮; 'pill' 带文字的胶囊按钮(欢迎页输入框下方) */
+  variant?: 'icon' | 'pill'
 }
 
 export function deleteUploadedFile(url: string) {
@@ -88,6 +90,7 @@ export function FileUpload({
   onAttachmentsChange,
   disabled,
   hideAttachmentsPreview = false,
+  variant = 'icon',
 }: FileUploadProps) {
   const [uploading, setUploading] = useState<UploadingFile[]>([])
   const [dragging, setDragging] = useState(false)
@@ -272,15 +275,28 @@ export function FileUpload({
           onClick={() => inputRef.current?.click()}
           disabled={disabled}
           className={cn(
-            'h-7 w-7 flex items-center justify-center rounded-full transition-colors',
-            'text-content-muted hover:text-content-primary',
-            'hover:bg-surface-subtle',
-            'disabled:opacity-50 disabled:cursor-not-allowed'
+            'flex items-center justify-center transition-colors',
+            variant === 'pill'
+              ? cn(
+                  // 欢迎页胶囊态: 与对比胶囊同规格(h-8 全圆角 + 细边框)
+                  'gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium shrink-0',
+                  'border-line bg-surface text-content-secondary',
+                  'hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
+                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                )
+              : cn(
+                  // 图标态: 28px 圆形按钮(输入框内联使用)
+                  'h-7 w-7 rounded-full',
+                  'text-content-muted hover:text-content-primary',
+                  'hover:bg-surface-subtle',
+                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                )
           )}
           aria-label="添加附件"
           title="添加附件 (图片、文本、PDF, 最大10MB)"
         >
           <Paperclip className="w-3.5 h-3.5" />
+          {variant === 'pill' && <span>上传附件</span>}
         </button>
 
         {dragging && (

@@ -14,6 +14,7 @@ import {
 import { maybeCompressContext } from "@/lib/context-compression"
 import type { ModelDefinition } from "@/lib/ai/types"
 import type { LanguageModel } from "ai"
+import { ephemeralScope } from "@/lib/ephemeral"
 
 export const maxDuration = 60 // 手动压缩走一次 LLM 摘要,给 60s 兜底
 
@@ -77,7 +78,7 @@ export async function POST(
   const { id } = params
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true, model: true },
   })
   if (!conversation) {

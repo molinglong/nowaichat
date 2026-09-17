@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { ephemeralScope } from "@/lib/ephemeral"
 
 export async function GET(
   req: NextRequest,
@@ -19,7 +20,7 @@ export async function GET(
 
   // Verify the conversation belongs to the user
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
 
@@ -92,7 +93,7 @@ export async function DELETE(
 
   // Verify the conversation belongs to the user
   const conversation = await prisma.conversation.findFirst({
-    where: { id, userId: session.user.id },
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
     select: { id: true },
   })
 

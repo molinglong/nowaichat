@@ -4,6 +4,14 @@ import { useState } from "react"
 import { signIn } from "next-auth/react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import {
+  ErrorBar,
+  PasswordInput,
+  footerLinkClass,
+  inputClass,
+  labelClass,
+  primaryButtonClass,
+} from "@/components/auth-controls"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -35,79 +43,65 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="w-full max-w-md">
-      <div className="bg-surface rounded-2xl shadow-lg border border-line p-8">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-content-primary">
-            登录
-          </h1>
-          <p className="text-content-secondary mt-2">
-            登录你的账户以继续
-          </p>
+    <div>
+      <h2 className="font-ultra auth-reveal auth-delay-1 text-[30px] tracking-[0.06em] text-content-primary">
+        欢迎回来
+      </h2>
+      <p className="auth-reveal auth-delay-2 mb-7 mt-2 text-[13.5px] text-content-secondary">
+        登录你的账户以继续
+      </p>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        {error && <ErrorBar message={error} />}
+
+        <div className="auth-reveal auth-delay-3">
+          <label htmlFor="email" className={labelClass}>
+            邮箱或用户名
+          </label>
+          <input
+            id="email"
+            type="text"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com 或用户名"
+            className={inputClass}
+          />
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {error && (
-            <div className="bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 text-sm rounded-lg px-4 py-3 border border-red-200 dark:border-red-900/50">
-              {error}
-            </div>
-          )}
+        <div className="auth-reveal auth-delay-4">
+          <label htmlFor="password" className={labelClass}>
+            密码
+          </label>
+          <PasswordInput
+            id="password"
+            placeholder="••••••••"
+            value={password}
+            onChange={setPassword}
+          />
+        </div>
 
-          <div>
-            <label
-              htmlFor="email"
-              className="block text-sm font-medium text-content-secondary mb-1.5"
-            >
-              邮箱或用户名
-            </label>
-            <input
-              id="email"
-              type="text"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com 或用户名"
-              className="w-full px-4 py-2.5 rounded-lg border border-line-strong bg-surface text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong focus:border-transparent transition"
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="password"
-              className="block text-sm font-medium text-content-secondary mb-1.5"
-            >
-              密码
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full px-4 py-2.5 rounded-lg border border-line-strong bg-surface text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong focus:border-transparent transition"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-2.5 rounded-lg bg-accent text-accent-foreground hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed font-medium transition focus:outline-none focus:ring-2 focus:ring-line-strong focus:ring-offset-2 dark:focus:ring-offset-surface"
-          >
-            {loading ? "登录中..." : "登录"}
+        {/* reveal 放在 wrapper 上，避免入场动画 fill 拦截按钮的 hover/active transform */}
+        <div className="auth-reveal auth-delay-5">
+          <button type="submit" disabled={loading} className={primaryButtonClass}>
+            {loading ? (
+              <>
+                <span className="h-[15px] w-[15px] animate-spin rounded-full border-2 border-accent-foreground/35 border-t-accent-foreground" />
+                <span className="ml-2">登录中…</span>
+              </>
+            ) : (
+              "登 录"
+            )}
           </button>
-        </form>
+        </div>
+      </form>
 
-        <p className="text-center text-sm text-content-secondary mt-6">
-          还没有账户？{" "}
-          <Link
-            href="/register"
-            className="text-content-primary hover:underline font-medium"
-          >
-            立即注册
-          </Link>
-        </p>
-      </div>
+      <p className="auth-reveal auth-delay-5 mt-6 text-center text-[13.5px] text-content-secondary">
+        还没有账户？{" "}
+        <Link href="/register" className={footerLinkClass}>
+          立即注册
+        </Link>
+      </p>
     </div>
   )
 }

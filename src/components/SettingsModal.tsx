@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask } from 'lucide-react'
+import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
@@ -11,6 +11,8 @@ import { useChatStore } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel } from '@/lib/ai/style'
 import { toast } from '@/lib/toast'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query/keys'
 import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
 
@@ -36,6 +38,27 @@ interface MemoryInfo {
   source: string
   sourceDetail?: string | null
   updatedAt: string
+}
+
+interface UserProfileInfo {
+  name: string | null
+  email: string | null
+  image: string | null
+  createdAt: string
+}
+
+interface EphemeralConversationInfo {
+  id: string
+  title: string | null
+  updatedAt: string
+  messageCount: number
+}
+
+interface EphemeralPreviewMessage {
+  id: string
+  role: string
+  content: string
+  createdAt: string
 }
 
 interface UsageStats {
@@ -402,7 +425,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy'
+type SectionId = 'overview' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -436,6 +459,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: '账户',
     items: [
+      { id: 'account', label: '账号信息', icon: User },
       { id: 'usage', label: '用量统计', icon: BarChart3 },
     ],
   },
@@ -525,7 +549,24 @@ export function SettingsModal() {
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({})
   const [memories, setMemories] = useState<MemoryInfo[]>([])
   const [memoryEnabled, setMemoryEnabled] = useState(true)
-    const [clarifyEnabled, setClarifyEnabled] = useState(true)
+  const [clarifyEnabled, setClarifyEnabled] = useState(true)
+  const [aiControlEnabled, setAiControlEnabled] = useState(true)
+  // 账号信息页:当前用户资料 + 昵称草稿(打开设置时随大加载一起拉取)
+  const [profile, setProfile] = useState<UserProfileInfo | null>(null)
+  const [nameDraft, setNameDraft] = useState('')
+  const [nameSaving, setNameSaving] = useState(false)
+  // ── 临时聊天(访客模式):访客密码 + 隔离区管理 + 记忆注入开关 ──
+  const [ephemeralSettings, setEphemeralSettings] = useState<{ hasGuestPassword: boolean; ephemeralMemoryInjection: boolean } | null>(null)
+  const [ephemeralItems, setEphemeralItems] = useState<EphemeralConversationInfo[]>([])
+  const [guestPwdEditing, setGuestPwdEditing] = useState(false)
+  const [guestPwdDraft, setGuestPwdDraft] = useState('')
+  const [guestMainPwdDraft, setGuestMainPwdDraft] = useState('')
+  const [guestPwdSaving, setGuestPwdSaving] = useState(false)
+  const [memInjectSaving, setMemInjectSaving] = useState(false)
+  const [ephemeralPreviewId, setEphemeralPreviewId] = useState<string | null>(null)
+  const [ephemeralPreviewMsgs, setEphemeralPreviewMsgs] = useState<EphemeralPreviewMessage[] | null>(null)
+  const [ephemeralPreviewLoading, setEphemeralPreviewLoading] = useState(false)
+  const [ephemeralActingId, setEphemeralActingId] = useState<string | null>(null)
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null)
@@ -623,11 +664,178 @@ export function SettingsModal() {
 
   // 联网搜索：当前选中引擎（来自共享 store，滑块和 ChatPanel 共用）
   const searchEngine = useChatStore((s) => s.searchEngine)
-  const { data: session } = useSession()
+  // update: 修改昵称后刷新 JWT session(侧边栏等处立即生效)
+  const { data: session, update: updateSession } = useSession()
 
   // 退出登录
   const handleSignOut = async () => {
     await signOut({ callbackUrl: '/login' })
+  }
+
+  // 账号信息:保存昵称,并同步刷新 session(JWT 策略下不 update 的话侧边栏仍是旧值)
+  const handleSaveName = async () => {
+    const newName = nameDraft.trim()
+    if (!newName) {
+      toast.error('昵称不能为空')
+      return
+    }
+    if (newName.length > 20) {
+      toast.error('昵称不能超过 20 个字符')
+      return
+    }
+    setNameSaving(true)
+    try {
+      const r = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      })
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}))
+        throw new Error(data?.error || '保存失败，请重试')
+      }
+      const updated: UserProfileInfo = await r.json()
+      setProfile(updated)
+      setNameDraft(updated.name ?? '')
+      await updateSession({ name: newName })
+      toast.success('昵称已更新')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setNameSaving(false)
+    }
+  }
+
+  // 临时聊天:转正后失效正常历史列表缓存(侧边栏立即可见)
+  const queryClient = useQueryClient()
+
+  // 临时聊天:加载访客密码状态/记忆注入开关 + 隔离区对话列表(仅正常模式有数据)
+  const loadEphemeralData = useCallback(async () => {
+    try {
+      const [settings, list] = await Promise.all([
+        fetch('/api/user/ephemeral-settings').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/ephemeral').then((r) => (r.ok ? r.json() : null)),
+      ])
+      if (settings && typeof settings === 'object') {
+        setEphemeralSettings({
+          hasGuestPassword: !!settings.hasGuestPassword,
+          ephemeralMemoryInjection: !!settings.ephemeralMemoryInjection,
+        })
+      }
+      setEphemeralItems(Array.isArray(list?.items) ? list.items : [])
+    } catch { /* silently fail */ }
+  }, [])
+
+  // 临时聊天数据:打开设置时加载
+  useEffect(() => {
+    if (!settingsOpen) return
+    loadEphemeralData()
+  }, [settingsOpen, loadEphemeralData])
+
+  // 访客密码:设置/修改/清除(均需主密码确认)
+  const handleSaveGuestPassword = async (clear: boolean) => {
+    if (!clear && !guestPwdDraft.trim()) {
+      toast.error('请输入访客密码')
+      return
+    }
+    if (!guestMainPwdDraft) {
+      toast.error('请输入主密码确认')
+      return
+    }
+    setGuestPwdSaving(true)
+    try {
+      const r = await fetch('/api/user/ephemeral-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: guestMainPwdDraft,
+          guestPassword: clear ? null : guestPwdDraft.trim(),
+        }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data?.error || '保存失败，请重试')
+      setEphemeralSettings((s) => (s ? { ...s, hasGuestPassword: !!data.hasGuestPassword } : s))
+      setGuestPwdEditing(false)
+      setGuestPwdDraft('')
+      setGuestMainPwdDraft('')
+      toast.success(clear ? '访客密码已清除，临时登录入口已关闭' : '访客密码已保存')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setGuestPwdSaving(false)
+    }
+  }
+
+  // 记忆注入开关:不涉及入口凭据,直接切换
+  const handleToggleMemoryInjection = async (next: boolean) => {
+    setMemInjectSaving(true)
+    try {
+      const r = await fetch('/api/user/ephemeral-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ephemeralMemoryInjection: next }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data?.error || '保存失败，请重试')
+      setEphemeralSettings((s) => (s ? { ...s, ephemeralMemoryInjection: next } : s))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setMemInjectSaving(false)
+    }
+  }
+
+  // 隔离区:查看(展开消息预览,再次点击收起)
+  const handlePreviewEphemeral = async (id: string) => {
+    if (ephemeralPreviewId === id) {
+      setEphemeralPreviewId(null)
+      setEphemeralPreviewMsgs(null)
+      return
+    }
+    setEphemeralPreviewId(id)
+    setEphemeralPreviewMsgs(null)
+    setEphemeralPreviewLoading(true)
+    try {
+      const r = await fetch(`/api/ephemeral?id=${encodeURIComponent(id)}`)
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data?.error || '加载失败')
+      setEphemeralPreviewMsgs(Array.isArray(data?.messages) ? data.messages : [])
+    } catch {
+      toast.error('加载预览失败')
+      setEphemeralPreviewId(null)
+    } finally {
+      setEphemeralPreviewLoading(false)
+    }
+  }
+
+  // 隔离区:转正(回到正常历史) / 删除(级联清理,不可恢复)
+  const handleEphemeralAction = async (action: 'restore' | 'delete', id: string) => {
+    if (action === 'delete' && !window.confirm('确定彻底删除这条临时对话吗？消息与附件将一并清除，不可恢复。')) return
+    setEphemeralActingId(id)
+    try {
+      const r = await fetch('/api/ephemeral', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, id }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data?.error || '操作失败，请重试')
+      setEphemeralItems((items) => items.filter((it) => it.id !== id))
+      if (ephemeralPreviewId === id) {
+        setEphemeralPreviewId(null)
+        setEphemeralPreviewMsgs(null)
+      }
+      if (action === 'restore') {
+        queryClient.invalidateQueries({ queryKey: [...queryKeys.all, 'conversations'] })
+        toast.success('已转正，对话回到正常历史列表')
+      } else {
+        toast.success('临时对话已删除')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '操作失败，请重试')
+    } finally {
+      setEphemeralActingId(null)
+    }
   }
 
   // 联网搜索设置状态
@@ -704,13 +912,21 @@ export function SettingsModal() {
       fetch('/api/image-settings').then((r) => r.json()).catch(() => null),
       fetch('/api/usage').then((r) => r.json()).catch(() => null),
       fetch('/api/settings/clarify').then((r) => r.json()).catch(() => null),
+      fetch('/api/settings/ai-control').then((r) => r.json()).catch(() => null),
+      fetch('/api/user/profile').then((r) => r.json()).catch(() => null),
     ])
-      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData]) => {
+      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData, aiControlData, profileData]) => {
         setProviders(provs)
         setKeys(keyList)
         setMemories(memoryData?.memories ?? [])
         setMemoryEnabled(memoryData?.memoryEnabled ?? true)
         setClarifyEnabled(clarifyData?.clarifyEnabled ?? true)
+        setAiControlEnabled(aiControlData?.aiSettingsControl ?? true)
+        // 账号资料:打开设置时拉取,并同步昵称草稿
+        if (profileData && typeof profileData === 'object') {
+          setProfile(profileData)
+          setNameDraft(profileData.name ?? '')
+        }
         setUsageStats(usageData?.chat && usageData?.image ? usageData : null)
         // Parse custom models: assume cmList is already ModelDefinition format from API
         if (Array.isArray(cmList)) {
@@ -1040,6 +1256,22 @@ export function SettingsModal() {
     }
   }
 
+  async function handleToggleAiControl(enabled: boolean) {
+    setAiControlEnabled(enabled)
+    try {
+      const res = await fetch('/api/settings/ai-control', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success(enabled ? 'AI 设置控制已开启' : 'AI 设置控制已关闭')
+    } catch {
+      setAiControlEnabled(!enabled)
+      toast.error('切换失败，请重试')
+    }
+  }
+
   async function handleAddMemory() {
     const content = memoryDraft.trim()
     if (!content) return
@@ -1063,11 +1295,14 @@ export function SettingsModal() {
   }
 
   async function handleDeleteMemory(id: string) {
+    // 与对话/面具删除保持一致的二次确认,防误触
+    if (!confirm('确定要删除这条记忆吗？删除后不可恢复。')) return
     setMemoryDeleting(id)
     try {
       const res = await fetch(`/api/memories/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error()
       setMemories((prev) => prev.filter((m) => m.id !== id))
+      toast.success('记忆已删除')
     } catch {
       toast.error('删除失败，请重试')
     } finally {
@@ -1535,67 +1770,75 @@ export function SettingsModal() {
           <div aria-hidden className="hidden md:block absolute left-0 top-0 bottom-0 w-2 bg-surface pointer-events-none" />
           <div aria-hidden className="hidden md:block absolute left-0 top-0 w-48 h-2 bg-surface pointer-events-none" />
           <div aria-hidden className="hidden md:block absolute left-0 bottom-0 w-48 h-2 bg-surface pointer-events-none" />
-          {/* Sidebar —— 移动端:顶部水平 Tabs 滚动条;桌面端:左侧固定栏 */}
-          <nav className="md:m-2 md:mr-0 w-full md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 backdrop-blur-3xl md:rounded-l-xl md:rounded-t-xl md:border md:border-line/60 overflow-hidden overflow-x-auto md:overflow-y-auto md:px-2 md:py-2 scroll-contain">
-            <div className="flex md:flex-col gap-0.5 px-2 py-1.5 md:px-0 md:py-0 md:gap-0 md:space-y-2 min-w-max md:min-w-0">
-              {/* 桌面端:卡片顶部 macOS 红色关闭圆点 + 设置标题;标题栏语义手柄(立即拖动,双击复位居中) */}
-              <div
-                data-drag-handle
-                onDoubleClick={recenter}
-                className="hidden md:flex items-center gap-2.5 px-1 pt-0.5 pb-1.5 shrink-0 cursor-grab active:cursor-grabbing select-none touch-none"
+          {/* Sidebar —— 移动端:顶部水平 Tabs 滚动条;桌面端:左侧固定栏(顶部红点标题栏固定,导航项独立滚动) */}
+          <nav className="md:m-2 md:mr-0 w-full md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 backdrop-blur-3xl md:rounded-xl md:border md:border-line/60 overflow-hidden md:flex md:flex-col md:px-2 md:py-2">
+            {/* 桌面端:固定标题栏——红点不随下方导航项滚动;标题栏语义手柄(立即拖动,双击复位居中) */}
+            <div
+              data-drag-handle
+              onDoubleClick={recenter}
+              className="hidden md:flex items-center gap-2.5 px-1 pt-0.5 pb-1.5 shrink-0 cursor-grab active:cursor-grabbing select-none touch-none"
+            >
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="flex w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors group items-center justify-center shrink-0"
+                aria-label="关闭"
               >
-                <button
-                  onClick={() => setSettingsOpen(false)}
-                  className="flex w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors group items-center justify-center shrink-0"
-                  aria-label="关闭"
-                >
-                  <svg className="w-1.5 h-1.5 text-red-950 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-                <h2 className="text-sm font-semibold text-content-primary">设置</h2>
-              </div>
-              {/* 总览(独立项) */}
-              <NavButton
-                item={TOP_ITEM}
-                active={activeSection === TOP_ITEM.id}
-                onClick={() => setActiveSection(TOP_ITEM.id)}
-              />
-              {/* 分组 */}
-              <div className="md:mt-1 flex md:flex-col gap-0.5 md:gap-0 md:space-y-2 md:flex md:items-stretch">
-                {NAV_GROUPS.map((group) => (
-                  <div key={group.title} className="flex md:flex-col items-stretch md:items-stretch gap-0.5 md:space-y-2">
-                    {/* 移动端隐藏分组标题;桌面端显示 */}
-                    <div className="hidden md:block px-1.5 pb-1 pt-1 text-[10.5px] uppercase tracking-[0.04em] font-medium text-content-muted">
-                      {group.title}
+                <svg className="w-1.5 h-1.5 text-red-950 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {/* 导航项滚动区:移动端横向滚动 Tabs;桌面端纵向滚动(红点固定在上方不随动) */}
+            <div className="flex-1 md:min-h-0 overflow-x-auto md:overflow-y-auto md:mt-2 scroll-contain">
+              <div className="flex md:flex-col gap-0.5 px-2 py-1.5 md:px-0 md:py-0 md:gap-0 md:space-y-2 min-w-max md:min-w-0">
+                {/* 总览(独立项) */}
+                <NavButton
+                  item={TOP_ITEM}
+                  active={activeSection === TOP_ITEM.id}
+                  onClick={() => setActiveSection(TOP_ITEM.id)}
+                />
+                {/* 分组 */}
+                <div className="md:mt-1 flex md:flex-col gap-0.5 md:gap-0 md:space-y-2 md:flex md:items-stretch">
+                  {NAV_GROUPS.map((group) => (
+                    <div key={group.title} className="flex md:flex-col items-stretch md:items-stretch gap-0.5 md:space-y-2">
+                      {/* 移动端隐藏分组标题;桌面端显示 */}
+                      <div className="hidden md:block px-1.5 pb-1 pt-1 text-[10.5px] uppercase tracking-[0.04em] font-medium text-content-muted">
+                        {group.title}
+                      </div>
+                      <div className="flex md:flex-col gap-0.5 md:space-y-px">
+                        {group.items.map((item) => (
+                          <NavButton
+                            key={item.id}
+                            item={item}
+                            active={activeSection === item.id}
+                            onClick={() => setActiveSection(item.id)}
+                            badge={
+                              item.id === 'providers' && keys.length > 0 ? keys.length :
+                              item.id === 'memory' && memories.length > 0 ? memories.length :
+                              undefined
+                            }
+                          />
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex md:flex-col gap-0.5 md:space-y-px">
-                      {group.items.map((item) => (
-                        <NavButton
-                          key={item.id}
-                          item={item}
-                          active={activeSection === item.id}
-                          onClick={() => setActiveSection(item.id)}
-                          badge={
-                            item.id === 'providers' && keys.length > 0 ? keys.length :
-                            item.id === 'memory' && memories.length > 0 ? memories.length :
-                            undefined
-                          }
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           </nav>
 
+          {/* 侧栏圆角缺口衬底:玻璃四角圆角让出的方形小缺口会露出透明页背(看似直角),用与缝隙衬底同色的 bg-surface 补齐;每个小方块的圆角朝向玻璃曲线中心,形状恰好等于缺口 */}
+          <div aria-hidden className="hidden md:block absolute left-2 top-2 w-3 h-3 bg-surface rounded-br-xl pointer-events-none" />
+          <div aria-hidden className="hidden md:block absolute left-[172px] top-2 w-3 h-3 bg-surface rounded-bl-xl pointer-events-none" />
+          <div aria-hidden className="hidden md:block absolute left-2 bottom-2 w-3 h-3 bg-surface rounded-tr-xl pointer-events-none" />
+          <div aria-hidden className="hidden md:block absolute left-[172px] bottom-2 w-3 h-3 bg-surface rounded-tl-xl pointer-events-none" />
+
           {/* 右列:内容滚动区 + 底部 ESC 提示(桌面端与侧栏并列,移动端在其下方) */}
           <div className="flex-1 min-h-0 min-w-0 flex flex-col bg-surface">
-          <div data-no-drag className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 py-3 md:pt-5">
-            {/* Section title —— 标题栏语义拖拽手柄:横贯内容宽,按下立即拖动窗口 */}
-            <div data-drag-handle className="cursor-grab active:cursor-grabbing select-none touch-none">
-              <h3 className="text-base font-semibold text-content-primary mb-3 text-left">
+          <div data-no-drag className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pb-3">
+            {/* Section title —— 标题栏语义拖拽手柄:横贯内容宽,按下立即拖动窗口;sticky 钉在滚动区顶部,内容上滑时标题不随滚 */}
+            <div data-drag-handle className="sticky top-0 z-10 -mx-4 px-4 pt-3 pb-3 md:pt-5 bg-surface cursor-grab active:cursor-grabbing select-none touch-none">
+              <h3 className="text-base font-semibold text-content-primary text-left">
                 {sectionTitle}
               </h3>
             </div>
@@ -2974,6 +3217,266 @@ export function SettingsModal() {
                   </div>
                 )}
 
+                {/* 账号信息 */}
+                {activeSection === 'account' && (
+                  <div className="space-y-3 text-left">
+                    {/* 用户卡片 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3.5">
+                      <div className="flex items-center gap-3">
+                        {profile?.image ? (
+                          <img
+                            src={profile.image}
+                            alt={profile.name || '头像'}
+                            className="w-10 h-10 rounded-full shrink-0 object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-sm font-medium text-accent shrink-0">
+                            {(profile?.name || profile?.email || session?.user?.email || '?').charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-content-primary truncate">
+                            {profile?.name || '未设置昵称'}
+                          </p>
+                          <p className="text-[11px] text-content-muted truncate">
+                            {profile?.email || session?.user?.email || '—'}
+                          </p>
+                        </div>
+                      </div>
+                      {profile?.createdAt && (
+                        <div className="mt-3 pt-2.5 border-t border-line/40 flex items-center gap-1.5 text-[11px] text-content-muted">
+                          <CalendarDays className="w-3.5 h-3.5 shrink-0" />
+                          注册于 {new Date(profile.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 修改昵称 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                      <p className="text-xs font-medium text-content-secondary">昵称</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={nameDraft}
+                          onChange={(e) => setNameDraft(e.target.value)}
+                          maxLength={20}
+                          placeholder="给自己起个名字"
+                          className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                        />
+                        <button
+                          onClick={handleSaveName}
+                          disabled={nameSaving || !nameDraft.trim() || nameDraft.trim() === (profile?.name ?? '')}
+                          className={cn(
+                            'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0',
+                            nameSaving || !nameDraft.trim() || nameDraft.trim() === (profile?.name ?? '')
+                              ? 'bg-surface-muted text-content-muted cursor-not-allowed'
+                              : 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                          )}
+                        >
+                          {nameSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                          保存
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-content-muted/70">
+                        昵称显示在侧边栏，也可用于登录。
+                      </p>
+                    </div>
+
+                    {/* 访客密码(临时登录入口) */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 text-left">
+                          <p className="text-xs font-medium text-content-secondary">访客密码</p>
+                          <p className="text-[10px] text-content-muted/70 mt-0.5">
+                            {ephemeralSettings?.hasGuestPassword
+                              ? '已开启：他人可用访客密码进入临时聊天'
+                              : '未开启：设置后可把访客密码借给他人，主密码不受影响'}
+                          </p>
+                        </div>
+                        {!guestPwdEditing && (
+                          <button
+                            onClick={() => {
+                              setGuestPwdEditing(true)
+                              setGuestPwdDraft('')
+                              setGuestMainPwdDraft('')
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors shrink-0"
+                          >
+                            {ephemeralSettings?.hasGuestPassword ? '修改' : '设置'}
+                          </button>
+                        )}
+                      </div>
+                      {guestPwdEditing && (
+                        <div className="space-y-1.5 pt-1">
+                          <input
+                            type="password"
+                            value={guestPwdDraft}
+                            onChange={(e) => setGuestPwdDraft(e.target.value)}
+                            placeholder={ephemeralSettings?.hasGuestPassword ? '输入新访客密码（4-64 位）' : '设置访客密码（4-64 位）'}
+                            autoComplete="new-password"
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          />
+                          <input
+                            type="password"
+                            value={guestMainPwdDraft}
+                            onChange={(e) => setGuestMainPwdDraft(e.target.value)}
+                            placeholder="输入主密码确认"
+                            autoComplete="current-password"
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleSaveGuestPassword(false)}
+                              disabled={guestPwdSaving || !guestPwdDraft.trim() || !guestMainPwdDraft}
+                              className={cn(
+                                'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0',
+                                guestPwdSaving || !guestPwdDraft.trim() || !guestMainPwdDraft
+                                  ? 'bg-surface-muted text-content-muted cursor-not-allowed'
+                                  : 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                              )}
+                            >
+                              {guestPwdSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                              保存
+                            </button>
+                            {ephemeralSettings?.hasGuestPassword && (
+                              <button
+                                onClick={() => handleSaveGuestPassword(true)}
+                                disabled={guestPwdSaving || !guestMainPwdDraft}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500/90 hover:text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                清除访客密码
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setGuestPwdEditing(false)}
+                              className="px-3 py-1.5 rounded-lg text-xs text-content-muted hover:text-content-secondary transition-colors shrink-0"
+                            >
+                              取消
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-content-muted/70">
+                            访客密码须与主密码不同；临时模式无法查看或修改账户设置。连续输错将触发一分钟限速。
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 临时聊天(隔离区管理) */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                      <p className="text-xs font-medium text-content-secondary text-left">临时聊天</p>
+                      <p className="text-[10px] text-content-muted/70 text-left">
+                        通过访客密码产生的对话保存在这里，正常历史列表不可见。
+                      </p>
+                      {ephemeralItems.length === 0 ? (
+                        <p className="text-[11px] text-content-muted py-1 text-left">暂无临时对话。</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {ephemeralItems.map((it) => (
+                            <div key={it.id} className="rounded-lg border border-line/40 bg-surface px-2.5 py-2 space-y-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <div className="min-w-0 flex-1 text-left">
+                                  <p className="text-[11px] font-medium text-content-primary truncate">
+                                    {it.title || '无标题对话'}
+                                  </p>
+                                  <p className="text-[10px] text-content-muted">
+                                    {it.messageCount} 条消息 · {new Date(it.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => handlePreviewEphemeral(it.id)}
+                                  disabled={ephemeralActingId === it.id}
+                                  className={cn(
+                                    'p-1.5 rounded-md transition-colors shrink-0',
+                                    ephemeralPreviewId === it.id
+                                      ? 'text-accent bg-accent/10'
+                                      : 'text-content-muted hover:text-content-secondary hover:bg-surface-subtle'
+                                  )}
+                                  title={ephemeralPreviewId === it.id ? '收起预览' : '查看消息'}
+                                >
+                                  {ephemeralPreviewId === it.id ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => handleEphemeralAction('restore', it.id)}
+                                  disabled={ephemeralActingId === it.id}
+                                  className="p-1.5 rounded-md text-content-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-50 shrink-0"
+                                  title="转正：回到正常历史列表"
+                                >
+                                  {ephemeralActingId === it.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => handleEphemeralAction('delete', it.id)}
+                                  disabled={ephemeralActingId === it.id}
+                                  className="p-1.5 rounded-md text-content-muted hover:text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50 shrink-0"
+                                  title="彻底删除"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              {ephemeralPreviewId === it.id && (
+                                <div className="pt-1.5 border-t border-line/40 space-y-1.5 max-h-44 overflow-y-auto">
+                                  {ephemeralPreviewLoading ? (
+                                    <div className="flex items-center gap-1.5 py-1 text-[10px] text-content-muted">
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      加载中…
+                                    </div>
+                                  ) : ephemeralPreviewMsgs && ephemeralPreviewMsgs.length > 0 ? (
+                                    ephemeralPreviewMsgs.map((m) => (
+                                      <div key={m.id} className="text-left">
+                                        <span
+                                          className={cn(
+                                            'text-[10px] font-medium',
+                                            m.role === 'user' ? 'text-content-secondary' : 'text-accent/80'
+                                          )}
+                                        >
+                                          {m.role === 'user' ? '访客' : 'AI'}
+                                        </span>
+                                        <p className="text-[10px] leading-relaxed text-content-muted whitespace-pre-wrap break-all line-clamp-3">
+                                          {m.content}
+                                        </p>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="text-[10px] text-content-muted py-1 text-left">暂无消息。</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 临时模式记忆读取开关 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 text-left">
+                          <p className="text-xs font-medium text-content-secondary">临时模式允许读取我的记忆</p>
+                          <p className="text-[10px] text-content-muted/70 mt-0.5">
+                            默认关闭：临时聊天不读取你的记忆，也不会写入新记忆。
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleToggleMemoryInjection(!(ephemeralSettings?.ephemeralMemoryInjection ?? false))}
+                          disabled={memInjectSaving}
+                          className={cn(
+                            'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                            (ephemeralSettings?.ephemeralMemoryInjection ?? false) ? 'bg-accent' : 'bg-surface-subtle'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                              (ephemeralSettings?.ephemeralMemoryInjection ?? false) && 'translate-x-4'
+                            )}
+                          />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* 用量统计 */}
                 {activeSection === 'usage' && (
                   <div className="space-y-3">
@@ -3759,6 +4262,34 @@ export function SettingsModal() {
                         </button>
                       ))}
                     </div>
+
+                    {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项 */}
+                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">AI 设置控制</p>
+                        <p className="text-[11px] text-content-muted">开启后可在对话中让 AI 直接修改主题、侧边栏等设置</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={aiControlEnabled}
+                        onClick={() => handleToggleAiControl(!aiControlEnabled)}
+                        className={cn(
+                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                          aiControlEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                            aiControlEnabled && 'translate-x-4'
+                          )}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
+                      此开关仅能在此手动更改，AI 无法操作。关闭后 AI 会如实告知功能已关闭，不会尝试修改设置。
+                    </p>
                   </div>
                 )}
 
