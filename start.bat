@@ -73,18 +73,18 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-REM ---------- 4. 检查 3000 端口占用 ----------
+REM ---------- 4. 检查 3456 端口占用 ----------
 echo.
-echo [4/5] 检查 3000 端口...
+echo [4/5] 检查 3456 端口...
 
-REM 用 netstat 查找占用 3000 端口的 PID
+REM 用 netstat 查找占用 3456 端口的 PID(dev 脚本: next dev -p 3456)
 set "PORT_PID="
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3000" ^| findstr "LISTENING"') do (
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3456" ^| findstr "LISTENING"') do (
     set "PORT_PID=%%p"
 )
 
 if defined PORT_PID (
-    echo        端口 3000 被进程 %PORT_PID% 占用
+    echo        端口 3456 被进程 %PORT_PID% 占用
 
     REM 检查是不是 node.exe
     tasklist /FI "PID eq %PORT_PID%" /FO CSV /NH > "%TEMP%\tasklist_check.txt" 2>&1
@@ -103,28 +103,28 @@ if defined PORT_PID (
         )
     ) else (
         echo        但不是 node 进程，可能被其他程序占用！
-        echo        请手动检查是哪个程序占用 3000 端口
-        echo        提示: netstat -ano ^| findstr :3000
+        echo        请手动检查是哪个程序占用 3456 端口
+        echo        提示: netstat -ano ^| findstr :3456
         pause
         exit /b 1
     )
 ) else (
-    echo        端口 3000 空闲
+    echo        端口 3456 空闲
 )
 
 REM ---------- 5. 启动 Next.js ----------
 echo.
-echo [5/5] 启动 Next.js(清缓存 + 8GB 堆)...
-echo        访问地址: http://localhost:3000
+echo [5/5] 启动 Next.js(8GB 堆,保留编译缓存)...
+echo        访问地址: http://localhost:3456
 echo        按 Ctrl+C 停止服务
 echo.
 echo --------------------------------------------------------
 echo.
 
-REM 清掉 .next / .cache,避免上次的脏构建引发 webpack OOM
-if exist .next rmdir /s /q .next
-if exist .cache rmdir /s /q .cache
-if exist node_modules\.cache rmdir /s /q node_modules\.cache
+REM 保留 .next(含 webpack 持久化编译缓存):保留时重启后热编译 1-3s,
+REM 清空则每次启动全量冷编译 10-30s(实测 /api/providers 编译 12s、请求 7s)。
+REM 注:缓存损坏 webpack 会自动重建,不会 OOM;内存压力由下方 8GB 堆参数兜底。
+REM 若启动异常或内存暴涨,先运行 clean-cache.bat 彻底清理后再启动。
 
 REM V8 堆提到 8GB,避免 next dev + 大量模块编译时内存溢出
 set NODE_OPTIONS=--max-old-space-size=8192
