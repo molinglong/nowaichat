@@ -82,3 +82,19 @@ list-users.cjs
 apply-mask-mig.cjs
 # 根目录测试/验证截图（不进仓库）
 /*.png
+# 本地临时调试脚本与产物（2026-09-18 卫生清理追加）
+tmp-*
+diag-*.ps1
+test-write.js
+playwright-report/
+test-results/
+# Playwright 会话状态(含 session cookie,严禁入库)
+.auth/
+# 本地工具脚本与设计预览稿(规范:临时脚本不入库)
+kill-port-*.ps1
+restart-dev-*.ps1
+scripts/kill-zombie-*.ps1
+test-ephemeral-full.ps1
+login-redesign-preview.html
+# 设计预览稿(不入库)
+public/preview-*.html
