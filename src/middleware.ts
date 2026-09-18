@@ -7,9 +7,8 @@ import { getToken } from "next-auth/jwt"
 // 模型调用/上传/生图/面具使用可用;一切账户管理写操作一律 403。
 // 统一在 middleware 拦截,避免逐 handler 散布守卫造成遗漏。
 const EPHEMERAL_DENIED_PREFIXES = [
-  "/api/keys", // 模型 API Key 管理(含掩码明文头尾,防泄露)
+  "/api/keys", // 模型 API Key 管理(含掩码明文头尾，防泄露；provider 名单用 /api/providers/keys-status 替代)
   "/api/search/keys", // 联网搜索 Key 管理
-  "/api/custom-models", // 自定义模型 CRUD/测试
   "/api/settings", // AI 设置控制/澄清开关
   "/api/image-settings", // 生图设置
   "/api/provider-models", // 模型可见性管理/测试
@@ -19,11 +18,12 @@ const EPHEMERAL_DENIED_PREFIXES = [
   "/api/study", // 学习功能(错题本/复习状态写入)
 ]
 
-/** 方法敏感类:GET 等读操作放行,写操作拦截 */
+/** 方法敏感类：GET 等读操作放行，写操作拦截 */
 const EPHEMERAL_METHOD_GUARDED: Array<[string, string[]]> = [
   ["/api/user/profile", ["PATCH", "POST", "PUT", "DELETE"]], // 改昵称等
-  ["/api/masks", ["POST", "PATCH", "PUT", "DELETE"]], // 面具库写操作;GET 放行(选择器要用)
-  ["/api/images", ["DELETE", "PATCH", "PUT"]], // 图库删除;GET/POST(生图)放行
+  ["/api/masks", ["POST", "PATCH", "PUT", "DELETE"]], // 面具库写操作；GET 放行(选择器要用)
+  ["/api/custom-models", ["POST", "PATCH", "PUT", "DELETE"]], // 自定义模型写操作；GET 放行(模型选择器要用，返回不含密钥明文)
+  ["/api/images", ["DELETE", "PATCH", "PUT"]], // 图库删除；GET/POST(生图)放行
 ]
 
 function isDeniedForEphemeral(pathname: string, method: string): boolean {
@@ -53,6 +53,18 @@ export async function middleware(req: NextRequest) {
     )
   }
 
+  // 临时聊天模式页面级封锁:只允许聊天界面，
+  // 手动输 URL 访问生图/探索/错题本页一律重定向回 /chat(API 已由上面的 403 拦截)
+  if (isLoggedIn && token.ephemeral === true) {
+    const pageDenied =
+      pathname === "/images" || pathname.startsWith("/images/") ||
+      pathname === "/explore" || pathname.startsWith("/explore/") ||
+      pathname === "/study" || pathname.startsWith("/study/")
+    if (pageDenied) {
+      return NextResponse.redirect(new URL("/chat", req.url))
+    }
+  }
+
   // Public routes — always allow
   const isPublic =
     pathname.startsWith("/login") ||
@@ -79,5 +91,8 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // 排除静态资源:uploads(字体/图片)不走 middleware,避免每个资源请求都执行 JWT 解码;
+  // uploads 的安全头(X-Content-Type-Options/CSP sandbox)由 next.config.mjs headers() 独立提供,
+  // 文件名 nanoid(12) 不可枚举,未登录直访风险可控
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads).*)"],
 }

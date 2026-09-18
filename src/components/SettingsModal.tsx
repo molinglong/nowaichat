@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
@@ -425,7 +425,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -475,6 +475,20 @@ const NAV_GROUPS: NavGroup[] = [
 
 // 「总览」独立放在分组之上(欢迎页语义)
 const TOP_ITEM: NavItem = { id: 'overview', label: '总览', icon: LayoutDashboard }
+
+// 临时聊天模式的精简设置:会话管理 + 无账户语义的应用板块(通用/关于)。
+// 「帮助」板块的 API Key 申请指引对访客无意义,临时导航不含此项;
+// 其余板块(API Key/记忆/账号等)依赖被服务端 403 拦截的账户管理接口
+const EPHEMERAL_SESSION_ITEM: NavItem = { id: 'session', label: '会话管理', icon: Timer }
+// 总览作为独立项(两种模式共用,内容按 isEphemeral 分叉);
+// 会话管理归入「会话」分组;帮助板块的 API Key 指引对访客无意义,临时导航不含
+const EPHEMERAL_NAV_GROUPS: NavGroup[] = [
+  { title: '会话', items: [EPHEMERAL_SESSION_ITEM] },
+  ...NAV_GROUPS
+    .filter((g) => g.title === '应用')
+    .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'help') })),
+]
+const EPHEMERAL_SAFE_SECTIONS = new Set<SectionId>(['overview', 'session', 'general', 'about'])
 
 // 单个侧边栏项:macOS 风格左侧 3px accent 指示条 + 极淡背景
 function NavButton({
@@ -538,6 +552,10 @@ export function SettingsModal() {
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const conversationStylePreset = useChatStore((s) => s.conversationStylePreset)
   const setConversationStylePreset = useChatStore((s) => s.setConversationStylePreset)
+  const bumpConversationVersion = useChatStore((s) => s.bumpConversationVersion)
+  // 聊天行为:思考完毕自动折叠思考框(纯本地偏好,localStorage 持久化,不入 AI 可控注册表)
+  const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
+  const setAutoCollapseReasoning = useChatStore((s) => s.setAutoCollapseReasoning)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [keys, setKeys] = useState<KeyInfo[]>([])
   const [loading, setLoading] = useState(true)
@@ -666,6 +684,73 @@ export function SettingsModal() {
   const searchEngine = useChatStore((s) => s.searchEngine)
   // update: 修改昵称后刷新 JWT session(侧边栏等处立即生效)
   const { data: session, update: updateSession } = useSession()
+  // 临时聊天模式:精简版设置(会话管理/通用/关于,不加载任何账户数据)
+  const isEphemeral = session?.ephemeral === true
+
+  // ── 临时会话管理:剩余时间 / 清空本会话对话 / 退出登录 ──
+  const [sessionRemaining, setSessionRemaining] = useState<string | null>(null)
+  useEffect(() => {
+    if (!settingsOpen || !isEphemeral) return
+    const calc = () => {
+      // 用 JWT 内的真实过期时间(sessionEndsAt);session.expires 是全局 maxAge(30 天),不反映 12h 压缩有效期
+      const expires = typeof session?.sessionEndsAt === 'number' ? session.sessionEndsAt : NaN
+      if (!Number.isFinite(expires)) { setSessionRemaining(null); return }
+      const mins = Math.floor((expires - Date.now()) / 60000)
+      if (mins <= 0) { setSessionRemaining('即将过期'); return }
+      setSessionRemaining(mins >= 60 ? `${Math.floor(mins / 60)} 小时 ${mins % 60} 分` : `${mins} 分钟`)
+    }
+    calc()
+    const t = setInterval(calc, 30_000)
+    return () => clearInterval(t)
+  }, [settingsOpen, isEphemeral, session?.sessionEndsAt])
+
+  const [ephCount, setEphCount] = useState<number | null>(null)
+  const [clearing, setClearing] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+  // 会话管理/总览板块可见时拉取隔离区对话数量(临时模式允许读自己的隔离区列表)
+  useEffect(() => {
+    if (!settingsOpen || !isEphemeral) return
+    if (activeSection !== 'session' && activeSection !== 'overview') return
+    let alive = true
+    fetch('/api/conversations?scope=ephemeral')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => {
+        if (!alive) return
+        const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : []
+        setEphCount(items.length)
+      })
+      .catch(() => { if (alive) setEphCount(0) })
+    return () => { alive = false }
+  }, [settingsOpen, isEphemeral, activeSection])
+
+  const handleClearEphemeral = async () => {
+    if (clearing) return
+    setClearing(true)
+    try {
+      const list = await fetch('/api/conversations?scope=ephemeral')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+      const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : []
+      const results = await Promise.allSettled(
+        items.map((c: { id: string }) => fetch(`/api/conversations/${c.id}`, { method: 'DELETE' }))
+      )
+      const failed = results.filter((r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)).length
+      if (failed > 0) {
+        toast.error(`${items.length - failed} 条已删除，${failed} 条删除失败，请重试`, { title: '清空临时对话' })
+      } else {
+        toast.success(`已清空 ${items.length} 条临时对话`, { title: '清空临时对话' })
+      }
+      setEphCount(0)
+      setConfirmClear(false)
+      bumpConversationVersion()
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  const handleEphemeralSignOut = () => {
+    signOut({ callbackUrl: '/login/ephemeral' })
+  }
 
   // 退出登录
   const handleSignOut = async () => {
@@ -726,11 +811,11 @@ export function SettingsModal() {
     } catch { /* silently fail */ }
   }, [])
 
-  // 临时聊天数据:打开设置时加载
+  // 临时聊天数据:打开设置时加载(临时模式为访客身份,跳过)
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!settingsOpen || isEphemeral) return
     loadEphemeralData()
-  }, [settingsOpen, loadEphemeralData])
+  }, [settingsOpen, loadEphemeralData, isEphemeral])
 
   // 访客密码:设置/修改/清除(均需主密码确认)
   const handleSaveGuestPassword = async (clear: boolean) => {
@@ -864,20 +949,28 @@ export function SettingsModal() {
   // 外部指定的目标 section（如面具菜单的「管理面具」入口）:打开时切换并消费
   useEffect(() => {
     if (!settingsOpen || !settingsSection) return
-    setActiveSection(settingsSection as SectionId)
+    const target = settingsSection as SectionId
+    // 临时模式:受限板块(账户管理类)一律回落到「总览」
+    setActiveSection(isEphemeral && !EPHEMERAL_SAFE_SECTIONS.has(target) ? 'overview' : target)
     setSettingsSection(null)
-  }, [settingsOpen, settingsSection, setSettingsSection])
+  }, [settingsOpen, settingsSection, setSettingsSection, isEphemeral])
 
-  // 加载联网搜索 Key 列表
+  // 临时模式:打开设置时把默认/残留的受限 section 归位到「总览」
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!settingsOpen || !isEphemeral) return
+    setActiveSection((s) => (EPHEMERAL_SAFE_SECTIONS.has(s) ? s : 'overview'))
+  }, [settingsOpen, isEphemeral])
+
+  // 加载联网搜索 Key 列表(临时模式为访客身份,跳过)
+  useEffect(() => {
+    if (!settingsOpen || isEphemeral) return
     fetch('/api/search/keys')
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setSearchKeys(data)
       })
       .catch(() => {/* silently fail */})
-  }, [settingsOpen])
+  }, [settingsOpen, isEphemeral])
 
   // 生图设置自动保存：模型 + 尺寸变化时 PATCH
   const imageSettingsLoadedRef = useRef(false)
@@ -900,9 +993,16 @@ export function SettingsModal() {
   const [unconfiguredCollapsed, setUnconfiguredCollapsed] = useState(true)
   const [showOnlyConfigured, setShowOnlyConfigured] = useState(false)
 
-  // Fetch data when modal opens
+  // Fetch data when modal opens(临时模式为访客身份:精简设置不需要账户数据,整批跳过)
   useEffect(() => {
     if (!settingsOpen) return
+    if (isEphemeral) {
+      // 临时模式:跳过数据加载,但要清除 loading 状态(避免弹窗一直显示加载中)
+      setLoading(false)
+      setInitialLoadComplete(true)
+      setTimeout(() => { imageSettingsLoadedRef.current = true }, 0)
+      return
+    }
     setLoading(true)
     Promise.all([
       fetch('/api/providers').then((r) => r.json()),
@@ -949,7 +1049,7 @@ export function SettingsModal() {
         // 加载完成后再开启自动保存 effect（避免初次 setImage* 触发 PATCH）
         setTimeout(() => { imageSettingsLoadedRef.current = true }, 0)
       })
-  }, [settingsOpen])
+  }, [settingsOpen, isEphemeral])
 
   // Close on Escape
   useEffect(() => {
@@ -1528,7 +1628,10 @@ export function SettingsModal() {
 
   const sectionTitle = [
     TOP_ITEM,
-    ...NAV_GROUPS.flatMap((g) => g.items),
+    ...(isEphemeral ? [EPHEMERAL_SESSION_ITEM] : []),
+    ...(isEphemeral
+      ? EPHEMERAL_NAV_GROUPS.flatMap((g) => g.items)
+      : NAV_GROUPS.flatMap((g) => g.items)),
   ].find((i) => i.id === activeSection)?.label
 
   const renderProviderCard = (provider: ProviderInfo) => {
@@ -1791,7 +1894,7 @@ export function SettingsModal() {
             {/* 导航项滚动区:移动端横向滚动 Tabs;桌面端纵向滚动(红点固定在上方不随动) */}
             <div className="flex-1 md:min-h-0 overflow-x-auto md:overflow-y-auto md:mt-2 scroll-contain">
               <div className="flex md:flex-col gap-0.5 px-2 py-1.5 md:px-0 md:py-0 md:gap-0 md:space-y-2 min-w-max md:min-w-0">
-                {/* 总览(独立项) */}
+                {/* 总览(独立项):两种模式均显示,内容按 isEphemeral 分叉 */}
                 <NavButton
                   item={TOP_ITEM}
                   active={activeSection === TOP_ITEM.id}
@@ -1799,7 +1902,7 @@ export function SettingsModal() {
                 />
                 {/* 分组 */}
                 <div className="md:mt-1 flex md:flex-col gap-0.5 md:gap-0 md:space-y-2 md:flex md:items-stretch">
-                  {NAV_GROUPS.map((group) => (
+                  {(isEphemeral ? EPHEMERAL_NAV_GROUPS : NAV_GROUPS).map((group) => (
                     <div key={group.title} className="flex md:flex-col items-stretch md:items-stretch gap-0.5 md:space-y-2">
                       {/* 移动端隐藏分组标题;桌面端显示 */}
                       <div className="hidden md:block px-1.5 pb-1 pt-1 text-[10.5px] uppercase tracking-[0.04em] font-medium text-content-muted">
@@ -1827,11 +1930,29 @@ export function SettingsModal() {
             </div>
           </nav>
 
-          {/* 侧栏圆角缺口衬底:玻璃四角圆角让出的方形小缺口会露出透明页背(看似直角),用与缝隙衬底同色的 bg-surface 补齐;每个小方块的圆角朝向玻璃曲线中心,形状恰好等于缺口 */}
-          <div aria-hidden className="hidden md:block absolute left-2 top-2 w-3 h-3 bg-surface rounded-br-xl pointer-events-none" />
-          <div aria-hidden className="hidden md:block absolute left-[172px] top-2 w-3 h-3 bg-surface rounded-bl-xl pointer-events-none" />
-          <div aria-hidden className="hidden md:block absolute left-2 bottom-2 w-3 h-3 bg-surface rounded-tr-xl pointer-events-none" />
-          <div aria-hidden className="hidden md:block absolute left-[172px] bottom-2 w-3 h-3 bg-surface rounded-tl-xl pointer-events-none" />
+          {/* 侧栏圆角缺口衬底:玻璃四角圆角让出的方形小缺口会露出透明页背(看似直角)。
+              每块 12x12 衬底用径向渐变实现「反向(凹)圆角」:朝玻璃曲线中心的 12px 半圆保持透明(玻璃照常透出页背),
+              以外填 bg-surface(与缝隙色条同色),恰好补齐缺口且不与玻璃重叠 */}
+          <div
+            aria-hidden
+            className="hidden md:block absolute left-2 top-2 w-3 h-3 pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(circle at 100% 100%, transparent 11.5px, rgb(var(--surface)) 12px)' }}
+          />
+          <div
+            aria-hidden
+            className="hidden md:block absolute left-[172px] top-2 w-3 h-3 pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(circle at 0% 100%, transparent 11.5px, rgb(var(--surface)) 12px)' }}
+          />
+          <div
+            aria-hidden
+            className="hidden md:block absolute left-2 bottom-2 w-3 h-3 pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(circle at 100% 0%, transparent 11.5px, rgb(var(--surface)) 12px)' }}
+          />
+          <div
+            aria-hidden
+            className="hidden md:block absolute left-[172px] bottom-2 w-3 h-3 pointer-events-none"
+            style={{ backgroundImage: 'radial-gradient(circle at 0% 0%, transparent 11.5px, rgb(var(--surface)) 12px)' }}
+          />
 
           {/* 右列:内容滚动区 + 底部 ESC 提示(桌面端与侧栏并列,移动端在其下方) */}
           <div className="flex-1 min-h-0 min-w-0 flex flex-col bg-surface">
@@ -1843,8 +1964,52 @@ export function SettingsModal() {
               </h3>
             </div>
 
+            {/* 总览(临时模式):欢迎说明 + 会话状态速览 */}
+            {activeSection === 'overview' && isEphemeral && (
+              <div className="space-y-3">
+                {/* 欢迎卡 */}
+                <div className="rounded-xl border border-accent/20 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5 text-left">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-5 h-5 text-accent" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-content-primary">临时聊天模式</p>
+                      <p className="text-[11px] text-content-muted mt-0.5 leading-relaxed">
+                        对话与账号主人的正常历史完全隔离，不写入记忆系统；会话有效期 12 小时，结束后记录保留在隔离区，仅账号主人可查看或清除。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 快捷状态卡(点击进入会话管理) */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setActiveSection('session')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors"
+                  >
+                    <Timer className="w-4 h-4 text-accent mb-1.5" />
+                    <p className="text-xs font-medium text-content-primary truncate">
+                      {sessionRemaining ?? '—'}
+                    </p>
+                    <p className="text-[10px] text-content-muted mt-0.5">会话剩余时间</p>
+                  </button>
+                  <button
+                    onClick={() => setActiveSection('session')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors"
+                  >
+                    <MessageSquare className="w-4 h-4 text-accent mb-1.5" />
+                    <p className="text-xs font-medium text-content-primary truncate">
+                      {ephCount ?? '—'} 条
+                    </p>
+                    <p className="text-[10px] text-content-muted mt-0.5">本次临时对话</p>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* 总览 - 始终显示，不需要等 loading */}
-            {activeSection === 'overview' && (
+            {activeSection === 'overview' && !isEphemeral && (
               <div className="space-y-3">
                 {/* 欢迎卡片 - 首次启动时显示，用户关闭后记住状态 */}
                 {!welcomeDismissed && (
@@ -4263,7 +4428,33 @@ export function SettingsModal() {
                       ))}
                     </div>
 
-                    {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项 */}
+                    {/* 聊天行为:思考完毕自动折叠(纯本地偏好) */}
+                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">思考完毕自动折叠</p>
+                        <p className="text-[11px] text-content-muted">深度思考输出完后自动收起思考框,点击标题可重新展开</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={autoCollapseReasoning}
+                        onClick={() => setAutoCollapseReasoning(!autoCollapseReasoning)}
+                        className={cn(
+                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                          autoCollapseReasoning ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                            autoCollapseReasoning && 'translate-x-4'
+                          )}
+                        />
+                      </button>
+                    </div>
+
+                    {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项;临时模式不渲染(依赖被 403 的 /api/settings/ai-control) */}
+                    {!isEphemeral && (
                     <div className="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
                       <div className="text-left min-w-0">
                         <p className="text-xs text-content-secondary">AI 设置控制</p>
@@ -4287,9 +4478,80 @@ export function SettingsModal() {
                         />
                       </button>
                     </div>
+                    )}
                     <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
                       此开关仅能在此手动更改，AI 无法操作。关闭后 AI 会如实告知功能已关闭，不会尝试修改设置。
                     </p>
+                  </div>
+                )}
+
+                {/* 临时会话管理(仅临时模式可达):状态卡 + 清空 + 退出 */}
+                {activeSection === 'session' && isEphemeral && (
+                  <div className="space-y-2.5">
+                    {/* 会话状态卡 */}
+                    <div className="rounded-xl border border-accent/20 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5 text-left">
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
+                          <Timer className="w-5 h-5 text-accent" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-content-primary">临时会话进行中</p>
+                          <p className="text-[11px] text-content-muted mt-0.5">
+                            {sessionRemaining ? `${sessionRemaining}后自动失效` : '剩余时间计算中…'}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-content-muted/80 mt-2.5 leading-relaxed">
+                        本会话产生的对话与账号主人的正常历史完全隔离，不会写入记忆系统。会话结束后记录保留在隔离区，仅账号主人可查看或清除。
+                      </p>
+                    </div>
+
+                    {/* 清空本次临时对话(两段式确认,防误触) */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 flex items-center justify-between gap-3">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">清空本次临时对话</p>
+                        <p className="text-[11px] text-content-muted">
+                          立即删除本会话产生的全部{ephCount == null ? '' : ` ${ephCount} `}条对话（不可恢复）
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirmClear) {
+                            handleClearEphemeral()
+                          } else {
+                            setConfirmClear(true)
+                            setTimeout(() => setConfirmClear(false), 3000)
+                          }
+                        }}
+                        disabled={clearing || !ephCount}
+                        className={cn(
+                          'shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors',
+                          confirmClear
+                            ? 'bg-red-500 text-white'
+                            : 'text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30',
+                          (clearing || !ephCount) && 'opacity-50 cursor-not-allowed'
+                        )}
+                      >
+                        {clearing ? '清空中…' : confirmClear ? '确认清空' : '清空'}
+                      </button>
+                    </div>
+
+                    {/* 结束临时会话 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 flex items-center justify-between gap-3">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">结束临时会话</p>
+                        <p className="text-[11px] text-content-muted">退出登录并返回临时聊天登录页</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleEphemeralSignOut}
+                        className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        退出
+                      </button>
+                    </div>
                   </div>
                 )}
 

@@ -24,48 +24,13 @@ export function MessageList({
   onEditMessage,
   onClarifySubmit,
 }: MessageListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const shouldAutoScrollRef = useRef(true)
-
   // 键盘导航:收集每个消息的 ref,按 id 索引
   const messageRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const focusedMessageId = useChatStore((s) => s.focusedMessageId)
   const setFocusedMessageId = useChatStore((s) => s.setFocusedMessageId)
 
-  useEffect(() => {
-    const messageList = containerRef.current
-    const scrollContainer = messageList?.parentElement
-    if (!scrollContainer) return
-
-    const updateAutoScroll = () => {
-      const distanceFromBottom =
-        scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight
-      shouldAutoScrollRef.current = distanceFromBottom <= 24
-    }
-
-    updateAutoScroll()
-    scrollContainer.addEventListener('scroll', updateAutoScroll, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', updateAutoScroll)
-  }, [messages.length])
-
-  // Follow new content only while the user is already at the bottom.
-  useEffect(() => {
-    if (shouldAutoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [messages])
-
-  // Keep the latest streamed content visible without taking over manual scrolling.
-  useEffect(() => {
-    if (!isStreaming) return
-    const interval = setInterval(() => {
-      if (shouldAutoScrollRef.current) {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-      }
-    }, 300)
-    return () => clearInterval(interval)
-  }, [isStreaming])
+  // 跟随滚动的判定与执行已上移到 ChatPanel(那里持有滚动容器 DOM):
+  // 用户向上滚动即脱离跟随、可自由回看历史,滚回底部或点"回到底部"按钮恢复跟随。
 
   // 收敛 lastAssistantIndex —— messages 数组变化时只有这一处需要重算
   const lastAssistantIndex = useMemo(() => {
@@ -176,7 +141,7 @@ export function MessageList({
   }, [messages])
 
   return (
-    <div ref={containerRef} className={cn('w-full min-h-full overflow-x-hidden', className)}>
+    <div className={cn('w-full min-h-full overflow-x-hidden', className)}>
       <div className="max-w-2xl mx-auto overflow-x-hidden">
         {messages.map((message, index) => {
           const isFocused = message.id === focusedMessageId
@@ -204,7 +169,6 @@ export function MessageList({
             />
           )
         })}
-        <div ref={bottomRef} />
       </div>
     </div>
   )

@@ -8,6 +8,8 @@ import type { DefaultSession } from "next-auth"
 declare module "next-auth" {
   interface Session {
     ephemeral?: boolean
+    /** 临时会话的真实过期时间(毫秒时间戳);仅 ephemeral 会话有值,供剩余时长展示 */
+    sessionEndsAt?: number
     user?: DefaultSession["user"] & { id?: string }
   }
 
@@ -19,6 +21,8 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     ephemeral?: boolean
+    /** 临时会话过期时间(毫秒),透出到 Session.sessionEndsAt */
+    sessionEndsAt?: number
     id?: string
   }
 }

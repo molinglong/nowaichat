@@ -101,6 +101,11 @@ export default function LoginPage() {
         <Link href="/register" className={footerLinkClass}>
           立即注册
         </Link>
+        <span className="mx-2 text-line">·</span>
+        公共电脑？{" "}
+        <Link href="/login/ephemeral" className={footerLinkClass}>
+          临时聊天
+        </Link>
       </p>
     </div>
   )

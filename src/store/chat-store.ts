@@ -65,6 +65,9 @@ interface ChatState {
   /** 当前联网搜索引擎：qianfan | tavily，默认 qianfan */
   searchEngine: 'qianfan' | 'tavily'
   setSearchEngine: (engine: 'qianfan' | 'tavily') => void
+  /** 思考框自动折叠:思考完毕后自动收起思考框(可在设置中关闭)。持久化到 localStorage */
+  autoCollapseReasoning: boolean
+  setAutoCollapseReasoning: (v: boolean) => void
   /** 输入草稿:按会话 key 索引. SSR 期间为空,客户端 hydrate 后从 localStorage 灌入 */
   drafts: DraftsMap
   /** 设置某个会话的草稿(null 表示删除) */
@@ -161,6 +164,12 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   setSearchEngine: (engine) => {
     localStorage.setItem('chat:searchEngine', engine)
     set({ searchEngine: engine })
+  },
+  // 默认开:与无设置时的展示行为一致,避免 SSR/客户端 hydration 不一致
+  autoCollapseReasoning: typeof window !== 'undefined' ? localStorage.getItem('chat:autoCollapseReasoning') !== 'false' : true,
+  setAutoCollapseReasoning: (v) => {
+    localStorage.setItem('chat:autoCollapseReasoning', String(v))
+    set({ autoCollapseReasoning: v })
   },
   drafts: typeof window !== 'undefined' ? loadDrafts() : {},
   setDraft: (convKey, entry) =>

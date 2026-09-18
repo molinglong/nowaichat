@@ -178,7 +178,11 @@ export function Sidebar() {
    */
   const startNewChat = useStartNewChat()
   const handleNewConversation = useSingleFlight(() => {
-    setSidebarOpen(false)
+    // 移动端(<md)侧边栏是 fixed 浮层,点完「新对话」要收回才能看到聊天区;
+    // 桌面端侧边栏静态占位,保持用户当前的开合状态,不折叠。
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches) {
+      setSidebarOpen(false)
+    }
     startNewChat()
   }, [setSidebarOpen, startNewChat])
 

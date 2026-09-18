@@ -396,3 +396,11 @@ body {
     animation-iteration-count: 1;
   }
 }
+
+/* ── iziToast 主题覆盖（配合 src/lib/toast.ts）──────────────
+   toast 的视觉外壳（毛玻璃/外阴影/SVG 图标）由 toast.ts 在 onOpening 注入；
+   这里只关掉 iziToast 自带的 ::after 阴影层 —— 它带 inset 内阴影，
+   叠在毛玻璃底上会产生“3D 内凹”感，与极简平面语言相悖。 */
+.iziToast.iziToast--aichatt::after {
+  display: none;
+}

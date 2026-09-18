@@ -135,6 +135,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.ephemeral = (user as { ephemeral?: boolean }).ephemeral === true
         if (token.ephemeral) {
           token.exp = Math.floor(Date.now() / 1000) + EPHEMERAL_SESSION_MAX_AGE_S
+          // 透出给前端的真实过期时间(毫秒):session.expires 是全局 maxAge(30 天),
+          // 不反映临时会话的 12h 压缩有效期
+          token.sessionEndsAt = token.exp * 1000
         }
       }
       // 客户端 useSession().update({ name }) 时把新昵称写入 token,
@@ -151,6 +154,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.id = userId
       // 透出临时模式标记:服务端 API 隔离与前端 UI 均以此为准
       session.ephemeral = token.ephemeral === true
+      if (typeof token.sessionEndsAt === 'number') {
+        session.sessionEndsAt = token.sessionEndsAt
+      }
       return session
     },
   },

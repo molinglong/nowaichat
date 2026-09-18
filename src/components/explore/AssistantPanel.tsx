@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Search, Brain, Loader2, Globe } from 'lucide-react'
+import { Search, Brain, Loader2, Globe, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SearchResults, type SearchStructured } from './SearchResults'
 

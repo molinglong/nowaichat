@@ -5,7 +5,7 @@ import { useChat } from '@ai-sdk/react'
 import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus, Play } from 'lucide-react'
+import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus, Play } from 'lucide-react'
 import Link from 'next/link'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
@@ -504,6 +504,61 @@ export function ChatPanel({
   useEffect(() => {
     isLoadingRef.current = isLoading
   }, [isLoading])
+
+  // 流式跟随滚动: 默认贴底跟随最新内容;用户向上滚动立即脱离跟随(生成中也能自由回看历史),
+  // 滚回底部或点"回到底部"按钮恢复跟随。
+  // 脱离判定用滚动方向而非旧的"距底<=24"阈值:旧的纯阈值判定会被 scrollIntoView(smooth)
+  // 动画自身的 scroll 事件反复重置回 true,加上流式期间每个 chunk 都发起一次新动画,
+  // 用户上滑的每一小步都被拉回,表现为"生成时往上滑不动"。程序化滚动恒向下,不会误触发方向检测。
+  const shouldAutoScrollRef = useRef(true)
+  const prevScrollTopRef = useRef(0)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+
+  // 滚动容器监听:向上滚=脱离跟随;滚回底部(距底<=40px)=恢复跟随
+  useEffect(() => {
+    const el = messagesScrollEl
+    if (!el) return
+    prevScrollTopRef.current = el.scrollTop
+    const update = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      const scrolledUp = el.scrollTop < prevScrollTopRef.current - 2
+      prevScrollTopRef.current = el.scrollTop
+      if (scrolledUp && shouldAutoScrollRef.current) {
+        shouldAutoScrollRef.current = false
+        setShowScrollToBottom(true)
+      } else if (!shouldAutoScrollRef.current && distanceFromBottom <= 40) {
+        shouldAutoScrollRef.current = true
+        setShowScrollToBottom(false)
+      }
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    return () => el.removeEventListener('scroll', update)
+  }, [messagesScrollEl])
+
+  // 生成期间贴底跟随:scrollTop 直接赋值(瞬时)而非 smooth 动画,
+  // 避免动画与用户滚动形成拉锯;仅在跟随状态下执行
+  useEffect(() => {
+    if (!isLoading) return
+    shouldAutoScrollRef.current = true
+    setShowScrollToBottom(false)
+    const el = messagesScrollEl
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    const timer = setInterval(() => {
+      if (shouldAutoScrollRef.current) el.scrollTop = el.scrollHeight
+    }, 150)
+    return () => clearInterval(timer)
+  }, [isLoading, messagesScrollEl])
+
+  // 回到底部按钮:恢复跟随并瞬时滚到最新内容
+  const handleScrollToBottom = useCallback(() => {
+    const el = messagesScrollEl
+    if (!el) return
+    shouldAutoScrollRef.current = true
+    setShowScrollToBottom(false)
+    el.scrollTop = el.scrollHeight
+  }, [messagesScrollEl])
 
   const pendingSendQueueRef = useRef<{ text: string; attachments?: Attachment[] }[]>([])
   const [pendingSendQueue, setPendingSendQueue] = useState<{ count: number; preview: string } | null>(null)
@@ -1014,21 +1069,36 @@ export function ChatPanel({
         />
       ) : (
         <>
-          <div
-            ref={setMessagesScrollEl}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scroll-contain"
-          >
-            <div className="flex min-h-full">
-              <MessageList
-                messages={messages}
-                isStreaming={isLoading}
-                className="min-h-full flex-1"
-                onRegenerate={handleRegenerate}
-                onEditMessage={handleEditMessage}
-                onClarifySubmit={handleSend}
-              />
-              <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
+          {/* relative wrapper: "回到底部"按钮需要相对消息区(而非滚动内容)定位,
+              absolute 元素放进滚动容器内会随内容滚走 */}
+          <div className="relative flex-1 min-h-0">
+            <div
+              ref={setMessagesScrollEl}
+              className="h-full overflow-y-auto overflow-x-hidden scroll-contain"
+            >
+              <div className="flex min-h-full">
+                <MessageList
+                  messages={messages}
+                  isStreaming={isLoading}
+                  className="min-h-full flex-1"
+                  onRegenerate={handleRegenerate}
+                  onEditMessage={handleEditMessage}
+                  onClarifySubmit={handleSend}
+                />
+                <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
+              </div>
             </div>
+            {showScrollToBottom && (
+              <button
+                type="button"
+                onClick={handleScrollToBottom}
+                aria-label="回到底部"
+                title="回到底部"
+                className="absolute bottom-4 right-5 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-line bg-surface text-content-secondary shadow-sm transition-colors hover:bg-surface-subtle hover:text-content-primary"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            )}
           </div>
 
           {/* 输入区上方的辅助行: 左侧排队发送横幅(F),右侧上下文用量仪表(B)。

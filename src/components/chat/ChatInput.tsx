@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import { MaskPickerMenu } from './MaskPickerMenu'
+import { ActivityHeatmap } from './ActivityHeatmap'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useChatStore } from '@/store/chat-store'
@@ -91,6 +92,8 @@ export function ChatInput({
   // 仅 welcome 变体使用:面具胶囊菜单开合
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // welcome 多行态 textarea 专用 ref(单行/standard 共用 textareaRef,不与多行混用)
+  const multilineRef = useRef<HTMLTextAreaElement>(null)
 
   // 引用回复状态
   const replyingTo = useChatStore((s) => s.replyingTo)
@@ -112,6 +115,8 @@ export function ChatInput({
     const draft = draftsMap[draftKey]
     if (draft && draft.text) {
       setInput(draft.text)
+      // 多行草稿直接展开多行态,避免长文挤在 56px 单行里滚动
+      if (draft.text.includes('\n') || draft.text.length > 60) setIsMultiline(true)
       setDraftRestored(true)
       // 3 秒后自动隐藏"已恢复"提示
       const t = setTimeout(() => setDraftRestored(false), 3000)
@@ -157,12 +162,17 @@ export function ChatInput({
     adjustHeight()
   }, [input, adjustHeight, variant])
 
-  // Reset height when loading finishes
+  // 发送结束/单行↔多行切换后归还焦点(多行切换是两个不同节点,光标手动挪到结尾避免输入中断)
   useEffect(() => {
-    if (!isLoading) {
-      textareaRef.current?.focus()
+    if (isLoading) return
+    const ta = variant === 'welcome' && isMultiline ? multilineRef.current : textareaRef.current
+    if (!ta) return
+    ta.focus()
+    if (variant === 'welcome') {
+      const len = ta.value.length
+      ta.setSelectionRange(len, len)
     }
-  }, [isLoading])
+  }, [isLoading, variant, isMultiline])
 
   // welcome 变体:文本和附件都清空时回到单行态
   useEffect(() => {
@@ -183,6 +193,15 @@ export function ChatInput({
       setIsMultiline(true)
     }
   }, [attachments.length, isMultiline, variant])
+
+  // welcome 多行态: 输入/草稿恢复/粘贴时同步 textarea 高度(上限 ≈6 行,超出内部滚动)
+  useEffect(() => {
+    if (variant !== 'welcome' || !isMultiline) return
+    const ta = multilineRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, 164)}px`
+  }, [input, isMultiline, variant])
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value)
@@ -396,12 +415,7 @@ export function ChatInput({
                   lineHeight: '56px',
                   verticalAlign: 'middle',
                 }}
-                onInput={(e) => {
-                  const target = e.currentTarget
-                  target.style.height = 'auto'
-                  target.style.height = `${target.scrollHeight}px`
-                  setIsMultiline(target.scrollHeight > 58)
-                }}
+                onInput={(e) => setIsMultiline(e.currentTarget.scrollHeight > 58)}
               />
               <button
                 onClick={handleSendDebounced}
@@ -428,7 +442,7 @@ export function ChatInput({
                 // 用 max-height + opacity 过渡代替 display:none 硬切,
                 // 让单行 ↔ 多行切换时有平滑动画
                 display: 'flex',
-                maxHeight: isMultiline ? '500px' : '0px',
+                maxHeight: isMultiline ? '320px' : '0px',
                 opacity: isMultiline ? 1 : 0,
                 overflow: 'hidden',
                 transition: 'max-height 200ms ease-out, opacity 150ms ease-out',
@@ -481,7 +495,7 @@ export function ChatInput({
               )}
               <textarea
                 key="welcome-multi"
-                ref={textareaRef}
+                ref={multilineRef}
                 value={input}
                 onChange={handleChange}
                 onKeyDown={handleKeyDown}
@@ -489,16 +503,11 @@ export function ChatInput({
                 rows={1}
                 disabled={isLoading}
                 className="block w-full bg-transparent text-sm text-content-primary placeholder:text-content-muted
-                  resize-none focus:outline-none border-0 m-0 px-4 pt-4 pb-16 disabled:opacity-50"
+                  resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-2 overflow-y-auto disabled:opacity-50"
                 style={{
-                  minHeight: '36px',
+                  minHeight: '44px',
+                  maxHeight: '164px',
                   lineHeight: '24px',
-                }}
-                onInput={(e) => {
-                  const target = e.currentTarget
-                  target.style.height = 'auto'
-                  target.style.height = `${target.scrollHeight}px`
-                  setIsMultiline(target.scrollHeight > 38)
                 }}
               />
               <div className="shrink-0 flex items-center justify-end px-3 py-2.5">
@@ -561,6 +570,44 @@ export function ChatInput({
                 对比
               </button>
             )}
+            {/* 深度思考开关胶囊: 与模型选择器菜单里的开关同源(deepThink 状态) */}
+            <button
+              onClick={() => onDeepThinkChange(!deepThink)}
+              disabled={isLoading}
+              className={cn(
+                'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
+                deepThink
+                  ? 'bg-accent text-accent-foreground border-transparent'
+                  : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
+                isLoading && 'opacity-50 cursor-not-allowed'
+              )}
+              title="深度思考(推理增强)"
+              aria-label="深度思考"
+              aria-pressed={deepThink}
+            >
+              <Brain className="w-3.5 h-3.5" />
+              深度思考
+            </button>
+            {/* 智能搜索开关胶囊: 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
+            {webSearchAvailable && onWebSearchChange && (
+              <button
+                onClick={() => onWebSearchChange(!webSearch)}
+                disabled={isLoading}
+                className={cn(
+                  'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
+                  webSearch
+                    ? 'bg-accent text-accent-foreground border-transparent'
+                    : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
+                  isLoading && 'opacity-50 cursor-not-allowed'
+                )}
+                title="智能搜索(联网检索)"
+                aria-label="智能搜索"
+                aria-pressed={webSearch}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                智能搜索
+              </button>
+            )}
             {/* 面具胶囊: 未使用时显示入口,使用中反色显示 avatar + 名称 */}
             {onMaskChange && (
               <div className="relative">
@@ -609,6 +656,10 @@ export function ChatInput({
                 )}
               </div>
             )}
+          </div>
+          {/* 活跃度热力图：胶囊行下方居中 */}
+          <div className="mt-2">
+            <ActivityHeatmap />
           </div>
         </div>
       </div>

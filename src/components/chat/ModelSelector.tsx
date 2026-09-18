@@ -69,7 +69,9 @@ export function ModelSelector({
 
   useEffect(() => {
     if (!isOpen) return
-    fetch('/api/keys')
+    // 已配置 Key 的 provider 名单。用 /api/providers/keys-status 而非 /api/keys:
+    // 后者返回掩码密钥，临时聊天模式下被 middleware 整体 403，会导致模型列表全空
+    fetch('/api/providers/keys-status')
       .then((r) => r.json())
       .then((keys: { provider: string }[]) => {
         setConfiguredProviders(new Set(keys.map((k) => k.provider)))
@@ -326,7 +328,6 @@ export function ModelSelector({
                   !webSearchAvailable && 'opacity-60 cursor-not-allowed hover:bg-transparent hover:border-line/60',
                   'active:scale-[0.97]'
                 )}
-                title={webSearchAvailable ? '联网搜索' : '请先在设置中配置搜索 API Key'}
                 title={webSearchAvailable ? '智能搜索' : '请先在设置中配置搜索 API Key'}
               >
                 <Globe className="w-3.5 h-3.5 shrink-0" />

@@ -334,7 +334,9 @@ function MessageBubbleInner({
   const [copied, setCopied] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
-  const [showReasoning, setShowReasoning] = useState(true)
+  // 思考框展开状态: null=未手动干预(自动行为接管),true/false=用户点过折叠按钮后的选择
+  const [userShowReasoning, setUserShowReasoning] = useState<boolean | null>(null)
+  const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
   const [copyMenuOpen, setCopyMenuOpen] = useState(false)
   const copyMenuRef = useRef<HTMLDivElement>(null)
   // 复制菜单的智能定位状态。打开菜单后,根据可用空间自动 choose 上/下/左/右
@@ -441,8 +443,20 @@ function MessageBubbleInner({
   }, [studySaveState, isUser, isAssistant, bodyText, prevUserContent, message.id])
   const displayReasoningText = bodySplit ? bodySplit.head : reasoningText
 
-  // 思考过程默认展开(深度思考用户需要一眼看到推理),用户可手动折叠
-  // (不再自动折叠:流式结束后保持展开,避免两边对比时误以为没有思考)
+  // 思考框自动折叠(设置中可关):思考进行中默认展开,"思考完毕"自动收起让视野回到正文。
+  // 完毕判定用 isThinkingActive(生成中且正文未出现)而非 reasoning part 的 state:
+  // 流式恢复轮询构造的快照 parts 恒为 state:'done',用 state 判定会把还在思考的消息误折叠。
+  // 用户手动点过按钮后以用户选择为准,新一轮思考开始时重置回自动接管。
+  const isThinkingActive = Boolean(isAssistant && isStreaming && !bodyText.trim())
+  // 思考中→展开;完毕(正文开始/生成结束/历史消息)→折叠成标题条;开关关闭则始终展开(旧行为)
+  const showReasoning = userShowReasoning ?? (autoCollapseReasoning ? isThinkingActive : true)
+  const prevThinkingActiveRef = useRef(false)
+  useEffect(() => {
+    if (isThinkingActive && !prevThinkingActiveRef.current) {
+      setUserShowReasoning(null)
+    }
+    prevThinkingActiveRef.current = isThinkingActive
+  }, [isThinkingActive])
 
   // Typewriter effect: only for live streaming, not for historical messages
   // Skip typewriter when message is already complete (streaming ended) to avoid
@@ -754,14 +768,22 @@ function MessageBubbleInner({
         {isAssistant ? (
           <>
             {/* Reasoning / deep thinking section */}
+            {/* 折叠态用胶囊条而非纯文字:之前折叠后只剩 11px 灰字,与隐藏无异,
+                用户想回看生成过程时找不到入口;胶囊+“点击回看”文案明确可点 */}
             {displayReasoningText && (
               <div className="mb-2">
                 <button
-                  onClick={() => setShowReasoning(!showReasoning)}
-                  className="flex items-center gap-1.5 text-[11px] font-medium text-content-secondary hover:opacity-80 transition-opacity"
+                  onClick={() => setUserShowReasoning(!showReasoning)}
+                  title={showReasoning ? '点击折叠' : '点击展开思考过程'}
+                  className={cn(
+                    'transition-colors',
+                    showReasoning
+                      ? 'flex items-center gap-1.5 text-[11px] font-medium text-content-secondary hover:opacity-80'
+                      : 'inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-subtle/70 px-2.5 py-1 text-[11px] text-content-secondary hover:text-content-primary hover:bg-surface-subtle'
+                  )}
                 >
                   <Brain className="w-3 h-3" />
-                  <span>思考过程</span>
+                  <span>{showReasoning ? '思考过程' : '已深度思考 · 点击回看'}</span>
                   <ChevronDown className={cn('w-3 h-3 transition-transform', showReasoning ? '' : '-rotate-90')} />
                 </button>
                 {showReasoning && (

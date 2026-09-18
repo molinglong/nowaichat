@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, MessageSquarePlus, BookOpen, Settings as SettingsIcon } from 'lucide-react'
+import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, ChevronDown, MessageSquarePlus, BookOpen, Settings as SettingsIcon } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
@@ -31,6 +31,9 @@ export function TopBar() {
   // 极窄屏(<381px)折叠菜单的开关
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  // 中部胶囊「更多」二级菜单(收纳观点探索/错题本,保持胶囊组精简)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const pathname = usePathname()
   const queryClient = useQueryClient()
@@ -43,9 +46,10 @@ export function TopBar() {
     setTitle(conversationTitle)
   }, [conversationTitle])
 
-  // 路由变化时自动关闭折叠菜单 + 清掉 pendingTab
+  // 路由变化时自动关闭折叠菜单 / 更多菜单 + 清掉 pendingTab
   useEffect(() => {
     setMenuOpen(false)
+    setMoreOpen(false)
     setPendingTab(null)
   }, [pathname])
 
@@ -138,17 +142,20 @@ export function TopBar() {
     prefetchTabData('chat')
   }, [prefetchTabData])
 
-  // 点击外部关闭折叠菜单
+  // 点击外部关闭折叠菜单 / 更多二级菜单
   useEffect(() => {
-    if (!menuOpen) return
+    if (!menuOpen && !moreOpen) return
     function onPointerDown(e: PointerEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false)
+      }
+      if (moreOpen && moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        setMoreOpen(false)
       }
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [menuOpen])
+  }, [menuOpen, moreOpen])
 
   // 在 /images 页面显示固定的页面标题
   const isImagesPage = pathname?.startsWith('/images')
@@ -161,6 +168,8 @@ export function TopBar() {
   const isStudyActive = Boolean(isStudyPage)
   const isImagesActive = Boolean(isImagesPage) || pendingTab === 'images'
   const isExploreActive = Boolean(isExplorePage) || pendingTab === 'explore'
+  // 「更多」按钮的激活态:探索/错题本任一页面即点亮(收纳入口的父级高亮)
+  const isMoreActive = isExploreActive || isStudyActive
 
   const navigateTo = useCallback((tab: TabKey, go: () => void) => {
     setPendingTab(tab)
@@ -248,7 +257,7 @@ export function TopBar() {
 
   return (
     <header
-      className="relative flex items-center h-9 px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl"
+      className="relative z-40 flex items-center h-9 px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl"
       {...(inTauri
         ? {
             'data-tauri-drag-region': '',
@@ -296,6 +305,9 @@ export function TopBar() {
             <Plus className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">聊天</span>
           </button>
+          {/* 临时聊天模式：只保留聊天，隐藏生图/探索/错题本入口 */}
+          {!isEphemeral && (
+          <>
           <button
             onClick={handleGoImages}
             onMouseEnter={() => prefetchTabData('images')}
@@ -313,40 +325,72 @@ export function TopBar() {
             <Sparkles className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">生图</span>
           </button>
-          <button
-            onClick={handleGoExplore}
-            onMouseEnter={() => prefetchTabData('explore')}
-            onFocus={() => prefetchTabData('explore')}
-            className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
-              isExploreActive
-                ? 'bg-surface text-content-primary shadow-sm'
-                : 'text-content-secondary hover:text-content-primary active:scale-95'
+          {/* 更多:二级菜单收纳低频入口(探索/错题本),胶囊组只留高频的聊天/生图 */}
+          <div ref={moreRef} className="relative">
+            <button
+              onClick={() => setMoreOpen((o) => !o)}
+              onMouseEnter={() => prefetchTabData('explore')}
+              onFocus={() => prefetchTabData('explore')}
+              className={cn(
+                'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
+                isMoreActive || moreOpen
+                  ? 'bg-surface text-content-primary shadow-sm'
+                  : 'text-content-secondary hover:text-content-primary active:scale-95'
+              )}
+              aria-label="更多功能"
+              aria-expanded={moreOpen}
+              aria-haspopup="menu"
+              title="更多功能"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <ChevronDown className={cn('w-3.5 h-3.5 transition-transform duration-150', moreOpen && 'rotate-180')} />
+              <span className="hidden sm:inline">更多</span>
+            </button>
+            {moreOpen && (
+              <div
+                role="menu"
+                className="absolute top-full right-0 mt-1.5 w-44 bg-surface border border-line/60 rounded-lg shadow-xl z-50 py-1 overflow-hidden"
+              >
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    handleGoExplore()
+                  }}
+                  onMouseEnter={() => prefetchTabData('explore')}
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                    isExploreActive
+                      ? 'bg-surface-subtle text-content-primary'
+                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
+                  )}
+                >
+                  <Scale className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1">观点探索</span>
+                  {isExploreActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    if (!isStudyActive) router.push('/study')
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                    isStudyActive
+                      ? 'bg-surface-subtle text-content-primary'
+                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
+                  )}
+                >
+                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1">错题本</span>
+                  {isStudyActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
+                </button>
+              </div>
             )}
-            aria-label="观点探索"
-            title="观点探索"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <Scale className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">探索</span>
-          </button>
-          <button
-            onClick={() => {
-              if (!isStudyActive) router.push('/study')
-            }}
-            className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
-              isStudyActive
-                ? 'bg-surface text-content-primary shadow-sm'
-                : 'text-content-secondary hover:text-content-primary active:scale-95'
-            )}
-            aria-label="错题本"
-            title="错题本"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">错题本</span>
-          </button>
+          </div>
+          </>
+          )}
         </div>
 
         {/* <381px: 极窄屏折叠菜单 */}
@@ -354,10 +398,13 @@ export function TopBar() {
           <button
             onClick={() => setMenuOpen(o => !o)}
             onMouseEnter={() => {
-              // 折叠态下预先把三个 tab 的数据都热起来,展开后任意点击都秒开
+              // 折叠态下预先把 tab 数据热起来，展开后任意点击都秒开
+              // 临时模式只热聊天（生图/探索入口已隐藏，预热无意义）
               prefetchTabData('chat')
-              prefetchTabData('images')
-              prefetchTabData('explore')
+              if (!isEphemeral) {
+                prefetchTabData('images')
+                prefetchTabData('explore')
+              }
             }}
             className="flex items-center justify-center w-7 h-7 rounded-lg bg-surface-subtle/70 hover:bg-surface-subtle text-content-secondary hover:text-content-primary transition-all active:scale-95 touch-manipulation"
             aria-label="切换页面"
@@ -388,6 +435,9 @@ export function TopBar() {
                 <span className="flex-1">聊天</span>
                 {isChatActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
               </button>
+              {/* 临时聊天模式：折叠菜单同样只保留聊天 */}
+              {!isEphemeral && (
+              <>
               <button
                 role="menuitem"
                 onClick={handleGoImages}
@@ -435,6 +485,8 @@ export function TopBar() {
                 <span className="flex-1">错题本</span>
                 {isStudyActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
               </button>
+              </>
+              )}
             </div>
           )}
         </div>
@@ -461,17 +513,17 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
-        {!isEphemeral && (
-          <button
-            onClick={() => setSettingsOpen(true)}
+        {/* 设置入口:正常模式打开完整设置;临时模式打开精简版(仅通用/帮助/关于,
+            账户管理类板块及其数据加载已在 SettingsModal 内按 isEphemeral 跳过) */}
+        <button
+          onClick={() => setSettingsOpen(true)}
             className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
             aria-label="设置"
             title="设置"
             style={{ WebkitTapHighlightColor: 'transparent' }}
           >
             <SettingsIcon className="w-3.5 h-3.5" />
-          </button>
-        )}
+        </button>
       </div>
     </header>
   )
