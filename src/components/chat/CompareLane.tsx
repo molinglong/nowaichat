@@ -327,6 +327,7 @@ export function CompareLane({
         <MessageList
           messages={messages}
           isStreaming={isLoading}
+          isPending={status === 'submitted'}
           className="min-h-full"
           onRegenerate={handleRegenerate}
         />

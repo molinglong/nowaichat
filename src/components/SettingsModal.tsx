@@ -6,6 +6,7 @@ import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
 import { useWindowDrag } from '@/hooks/useWindowDrag'
+import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
 import { useChatStore } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
@@ -13,7 +14,7 @@ import { getStylePresetLabel } from '@/lib/ai/style'
 import { toast } from '@/lib/toast'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
-import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory-parser'
+import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory/import-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
@@ -565,6 +566,8 @@ export function SettingsModal() {
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [testResult, setTestResult] = useState<Record<string, 'success' | 'error'>>({})
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({})
+  // 服务商卡片折叠:未记录时回落默认值(已配置收起/未配置展开),无需 effect 同步
+  const [providerCardsExpanded, { set: setCardExpanded }] = useToggleMap({})
   const [memories, setMemories] = useState<MemoryInfo[]>([])
   const [memoryEnabled, setMemoryEnabled] = useState(true)
   const [clarifyEnabled, setClarifyEnabled] = useState(true)
@@ -1192,6 +1195,7 @@ export function SettingsModal() {
         throw new Error(data.error || '保存失败')
       }
       setDraftKeys((d) => ({ ...d, [providerId]: '' }))
+      setCardExpanded(providerId, false) // 配置完成,自动收起卡片
       toast.success(`${providerId} API Key 已保存`)
       const newKeys = await fetch('/api/keys').then((r) => r.json())
       setKeys(newKeys)
@@ -1642,6 +1646,8 @@ export function SettingsModal() {
     const result = testResult[provider.id]
     const isPasswordVisible = showPassword[provider.id] ?? false
     const url = PROVIDER_URL[provider.id]
+    // 折叠默认值:已配置收起(留摘要行),未配置展开(引导配置)
+    const isExpanded = providerCardsExpanded[provider.id] ?? !existingKey
 
     return (
       <div
@@ -1654,8 +1660,13 @@ export function SettingsModal() {
             : 'bg-surface/60 hover:bg-surface-subtle/40'
         )}
       >
-        {/* Header: dot + name + status badge + date */}
-        <div className="flex items-center gap-2.5">
+        {/* Header: dot + name + status badge + date + 折叠箭头。点头部折叠,折叠后仅留摘要行 */}
+        <button
+          type="button"
+          onClick={() => setCardExpanded(provider.id, !isExpanded)}
+          className="flex items-center gap-2.5 w-full text-left"
+          aria-expanded={isExpanded}
+        >
           <div className={cn(
             'w-2 h-2 rounded-full shrink-0 transition-colors',
             existingKey ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-content-muted/40'
@@ -1677,8 +1688,16 @@ export function SettingsModal() {
               {new Date(existingKey.updatedAt).toLocaleDateString('zh-CN').replace(/年/g, '-').replace(/月/g, '-')}
             </span>
           )}
-        </div>
+          {isExpanded ? (
+            <ChevronUp className="w-3.5 h-3.5 text-content-muted shrink-0" />
+          ) : (
+            <ChevronDown className="w-3.5 h-3.5 text-content-muted shrink-0" />
+          )}
+        </button>
 
+        {/* 折叠区:Key 摘要/输入行/引导/测试结果/获取 Key 链接 */}
+        {isExpanded && (
+        <>
         {/* Saved key display + actions */}
         {existingKey && (
           <div className="flex items-center gap-2">
@@ -1817,6 +1836,8 @@ export function SettingsModal() {
             <ExternalLink className="w-3 h-3" />
             {existingKey ? '前往官网管理' : '获取 API Key →'}
           </a>
+        )}
+        </>
         )}
       </div>
     )

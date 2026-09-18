@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useMemo } from 'react'
+import { Bot } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { MessageBubble } from './MessageBubble'
 import { useChatStore } from '@/store/chat-store'
@@ -14,11 +15,14 @@ interface MessageListProps {
   onEditMessage?: (messageId: string, newText: string) => void
   /** 澄清问答:提交回答文本(通常接 ChatPanel 的 handleSend,复用排队/发送全链路) */
   onClarifySubmit?: (answersText: string) => void
+  /** 请求已提交但模型首 token 未到(useChat submitted 阶段)——列表末尾渲染"生成中"占位 */
+  isPending?: boolean
 }
 
 export function MessageList({
   messages,
   isStreaming,
+  isPending,
   className,
   onRegenerate,
   onEditMessage,
@@ -169,6 +173,21 @@ export function MessageList({
             />
           )
         })}
+
+        {/* submitted 占位: useChat 在模型首个 chunk 前不创建 assistant 消息,
+            长 prompt 预填充期列表会静默数秒无任何反馈;最后一条是 user 即在等首字 */}
+        {isPending && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+          <div className="flex gap-2.5 px-4 py-2" aria-hidden>
+            <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5">
+              <Bot className="w-3 h-3" />
+            </div>
+            <div className="flex items-center gap-1.5 py-1">
+              <span className="w-2 h-2 bg-content-muted rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 bg-content-muted rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 bg-content-muted rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

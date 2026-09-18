@@ -183,11 +183,10 @@ export function useTypewriter(fullText: string, enabled: boolean): {
       } else {
         // enabled = true:
         //   - 若 tick 链还活着, 自然推进 (tick 会读最新 fullText)
-        //   - 若 tick 链已退出, 重置 revealedLength 到 0 并 kick
+        //   - 若 tick 链已退出(上游慢、打字追平后新 chunk 才到), 保持已揭示
+        //     位置原地续打只 kick —— 不能重置为 0: 慢速流式下"追平→新chunk"
+        //     反复出现, 清零会造成跳 0 再整段快速重放的回跳观感
         if (!entry.alive) {
-          // 之前追平过, 现在新文本来了, 重置到 0
-          entry.revealedLength = 0
-          entry.listeners.forEach((l) => l())
           kick(entry)
         }
         // 不需要在这里 notify —— tick 链会持续推进并 notify

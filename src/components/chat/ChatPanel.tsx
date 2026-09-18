@@ -1080,6 +1080,7 @@ export function ChatPanel({
                 <MessageList
                   messages={messages}
                   isStreaming={isLoading}
+                  isPending={status === 'submitted'}
                   className="min-h-full flex-1"
                   onRegenerate={handleRegenerate}
                   onEditMessage={handleEditMessage}
