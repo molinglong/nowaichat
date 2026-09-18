@@ -42,9 +42,12 @@ export default function EphemeralLoginPage() {
     setLoading(false)
 
     if (res?.error) {
-      if (res.error === "EPHEMERAL_ENTRY_MAIN_PASSWORD") {
+      // NextAuth v5 beta:自定义 CredentialsSignin 的 code 在 res.code,
+      // res.error 是通用的 "CredentialsSignin",必须两者都匹配
+      const code = res.code ?? res.error
+      if (code === "EPHEMERAL_ENTRY_MAIN_PASSWORD") {
         setError("此入口仅支持访客密码，主密码请使用正常登录入口")
-      } else if (res.error === "RATE_LIMITED") {
+      } else if (code === "RATE_LIMITED") {
         setError("尝试次数过多，请一分钟后再试")
       } else {
         setError("邮箱/用户名或访客密码错误")
