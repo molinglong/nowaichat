@@ -43,6 +43,8 @@ model User {
   masks         Mask[]
   uploadFiles   UploadFile[]
   studyNotes    StudyNote[]
+  knowledgeDocs KnowledgeDoc[]
+  questions      Question[]
 }
 
 model Account {
@@ -456,4 +458,69 @@ model StudyNoteReviewLog {
   note StudyNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
 
   @@index([noteId, ratedAt])
+}
+
+// ===================== 学习知识库(课本/资料) =====================
+// 定位:知识资料层——回答"课本上怎么说"。与 StudyNote(错题记录层)形成
+// "学-练-测-补"闭环的知识源头;检索走 KnowledgeChunk.content 的 pg_trgm
+// GIN 索引(扩展在 20260830213000_add_message_content_trgm 已启用)。
+model KnowledgeDoc {
+  id             String   @id @default(cuid())
+  userId         String
+  title          String   // 资料名,如「数学 七年级上册」
+  subject        String   // 学科,与 NOTE_SUBJECTS 对齐: math/chinese/english/.../other
+  publisher      String?  // 出版社,如「人民教育出版社」
+  grade          String?  // 年级/册别,如「七年级 上册」
+  sourceUploadId String?  // 原始文件追溯(UploadFile.id);直接导入文本/HTML 时为空
+  charCount      Int      @default(0) // 全文总字符数(切块内容合计)
+  chunkCount     Int      @default(0) // 切块数量
+  createdAt      DateTime @default(now())
+
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([userId, createdAt])
+}
+
+// 知识切块:检索单元。userId 冗余存储,检索时免 join 直接按用户过滤;
+// 切块文本保留 LaTeX 原样(\( \frac{1}{2} \) 等),栏目(例题/练习/思考)
+// 以【例题】【练习】等前缀内联,检索与展示共用同一份文本。
+model KnowledgeChunk {
+  id         String   @id @default(cuid())
+  docId      String
+  userId     String
+  chapter    String?  // 章,如「第一章 有理数」
+  section    String?  // 节,如「1.1 正数和负数」
+  subsection String?  // 小节,如「1.2.2 数轴」
+  heading    String   // 块标题(引用展示用),如「1.1 正数和负数」
+  content    String   // 切块正文(含栏目内容,LaTeX 原样)
+  sortOrder  Int      // 书内顺序,引用展示按此排序
+  charCount  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  doc KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([userId, docId, sortOrder])
+}
+
+// 题库——题目资产层。source 区分来源：
+// - ai_generated：出题 API(/api/study/quiz)从课本例题举一反三生成，用户确认后入库
+// - exam_import：未来试卷/第三方练习册导入(预留，表结构已兼容)
+// 注：错题反哺路径暂不做(用户用纸质笔记本记错题，StudyNote 保持独立)
+model Question {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject    String   // math/chinese/english/physics/chemistry/biology/other
+  topic      String?  // 考点短语，如「相反数」「去括号」
+  kind       String   // choice=选择题 answer=解答题
+  stem       String   // 题干(选择题含选项，每行一项「A. …」)
+  answer     String   // 答案+解析(含用到的课本法则)
+  difficulty String   @default("medium") // basic/medium/hard
+  source     String   @default("ai_generated") // ai_generated/exam_import
+  sourceRef  String?  // 出处，如「§2.2.1 例3」/未来：试卷文件 id
+  createdAt  DateTime @default(now())
+
+  @@index([userId, subject, createdAt])
+  @@index([userId, topic])
 }

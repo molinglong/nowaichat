@@ -23,6 +23,8 @@ import { getMaskById } from '@/lib/ai/mask-resolve'
 import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
+import { KNOWLEDGE_TOOL_NAME, KNOWLEDGE_SUBJECT_LABELS } from "@/lib/ai/knowledge-tool"
+import { createKnowledgeTool, hasKnowledgeChunks } from "@/lib/ai/knowledge-tool-server"
 import { CLARIFY_TOOL_NAME, CLARIFY_TOOL_PROMPT, createClarifyTool } from "@/lib/ai/clarify"
 import {
   SETTINGS_TOOL_NAME,
@@ -575,6 +577,25 @@ export async function POST(req: NextRequest) {
   const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
+
+  // 课本知识库检索(半绑定):用户名下有知识切块才注入(物理级闸门,无课本则工具不存在);
+  // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
+  // 只读工具,临时模式/对比模式均可安全使用。
+  let knowledgeTool: ReturnType<typeof createKnowledgeTool> | null = null
+  let knowledgeSubjectHint = ""
+  try {
+    if (await hasKnowledgeChunks(userId)) {
+      knowledgeTool = createKnowledgeTool(userId, effectiveMask?.subject)
+      const prefSubject = effectiveMask?.subject
+      const prefLabel = prefSubject ? (KNOWLEDGE_SUBJECT_LABELS[prefSubject] ?? prefSubject) : ""
+      knowledgeSubjectHint = prefSubject
+        ? `当前面具偏好${prefLabel}学科：检索时默认传 subject="${prefSubject}"；用户明确问的是其他学科时，不传 subject（改查全部）。`
+        : "不确定学科时不传 subject，查全部。"
+      console.log(`[chat] knowledge tool attached (mask subject: ${effectiveMask?.subject ?? "-"})`)
+    }
+  } catch (err) {
+    console.error("[chat] Failed to check knowledge chunks:", err)
+  }
   if (searchTool) {
     const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
@@ -585,6 +606,20 @@ export async function POST(req: NextRequest) {
       '- 引用具体来源、查证知识、用户要求"查一下"',
       '- 你对某个事实没有把握、训练数据可能已过时',
       '普通闲聊、通用知识问答、代码/翻译/数学等不需要联网。回答时请自然引用来源，不要编造链接。',
+    ].join('\n'))
+  }
+
+  // 课本知识库能力段:与 web_search 能力段同构,触发清单写在这里(模型自主决策依据)
+  if (knowledgeTool) {
+    systemParts.push([
+      '## 课本知识库检索能力',
+      '你拥有 search_knowledge 工具(检索用户上传的课本/教材)。当用户问题涉及以下场景时,**主动调用 search_knowledge** 获取课本原文后再作答:',
+      '- 解释课本上的概念、定义、公式、法则(如「什么是相反数」「乘法分配律怎么说的」)',
+      '- 用户明确要求翻书/查课本/按教材回答',
+      '- 讲评习题时需要引用教材原文佐证',
+      '- 你对某知识点的标准表述没有把握,需要以教材为准',
+      '- 给用户出题(练习/变式/测验)时输出试卷块协议(:::choice/:::question 题块+紧跟 :::answer 答案块,答案块「**答案：X**」开头),渲染时答案默认折叠,用户先做后看;出题前若知识库覆盖该学科,先检索相关章节的【例题】【练习】举一反三,题块首行写检索到的真实出处「参考 §x.x 例N·学科」;知识库没有该学科课本时(如语文),出处改标课文篇目「参考 篇目名·学科」(用你确知的教材篇目,不得编造章节号或篇目)',
+      `闲聊、翻译、写代码、通用常识不需要调用。${knowledgeSubjectHint}回答时优先引用课本原文并标注来源(书名+章节);课本原文与你的知识冲突时,以课本为准。`,
     ].join('\n'))
   }
   console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${engine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
@@ -788,10 +823,11 @@ export async function POST(req: NextRequest) {
     model,
     messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
-    ...((searchTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool)
+    ...((searchTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
+            ...(knowledgeTool ? { [KNOWLEDGE_TOOL_NAME]: knowledgeTool } : {}),
             ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
             ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),

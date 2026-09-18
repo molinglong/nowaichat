@@ -20,6 +20,8 @@ export interface ResolvedMask {
   systemPrompt: string
   fewShot: MaskFewShotTurn[]
   stylePreset?: string
+  /** 学科倾向(仅内置面具携带,如 math-master→math);search_knowledge 半绑定的默认过滤建议 */
+  subject?: string
 }
 
 function isFewShotTurn(t: unknown): t is MaskFewShotTurn {
@@ -99,5 +101,6 @@ export async function getMaskById(
     systemPrompt: builtin.systemPrompt,
     fewShot: builtin.fewShot,
     stylePreset: builtin.stylePreset,
+    subject: builtin.subject,
   }
 }

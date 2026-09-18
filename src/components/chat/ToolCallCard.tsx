@@ -1,7 +1,7 @@
 'use client'
 
 import { memo, useState } from 'react'
-import { Brain, Check, ChevronDown, Globe, Loader2, Search, Settings2, TriangleAlert, Wrench } from 'lucide-react'
+import { BookOpen, Brain, Check, ChevronDown, Globe, Loader2, Search, Settings2, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { UIMessage } from 'ai'
 import { ClarifyCard } from './ClarifyCard'
@@ -10,6 +10,7 @@ import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
 import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
 import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
+import { KNOWLEDGE_TOOL_NAME } from '@/lib/ai/knowledge-tool'
 import { getSettingDef, formatSettingValue } from '@/lib/settings/registry'
 
 /**
@@ -199,6 +200,25 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
           ? '正在保存记忆…'
           : '保存记忆'
     return <ToolRow icon={<Brain className="w-3.5 h-3.5" />} text={text} streaming={view.state === 'input-streaming'} failed={failed} />
+  }
+
+  // 课本知识库检索:一行式卡片;流式显示检索词,完成后显示命中段数(详见 ToolRow 规范)
+  if (view.tool === KNOWLEDGE_TOOL_NAME) {
+    const kOut = view.output as
+      | { query?: string; results?: Array<{ heading?: string }>; error?: string }
+      | undefined
+    const kQuery = kOut?.query ?? (view.input as { query?: string } | undefined)?.query ?? ''
+    const kCount = kOut?.results?.length ?? 0
+    const kFailed = view.state === 'output-error' || !!kOut?.error
+    const kText =
+      view.state === 'input-streaming'
+        ? `正在翻课本「${kQuery}」…`
+        : kFailed
+          ? `查课本「${kQuery}」未生效`
+          : kCount > 0
+            ? `查课本「${kQuery}」· 命中 ${kCount} 段`
+            : `查课本「${kQuery}」· 课本中未找到`
+    return <ToolRow icon={<BookOpen className="w-3.5 h-3.5" />} text={kText} streaming={view.state === 'input-streaming'} failed={kFailed} />
   }
 
   // 用户手动切换后交还控制权,不再自动变化。

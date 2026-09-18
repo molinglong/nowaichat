@@ -41,6 +41,16 @@
   /* 代码块 */
   --code-header: 245 245 247;
   --code-bg: 250 250 250;
+
+  /* 试卷标注（材料题）: 红=教材得分术语, 蓝=材料信息 */
+  --exam-term: 190 26 34;
+  --exam-term-bg: 254 233 234;
+  --exam-mat: 12 74 170;
+  --exam-mat-bg: 229 240 254;
+
+  /* 试卷纸面: 暖纸底与装订线色（纸质卷面风格，定稿自 preview-chinese-exam 方向A） */
+--exam-paper: 251 250 246;
+--exam-paper-line: 216 210 196;
 }
 
 .dark {
@@ -72,6 +82,16 @@
   /* 代码块 */
   --code-header: 44 44 46;
   --code-bg: 28 28 30;
+
+  /* 试卷标注: 暗色下提亮降饱和,保证对比度 */
+  --exam-term: 248 113 113;
+  --exam-term-bg: 63 28 30;
+  --exam-mat: 118 169 250;
+  --exam-mat-bg: 25 46 78;
+
+  /* 试卷纸面: 暗色用暖深灰保纸感,线色同步提亮 */
+--exam-paper: 29 28 26;
+--exam-paper-line: 68 64 57;
 }
 
 /* Smooth scrolling */
@@ -335,6 +355,185 @@ body {
 .rich-md .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* 选择题选项/诗行内的独立公式不套公式卡片——正文里独立公式成卡片是美化,
+   选项里每个选项一张大卡是灾难(历史坑:数学选择题被渲染成四张巨型卡片) */
+.rich-md .exam-option .math-card,
+.rich-md .exam-poem-line .math-card,
+.rich-md .exam-option .katex-display,
+.rich-md .exam-poem-line .katex-display {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+}
+
+/* ── 试卷块（材料/设问/作答分区）与关键词双色标注 —— 材料题布局 ── */
+/* 相邻块由渲染层加 exam-join-* 接成一张“试卷纸”，各自独立时是圆角卡片 */
+.rich-md .exam-block {
+  margin: 1rem 0;
+  padding: 0.75rem 1.1rem;
+  border: 1px solid rgb(var(--exam-paper-line));
+  border-radius: 0.6rem;
+  background: rgb(var(--exam-paper));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+}
+.rich-md .exam-block:first-child {
+  margin-top: 0;
+}
+.rich-md .exam-block:last-child {
+  margin-bottom: 0;
+}
+.rich-md .exam-block.exam-join-bottom {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.rich-md .exam-block.exam-join-top {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+/* 材料区: 纸面上叠暖底纹区分（试卷阅读材料），不再加竖线保持纸面连贯 */
+.rich-md .exam-material {
+  background: rgb(var(--exam-paper-line) / 0.16);
+}
+.rich-md .exam-block-tag {
+  display: inline-block;
+  margin-bottom: 0.45rem;
+  padding: 0.08rem 0.5rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.5;
+  color: rgb(var(--content-secondary));
+  background: rgb(var(--surface-subtle));
+  border-radius: 999px;
+  user-select: none;
+}
+/* 材料区底纹上角标换白底描边，避免融入背景 */
+.rich-md .exam-material .exam-block-tag {
+  background: rgb(var(--exam-paper));
+  border: 1px solid rgb(var(--exam-paper-line));
+}
+.rich-md .exam-question .exam-block-tag {
+  color: rgb(var(--accent-foreground));
+  background: rgb(var(--accent));
+}
+
+/* 字重层级: 设问题干 500 突出题感,选项与作答保持 400;诗块居中疏排（苹方卷面定稿） */
+.rich-md .exam-question p {
+  font-weight: 500;
+}
+.rich-md .exam-option p {
+  font-weight: 400;
+  margin: 0;
+}
+.rich-md .exam-poem .exam-poem-line {
+  text-align: center;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  line-height: 2.1;
+}
+.rich-md .exam-poem .exam-poem-line p {
+  margin: 0;
+}
+/* 作文纸块: 标题居中疏排,正文首行缩进2em(作文纸惯例),分论点加粗走默认 strong;末行字数提为右下虚线徽标 */
+.rich-md .exam-essay {
+  position: relative; /* 右上角复制按钮的定位锚 */
+  padding: 1rem 1.4rem 0.85rem;
+}
+.rich-md .exam-essay .exam-essay-title {
+  margin: 0.1rem 0 0.7rem;
+  text-align: center;
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  text-indent: 0.25em; /* 抵消末字距,视觉居中 */
+  color: rgb(var(--content-primary));
+}
+.rich-md .exam-essay p {
+  margin: 0 0 0.3rem;
+  text-indent: 2em;
+  line-height: 1.95;
+}
+.rich-md .exam-essay .exam-essay-wc {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed rgb(var(--exam-paper-line));
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: rgb(var(--content-muted));
+}
+.rich-md .exam-essay .exam-essay-wc::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgb(var(--exam-paper-line));
+}
+/* 病句修改批改感: answer 块内删除线用红细线（划掉的学生笔迹），补词加粗走默认 */
+.rich-md .exam-answer del,
+.rich-md .exam-answer s {
+  text-decoration-color: rgb(var(--exam-term) / 0.75);
+  text-decoration-thickness: 1.5px;
+}
+
+/* 选择题选项: 试卷式排版——无边框文字流，短选项自动两列，长选项通栏 */
+.rich-md .exam-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+.rich-md .exam-options-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 0.75rem;
+}
+.rich-md .exam-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+.rich-md .exam-option-letter {
+  flex-shrink: 0;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  color: rgb(var(--content-primary));
+}
+.rich-md .exam-option-letter::after {
+  content: '.';
+}
+
+/* 关键词双色: 红=荧光笔（必背得分点），蓝=批注笔（材料对应） */
+.rich-md mark.exam-term,
+.rich-md mark.exam-mat {
+  padding: 0 2px;
+  border-radius: 3px;
+}
+.rich-md mark.exam-term {
+  color: rgb(var(--exam-term));
+  background: rgb(var(--exam-term-bg));
+  font-weight: 600;
+}
+/* 蓝色去底色改虚线引导，材料标注密度高也不花屏 */
+.rich-md mark.exam-mat {
+  color: rgb(var(--exam-mat));
+  background: transparent;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: rgb(var(--exam-mat) / 0.45);
 }
 
 /* ── 认证页（登录/注册）品牌分栏共用样式 ─────────────────── */
