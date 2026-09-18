@@ -91,7 +91,7 @@ export async function POST(request: Request) {
                 })
               }
             })
-            .catch((err: Error) => searchErrors.push(`百度: ${err.message}`))
+            .catch((err: Error) => { searchErrors.push(`百度: ${err.message}`) })
         )
       }
 
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
                 })
               }
             })
-            .catch((err: Error) => searchErrors.push(`Tavily: ${err.message}`))
+            .catch((err: Error) => { searchErrors.push(`Tavily: ${err.message}`) })
         )
       }
 

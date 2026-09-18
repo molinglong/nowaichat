@@ -50,7 +50,7 @@ export async function POST(request: Request) {
       })
       if (!keyRecord?.encryptedKey) {
         return NextResponse.json(
-          { error: `未配置 ${provider.displayName || provider.id} 的 API Key` },
+          { error: `未配置 ${provider.name || provider.id} 的 API Key` },
           { status: 400 }
         )
       }

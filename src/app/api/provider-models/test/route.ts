@@ -45,7 +45,7 @@ async function detectProviderModelCapabilities(
           ],
         },
       ],
-      maxTokens: 5,
+      maxOutputTokens: 5,
     })
     if (!visionResult.text.toLowerCase().includes("error")) {
       supportsVision = true
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
     where: { userId_provider: { userId, provider } },
   })
 
-  let apiKey: string
+  let apiKey: string | undefined
   if (!apiKeyRecord) {
     // Fallback for qianwen: use env var
     if (provider === "qianwen") {
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
     const result = await generateText({
       model: prov(modelDef.id),
       messages: [{ role: "user", content: "Reply with only the word: ok" }],
-      maxTokens: 5,
+      maxOutputTokens: 5,
     })
     if (result.text.toLowerCase().includes("error")) {
       return NextResponse.json(
