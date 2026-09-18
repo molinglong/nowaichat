@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3456",
     "dev:full": "Remove-Item -Path .next, .cache -Recurse -Force -ErrorAction SilentlyContinue; next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:smoke": "playwright test",
     "db:studio": "prisma studio",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -57,6 +58,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/cli": "^2.11.4",
     "@types/bcryptjs": "^2.4.6",
