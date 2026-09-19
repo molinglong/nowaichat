@@ -60,7 +60,18 @@ function corsHeaders(res: NextResponse, origin: string | null): NextResponse {
 }
 
 export async function middleware(req: NextRequest) {
-  const token = await getToken({ req, secret: process.env.AUTH_SECRET })
+  // Auth.js v5 按 AUTH_URL 协议决定 session cookie 前缀(HTTPS 部署恒为 __Secure-),
+  // 且不随请求协议变化; getToken 默认却按无前缀名(authjs.session-token)查找,
+  // 必须显式传 secureCookie, 判定依据与 Auth.js 对齐(先看 AUTH_URL), 请求协议仅兜底。
+  // 否则 HTTPS 部署后 middleware 误判未登录, /chat 被 307 弹回 /login(本地 http dev 无前缀,故不触发)
+  const authUrl = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL ?? ""
+  const isSecure =
+    authUrl.startsWith("https://") || req.nextUrl.protocol === "https:"
+  const token = await getToken({
+    req,
+    secret: process.env.AUTH_SECRET,
+    secureCookie: isSecure,
+  })
   const isLoggedIn = !!token
   const { pathname } = req.nextUrl
 
