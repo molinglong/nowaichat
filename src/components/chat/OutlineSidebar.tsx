@@ -397,7 +397,7 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
                 onMouseLeave={() =>
                   setHoverIndex((prev) => (prev === idx ? null : prev))
                 }
-                className="group relative flex-1 w-full flex items-center justify-center min-h-[10px] py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="outline-tick group relative flex-1 w-full flex items-center justify-center min-h-[10px] py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <span
                   className={cn(

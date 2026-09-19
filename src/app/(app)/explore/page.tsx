@@ -459,7 +459,8 @@ function ExploreContent() {
           {/* 模型选择 */}
           <div className="mb-6 p-4 rounded-xl bg-surface-muted border border-line/60">
             <div className="text-xs text-content-muted mb-3 font-medium">模型配置</div>
-            <div className="grid grid-cols-2 gap-3">
+            {/* 小屏单列避免模型选择器被压到 ~140px;sm 起恢复双列 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-[11px] text-content-secondary mb-1 block">你的模型</label>
                 <ModelSelector

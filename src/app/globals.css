@@ -106,6 +106,24 @@
 --exam-paper-line: 68 64 57;
 }
 
+/* 触屏全局反馈: 去掉 iOS 点按灰色高亮;
+   交互元素 touch-action: manipulation 消除双击缩放延迟(保留滚动/捏合) */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+a, button, [role='button'], input, textarea, select, label {
+  touch-action: manipulation;
+}
+
+/* iOS Safari 的 100vh 包含地址栏外区域,直接用会顶出屏幕,
+   导致底部输入框被裁。支持 dvh 的浏览器一律改用动态视口高度,
+   旧内核不识别该声明自动回退到 Tailwind 的 100vh。 */
+@supports (height: 100dvh) {
+  .h-screen {
+    height: 100dvh;
+  }
+}
+
 /* Smooth scrolling */
 html {
   scroll-behavior: smooth;
@@ -209,6 +227,10 @@ body {
   @media (hover: none) {
     .show-on-touch {
       opacity: 1 !important;
+    }
+    /* 大纲栏 tick 触控目标放大(桌面 hover 列保持紧凑) */
+    .outline-tick {
+      min-height: 20px;
     }
   }
 }
@@ -530,6 +552,36 @@ body {
   color: rgb(var(--content-primary));
 }
 .rich-md .exam-option-letter::after {
+  content: '.';
+}
+
+/* 译文块 :::translate —— 英文题目的中文翻译卡，弱化为注释层：正文次级色，
+   选项紧凑小间距与题面选项同构但降权重；标签沿用中性胶囊不抢英文题面 */
+.rich-md .exam-translate {
+  color: rgb(var(--content-secondary));
+}
+.rich-md .exam-translate .exam-translate-stem p {
+  margin: 0 0 0.3rem;
+}
+.rich-md .exam-translate-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 0.22rem;
+}
+.rich-md .exam-translate-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+.rich-md .exam-translate-option p {
+  margin: 0;
+}
+.rich-md .exam-translate-letter {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: rgb(var(--content-secondary));
+}
+.rich-md .exam-translate-letter::after {
   content: '.';
 }
 

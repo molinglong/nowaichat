@@ -1876,7 +1876,7 @@ export function SettingsModal() {
         onPointerMove={onCardPointerMove}
         onPointerUp={onCardPointerUp}
         onPointerCancel={onCardPointerCancel}
-        className="relative w-full md:w-[90%] lg:w-[750px] max-w-[calc(100vw-2rem)] h-[90vh] md:h-[36rem] max-h-[calc(100vh-1rem)] md:max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto"
+        className="relative w-full md:w-[90%] lg:w-[750px] max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto"
       >
         {/* Header with macOS red dot */}
         <div className="relative flex items-center px-4 pt-3 pb-2.5 border-b border-line/60 shrink-0 bg-surface md:hidden">

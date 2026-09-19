@@ -1239,7 +1239,7 @@ export function ChatPanel({
             <iframe
               src={`data:text/html;charset=utf-8,${encodeURIComponent(previewCode)}`}
               className="flex-1 w-full bg-white border-0 pointer-events-auto"
-              style={{ height: 'calc(100vh - 50px)' }}
+              style={{ height: 'calc(100dvh - 50px)' }}
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             />
           </div>

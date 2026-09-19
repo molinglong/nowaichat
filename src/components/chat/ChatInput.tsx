@@ -420,87 +420,6 @@ export function ChatInput({
                 >
                   <MoreHorizontal className="w-3.5 h-3.5" />
                 </button>
-                {moreMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
-                    <div
-                      className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 rounded-xl border border-line bg-surface shadow-lg py-1.5"
-                      role="menu"
-                    >
-                      {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
-                      {hasMaskEntry && (
-                        <button
-                          className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
-                          onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
-                        >
-                          <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
-                          <span className="flex-1 min-w-0">
-                            <span className="block font-medium">面具</span>
-                            <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
-                          </span>
-                          <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
-                        </button>
-                      )}
-                      {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
-                      {hasMcpEntry && (
-                        <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors">
-                          <button
-                            className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
-                            onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
-                          >
-                            <Plug className="w-3.5 h-3.5 shrink-0" />
-                            <span className="flex-1 min-w-0">
-                              <span className="block font-medium">MCP 工具</span>
-                              <span className="block text-[10px] text-content-muted">{mcpEnabled ? '外部工具注入本会话' : '本会话已停用'}</span>
-                            </span>
-                          </button>
-                          <MiniSwitch on={mcpEnabled} onClick={() => onMcpEnabledChange(!mcpEnabled)} />
-                        </div>
-                      )}
-                      {/* 对比模式(全端): 低频开关,开启后 textarea 下方出现多模型行 */}
-                      {hasCompareEntry && (
-                        <button
-                          className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
-                          onClick={() => { onCompareModeChange(!compareMode); setMoreMenuOpen(false) }}
-                        >
-                          <Columns2 className="w-3.5 h-3.5 shrink-0" />
-                          <span className="flex-1 min-w-0">
-                            <span className="block font-medium">对比模式</span>
-                            <span className="block text-[10px] text-content-muted">多模型同时回答</span>
-                          </span>
-                          {compareMode && <Check className="w-3.5 h-3.5 shrink-0" />}
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-                {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
-                <div className="sm:hidden">
-                  {mcpMenuOpen && onMcpEnabledChange && (
-                    <McpToolMenu
-                      mcpEnabled={mcpEnabled}
-                      onMcpEnabledChange={onMcpEnabledChange}
-                      onClose={() => setMcpMenuOpen(false)}
-                    />
-                  )}
-                  {maskMenuOpen && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
-                      <div
-                        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5"
-                        role="menu"
-                      >
-                        <MaskPickerMenu
-                          activeMaskId={mask?.id ?? null}
-                          userMasks={userMasks}
-                          onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
-                          onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
-                          onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
-                        />
-                      </div>
-                    </>
-                  )}
-                </div>
               </div>
             )}
     </>
@@ -514,7 +433,9 @@ export function ChatInput({
         style={{
           // 键盘弹出时让内容贴底(否则依旧被键盘遮住);
           // 没键盘时桌面垂直居中、移动也保持居中(只加 paddingBottom 占键盘)。
-          paddingBottom: 'var(--keyboard-height, 0px)',
+          // 取键盘高度与底部安全区的较大者: 键盘弹出时用键盘高度,
+          // 收起时用 Home Indicator 安全区(PWA 全屏模式下非 0)。
+          paddingBottom: 'max(var(--keyboard-height, 0px), var(--sab, 0px))',
         }}
       >
         {/* 点阵背景: 中心(内容区)淡出、四周渐显,纯装饰 */}
@@ -672,12 +593,14 @@ export function ChatInput({
 
   // ============= STANDARD VARIANT =============
   return (
-    // 底部 padding = 0.5rem 基础间距 + 软键盘高度。
-    // useVisualViewport hook 会把键盘高度写入 --keyboard-height(桌面上始终 0px)。
+    // 底部 padding = 0.5rem 基础间距 + max(软键盘高度, 底部安全区)。
+    // useVisualViewport hook 会把键盘高度写入 --keyboard-height(桌面上始终 0px);
+    // --sab 是 Home Indicator 安全区(浏览器内为 0,PWA 全屏/无键盘时非 0),
+    // 取较大者避免键盘弹出时叠加出多余空白。
     <div
       className={cn('relative z-20 px-3 pt-1', className)}
       style={{
-        paddingBottom: 'calc(0.5rem + var(--keyboard-height, 0px))',
+        paddingBottom: 'calc(0.5rem + max(var(--keyboard-height, 0px), var(--sab, 0px)))',
       }}
     >
       <div className="max-w-2xl mx-auto">
@@ -942,6 +865,91 @@ export function ChatInput({
                 </button>
               )}
             </div>
+          </div>
+
+          {/* ⋯ 更多工具 / 面具 / MCP 弹层 —— 挂在输入卡片(而非按钮)上定位:
+              移动端按钮贴屏边时,以按钮为锚的居中弹层会溢出视口;
+              以卡片为锚 + max-w 约束,任何屏宽都收在视口内 */}
+          {moreMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
+              <div
+                className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 max-w-[calc(100%-1rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                role="menu"
+              >
+                {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
+                {hasMaskEntry && (
+                  <button
+                    className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
+                    onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
+                  >
+                    <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block font-medium">面具</span>
+                      <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
+                    </span>
+                    <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
+                  </button>
+                )}
+                {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
+                {hasMcpEntry && (
+                  <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors">
+                    <button
+                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                      onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
+                    >
+                      <Plug className="w-3.5 h-3.5 shrink-0" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block font-medium">MCP 工具</span>
+                        <span className="block text-[10px] text-content-muted">{mcpEnabled ? '外部工具注入本会话' : '本会话已停用'}</span>
+                      </span>
+                    </button>
+                    <MiniSwitch on={mcpEnabled} onClick={() => onMcpEnabledChange(!mcpEnabled)} />
+                  </div>
+                )}
+                {/* 对比模式(全端): 低频开关,开启后 textarea 下方出现多模型行 */}
+                {hasCompareEntry && (
+                  <button
+                    className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
+                    onClick={() => { onCompareModeChange(!compareMode); setMoreMenuOpen(false) }}
+                  >
+                    <Columns2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block font-medium">对比模式</span>
+                      <span className="block text-[10px] text-content-muted">多模型同时回答</span>
+                    </span>
+                    {compareMode && <Check className="w-3.5 h-3.5 shrink-0" />}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
+          <div className="sm:hidden">
+            {mcpMenuOpen && onMcpEnabledChange && (
+              <McpToolMenu
+                mcpEnabled={mcpEnabled}
+                onMcpEnabledChange={onMcpEnabledChange}
+                onClose={() => setMcpMenuOpen(false)}
+              />
+            )}
+            {maskMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+                <div
+                  className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto max-w-[calc(100%-1rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                  role="menu"
+                >
+                  <MaskPickerMenu
+                    activeMaskId={mask?.id ?? null}
+                    userMasks={userMasks}
+                    onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
+                    onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+                    onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>

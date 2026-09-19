@@ -67,6 +67,10 @@ export function ComparePanel({
   // 单独继续聊天: 弹窗选中的泳道模型,确认后转换/克隆
   const [soloModelId, setSoloModelId] = useState<string | null>(null)
   const [converting, setConverting] = useState(false)
+  // 移动端泳道 Tab: 当前查看的泳道模型(桌面端并排显示,移动端切单泳道)
+  const [mobileLaneModelId, setMobileLaneModelId] = useState<string | null>(null)
+  // 移动端 Tab 流式指示: 正在生成的模型集合(loadingStates ref 的可渲染镜像)
+  const [loadingModelIds, setLoadingModelIds] = useState<ReadonlySet<string>>(new Set())
 
   // 共享 ref
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
@@ -118,6 +122,13 @@ export function ComparePanel({
   const handleLoadingChange = useCallback((modelId: string, isLoading: boolean) => {
     loadingStates.current.set(modelId, isLoading)
     setAnyLoading(Array.from(loadingStates.current.values()).some(Boolean))
+    // 同步到 state,供移动端泳道 Tab 显示流式指示
+    setLoadingModelIds((prev) => {
+      const next = new Set(prev)
+      if (isLoading) next.add(modelId)
+      else next.delete(modelId)
+      return next
+    })
   }, [])
 
   // 首轮发送前先创建对比会话,规避 N 个并发请求各自建会话的竞态
@@ -245,13 +256,52 @@ export function ComparePanel({
     }
   }, [soloModelId])
 
+  // 移动端激活泳道: 未手动选过时回落第一条;模型被移除后自动回落,避免越界空白
+  const activeLaneModelId =
+    mobileLaneModelId && compareModels.includes(mobileLaneModelId)
+      ? mobileLaneModelId
+      : compareModels[0]
+
   const soloModelDef = soloModelId ? allModels.find((m) => m.id === soloModelId) : undefined
 
   return (
     <div className="flex flex-col h-full relative overflow-hidden">
-      {/* Messages area: N lanes side by side */}
+      {/* 移动端泳道 Tab 栏: 并排泳道在窄屏放不下,降级为单泳道+模型胶囊切换 */}
+      <div className="md:hidden flex items-center gap-1.5 px-3 pt-2 pb-1.5 overflow-x-auto shrink-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {compareModels.map((modelId) => {
+          const modelDef = allModels.find((m) => m.id === modelId)
+          const isActive = modelId === activeLaneModelId
+          const isLoading = loadingModelIds.has(modelId)
+          return (
+            <button
+              key={modelId}
+              type="button"
+              onClick={() => setMobileLaneModelId(modelId)}
+              className={cn(
+                'flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-full border text-xs whitespace-nowrap transition-colors active:scale-95 touch-manipulation',
+                isActive
+                  ? 'border-accent/50 bg-accent/10 text-accent'
+                  : 'border-line/60 text-content-secondary hover:bg-surface-subtle'
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full shrink-0',
+                  modelDef ? (PROVIDER_DOT[modelDef.provider] ?? 'bg-content-muted') : 'bg-content-muted',
+                  isLoading && 'animate-pulse'
+                )}
+              />
+              {modelDef?.name ?? modelId}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Messages area: 桌面端 N 泳道并排;移动端单泳道 */}
       {/* 显式行 minmax(0,1fr) 让泳道高度撑满容器,否则隐式 auto 行高会按内容撑开导致内部无法滚动 */}
-      <div className="flex-1 min-h-0 overflow-hidden grid grid-flow-col auto-cols-fr grid-rows-[minmax(0,1fr)]">
+      {/* 移动端未激活泳道用 display:none 隐藏而非卸载 —— CompareLane 持有消息/流式状态,卸载即丢 */}
+      <div className="flex-1 min-h-0 overflow-hidden md:grid md:grid-flow-col md:auto-cols-fr md:grid-rows-[minmax(0,1fr)]">
         {compareModels.map((modelId, index) => {
           const modelDef = allModels.find((m) => m.id === modelId)
           return (
@@ -259,7 +309,8 @@ export function ComparePanel({
               key={modelId}
               className={cn(
                 'h-full min-w-0 border-line/60',
-                index < compareModels.length - 1 && 'border-r'
+                index < compareModels.length - 1 && 'md:border-r',
+                modelId !== activeLaneModelId && 'hidden md:block'
               )}
             >
               {modelDef ? (

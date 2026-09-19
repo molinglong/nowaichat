@@ -360,6 +360,8 @@ export function Sidebar() {
       <aside
         className={cn(
           'fixed top-1.5 bottom-1.5 left-1.5 z-50 w-56 flex flex-col',
+          // pb-[var(--sab)]: PWA 全屏模式下列表底部让出 Home Indicator 安全区(浏览器内为 0)
+          'pb-[var(--sab)]',
           'bg-surface-glass backdrop-blur-xl text-content-primary',
           'rounded-xl border border-line/50 overflow-hidden',
           'transition-transform duration-300 ease-in-out',

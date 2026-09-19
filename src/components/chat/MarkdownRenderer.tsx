@@ -241,7 +241,7 @@ function RichSegment({ content, promote = true }: { content: string; promote?: b
   )
 }
 
-const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴' }
+const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴', translate: '译文' }
 
 /** 单组题面: 题干 + 试卷式选项（长选项通栏，全部短选项时自动两列）；选项内高亮照常生效 */
 function ChoiceGroupView({ stem, options }: { stem: string; options: ExamChoiceOption[] }) {
@@ -273,6 +273,26 @@ function ExamChoiceBody({ text }: { text: string }) {
     return groups.map((g, i) => <ChoiceGroupView key={i} stem={g.stem} options={g.options} />)
   }
   return <ChoiceGroupView stem={stem} options={options} />
+}
+
+/** 译文块分区: 英文题目的中文翻译卡(首行题干+逐选项中文)，复用 parseChoice 的选项行解析;
+ * 无选项行时整块按普通文本渲染(语法填空整篇译文等场景)；配色弱化为注释层，不抢英文题面 */
+function ExamTranslateBody({ text }: { text: string }) {
+  const { stem, options } = useMemo(() => parseChoice(text), [text])
+  if (!options.length) return <RichSegment content={text} promote={false} />
+  return (
+    <>
+      {stem && <div className="exam-translate-stem"><RichSegment content={stem} promote={false} /></div>}
+      <div className="exam-translate-options">
+        {options.map((o) => (
+          <div key={o.letter} className="exam-translate-option">
+            <span className="exam-translate-letter" aria-hidden>{o.letter}</span>
+            <div className="flex-1 min-w-0"><RichSegment content={o.text} promote={false} /></div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
 }
 
 /** 时间轴块分区: 左侧年份列+竖轴+节点事件流,行首 * 为关键节点(红点);
@@ -524,6 +544,8 @@ function ExamBlock({
         <ExamEssayBody text={text} />
       ) : kind === 'question' ? (
         <ExamQuestionBody text={displayText} />
+      ) : kind === 'translate' ? (
+        <ExamTranslateBody text={text} />
       ) : kind === 'answer' ? (
         <ExamAnswerBody text={text} collapsible={!!answerCollapsible} />
       ) : (
@@ -552,9 +574,17 @@ function RichMarkdown({ content }: { content: string }) {
           }
           return null
         })()
-        const next = i < segments.length - 1 ? segments[i + 1] : null
-        const nextAnswerText =
-          next && next.type === 'exam' && next.kind === 'answer' ? next.text : null
+        // 出题组联动: 题块向后找紧邻 answer(允许中间隔 translate 译文块)——齐备才显示「收进题库」;
+        // 跨过其他块截断,避免出处串组
+        const nextAnswerText = (() => {
+          for (let j = i + 1; j < segments.length; j++) {
+            const s = segments[j]
+            if (s.type !== 'exam') break
+            if (s.kind === 'answer') return s.text
+            if (s.kind !== 'translate') break
+          }
+          return null
+        })()
         const isQuizStem = seg.kind === 'choice' || seg.kind === 'question'
         const stemRef = isQuizStem ? parseSourceRefLine(seg.text).sourceRef : null
         return (

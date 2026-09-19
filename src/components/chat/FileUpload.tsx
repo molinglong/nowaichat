@@ -281,8 +281,9 @@ export function FileUpload({
             'flex items-center justify-center transition-colors',
             variant === 'pill'
               ? cn(
-                  // 胶囊态: 与相邻胶囊同规格(h-8 全圆角 + 细边框);pillClassName 可覆盖为紧凑款
-                  'gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium shrink-0',
+                  // 胶囊态: 已图标化(与工具组圆形钮同构,不再渲染文字),无文字内边距;
+                  // 尺寸/配色由 pillClassName 覆盖(桌面 28px / 移动 44px 触控)
+                  'h-8 rounded-full border shrink-0',
                   'border-line bg-surface text-content-secondary',
                   'hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
                   'disabled:opacity-50 disabled:cursor-not-allowed',

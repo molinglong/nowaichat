@@ -101,7 +101,7 @@ export function McpToolMenu({
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
-        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-80
+        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-80 max-w-[calc(100%-1rem)]
           rounded-xl border border-line bg-surface shadow-lg"
         role="menu"
       >

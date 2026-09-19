@@ -9,12 +9,13 @@
  *   :::lyrics …（歌词原文，一句一行，渲染同诗块但标签为「歌词」）… :::
  *   :::essay …（作文纸：首行标题，正文段落，末行「全文约 X 字」）… :::
  *   :::timeline …（时间轴：首行可选标题，每行「年份｜朝代｜事件｜一句话｜出处」，行首 * = 关键节点）… :::
+ *   :::translate …（英文题目的中文译文：首行题干，之后每行「A. 选项中文」；无选项行时整块按普通文本渲染）… :::
  *   出处行「参考 xx·科目」支持各学科面具：数学/语文/英语/物理/化学/生物/历史/政治/地理
  * 解析为片段流后由 MarkdownRenderer 分别渲染成试卷卡片；
  * 关键词双色标注（==术语== / @@材料词@@）在渲染层处理，见 MarkdownRenderer.tsx。
  */
 
-export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'lyrics' | 'essay' | 'timeline'
+export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'lyrics' | 'essay' | 'timeline' | 'translate'
 
 export type ExamSegment =
   | { type: 'md'; text: string }
@@ -45,7 +46,7 @@ const CHOICE_OPTION_RE = /^\s*([A-Fa-f])[.、．:：]\s*(.+)$/
 /** 题号行：1. / 1、 / 1) 等前缀（数字后紧跟分隔符，避免误伤「755 年乱起」类正文） */
 const QUESTION_NO_RE = /^\s*\d{1,3}[.、．)]\s*(\S.*)$/
 
-const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|lyrics|essay|timeline)(?:\s+(.*?))?\s*$/
+const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|lyrics|essay|timeline|translate)(?:\s+(.*?))?\s*$/
 const EXAM_CLOSE_RE = /^:::\s*$/
 
 /**
