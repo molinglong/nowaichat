@@ -74,14 +74,30 @@ export interface ConvertResult {
 
 export type ConvertStatus = 'converting' | 'done' | 'error'
 
+/** 转换管线:text=纯本地提取,ai=视觉模型结构化 */
+export type ConvertMode = 'text' | 'ai'
+
+/** AI 模式逐页进度 */
+export interface AiProgress {
+  totalPages: number
+  donePages: number
+  currentPage: number
+  /** 重试等瞬时状态说明 */
+  status?: string
+}
+
 /** UI 层单文件任务 */
 export interface ConvertJob {
   id: string
   fileName: string
   size: number
   status: ConvertStatus
-  /** 0-1,converting 时有效 */
+  /** 创建任务时锁定的转换模式 */
+  mode: ConvertMode
+  /** 文本模式 0-1;AI 模式用 ai 字段 */
   progress: number
+  /** AI 模式逐页进度,converting 时有效 */
+  ai?: AiProgress
   result?: ConvertResult
   error?: string
 }

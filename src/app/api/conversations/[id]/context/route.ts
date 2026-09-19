@@ -32,12 +32,30 @@ export async function GET(
 
   const messages = await prisma.message.findMany({
     where: { conversationId: id, archived: false, role: { in: ["user", "assistant"] } },
-    select: { role: true, content: true, promptTokens: true, completionTokens: true },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, role: true, content: true, promptTokens: true, completionTokens: true },
   })
+
+  const lastSummary = await prisma.conversationSummary.findFirst({
+    where: { conversationId: id },
+    orderBy: { createdAt: "desc" },
+    select: { rangeEnd: true, coveredMessages: true, createdAt: true, content: true },
+  })
+  // 已被最新摘要覆盖(rangeEnd 含之前)的消息不再计入占用 —— 这些内容的上下文
+  // 由注入的摘要替代,压缩后仪表占用才会真实下降。rangeEnd 找不到时保守全量估算。
+  let coveredCount = 0
+  if (lastSummary?.rangeEnd) {
+    const idx = messages.findIndex((m) => m.id === lastSummary.rangeEnd)
+    if (idx !== -1) coveredCount = idx + 1
+  }
+  const activeMessages = messages.slice(coveredCount)
 
   // 与压缩触发判断同口径的粗估(中文×1.6 / 英文按词×1.3)
   const estimatedTokens = estimateMessagesTokens(
-    messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
+    activeMessages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
+  )
+  const compressedTokens = estimateMessagesTokens(
+    messages.slice(0, coveredCount).map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
   )
   // assistant 消息落库的真实 usage 合计(仅部分模型/轮次有值,作为参考下限)
   const realTokens = messages.reduce(
@@ -45,16 +63,13 @@ export async function GET(
     0
   )
 
-  const lastSummary = await prisma.conversationSummary.findFirst({
-    where: { conversationId: id },
-    orderBy: { createdAt: "desc" },
-    select: { coveredMessages: true, createdAt: true, content: true },
-  })
 
   return NextResponse.json({
     estimatedTokens,
+    compressedTokens,
     realTokens,
     messageCount: messages.length,
+    coveredMessages: coveredCount,
     lastSummary: lastSummary
       ? {
           coveredMessages: lastSummary.coveredMessages,

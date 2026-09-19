@@ -21,8 +21,10 @@ interface FileUploadProps {
   disabled?: boolean
   /** 隐藏已上传附件的预览(由 ChatInput 顶部统一展示),仅保留上传中进度 */
   hideAttachmentsPreview?: boolean
-  /** 视觉变体: 'icon'(默认) 28px 圆形图标按钮; 'pill' 带文字的胶囊按钮(欢迎页输入框下方) */
+  /** 视觉变体: 'icon'(默认) 28px 圆形图标按钮; 'pill' 带文字的胶囊按钮(输入框下方) */
   variant?: 'icon' | 'pill'
+  /** pill 变体的样式覆盖(twMerge 合并,后写优先),用于会话页紧凑胶囊 */
+  pillClassName?: string
 }
 
 export function deleteUploadedFile(url: string) {
@@ -91,6 +93,7 @@ export function FileUpload({
   disabled,
   hideAttachmentsPreview = false,
   variant = 'icon',
+  pillClassName,
 }: FileUploadProps) {
   const [uploading, setUploading] = useState<UploadingFile[]>([])
   const [dragging, setDragging] = useState(false)
@@ -278,11 +281,12 @@ export function FileUpload({
             'flex items-center justify-center transition-colors',
             variant === 'pill'
               ? cn(
-                  // 欢迎页胶囊态: 与对比胶囊同规格(h-8 全圆角 + 细边框)
+                  // 胶囊态: 与相邻胶囊同规格(h-8 全圆角 + 细边框);pillClassName 可覆盖为紧凑款
                   'gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium shrink-0',
                   'border-line bg-surface text-content-secondary',
                   'hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
-                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                  pillClassName
                 )
               : cn(
                   // 图标态: 28px 圆形按钮(输入框内联使用)

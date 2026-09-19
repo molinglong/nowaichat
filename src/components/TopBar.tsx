@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, ChevronDown, MessageSquarePlus, BookOpen, Settings as SettingsIcon } from 'lucide-react'
+import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, ChevronDown, MessageSquarePlus, BookOpen, Settings as SettingsIcon, Keyboard } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
@@ -13,6 +13,16 @@ import { toast } from '@/lib/toast'
 import { queryKeys, STALE, IMAGES_PAGE_SIZE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
+
+// 快捷键提示表:与已实现行为一一对应(j/k 与 Enter 复制见 MessageList,搜索见 Sidebar)
+const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
+  { keys: 'Enter', desc: '发送消息' },
+  { keys: 'Shift + Enter', desc: '输入框换行' },
+  { keys: 'J / K', desc: '选中下一条 / 上一条消息' },
+  { keys: 'Enter', desc: '复制选中的消息' },
+  { keys: 'Esc', desc: '取消选中' },
+  { keys: '⌘ / Ctrl + K', desc: '搜索会话' },
+]
 
 type TabKey = 'chat' | 'images' | 'explore'
 
@@ -34,6 +44,8 @@ export function TopBar() {
   // 中部胶囊「更多」二级菜单(收纳观点探索/错题本,保持胶囊组精简)
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
+  // 快捷键说明弹层开合
+  const [hotkeysOpen, setHotkeysOpen] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
   const queryClient = useQueryClient()
@@ -513,6 +525,42 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
+        {/* 快捷键说明:轻量弹层,提升 j/k 等隐藏快捷键的可发现性(紧邻设置入口) */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setHotkeysOpen((v) => !v)}
+            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+            aria-label="键盘快捷键"
+            title="键盘快捷键"
+            aria-haspopup="dialog"
+            aria-expanded={hotkeysOpen}
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+          </button>
+          {hotkeysOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setHotkeysOpen(false)} />
+              <div
+                className="absolute right-0 top-full mt-1.5 z-50 w-64 rounded-xl border border-line bg-surface shadow-lg p-3"
+                role="dialog"
+                aria-label="键盘快捷键"
+              >
+                <div className="text-xs font-medium text-content-primary mb-2">键盘快捷键</div>
+                <ul className="space-y-1.5 text-[11px] text-content-secondary">
+                  {HOTKEY_HINTS.map((h, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3">
+                      <span className="min-w-0">{h.desc}</span>
+                      <kbd className="shrink-0 px-1.5 py-0.5 rounded border border-line bg-surface-muted text-[10px] font-mono text-content-muted">
+                        {h.keys}
+                      </kbd>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+        </div>
         {/* 设置入口:正常模式打开完整设置;临时模式打开精简版(仅通用/帮助/关于,
             账户管理类板块及其数据加载已在 SettingsModal 内按 isEphemeral 跳过) */}
         <button

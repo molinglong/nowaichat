@@ -40,11 +40,29 @@ import {
 } from "@/lib/ai/memory-tool"
 import { createMemoryTool } from "@/lib/ai/memory-tool.server"
 import {
+  TODO_TOOL_NAME,
+  TODO_TOOL_PROMPT,
+  TODO_DISABLED_PROMPT,
+} from "@/lib/ai/todo-tool"
+import { createTodoTool } from "@/lib/ai/todo-tool.server"
+import {
   MASK_TOOL_NAME,
   MASK_TOOL_PROMPT,
   createMaskGeneratorTool,
 } from "@/lib/ai/mask-tool"
-import { loadLatestSummary, maybeCompressContext } from "@/lib/context-compression"
+import {
+  URL_READER_TOOL_NAME,
+  URL_READER_TOOL_PROMPT,
+  URL_READER_DISABLED_PROMPT,
+} from "@/lib/ai/url-reader"
+import { createUrlReaderTool } from "@/lib/ai/url-reader.server"
+import { buildMcpPromptSection } from "@/lib/ai/mcp/mcp-constants"
+import {
+  loadMcpToolsForUser,
+  closeMcpClients,
+  type McpLoadResult,
+} from "@/lib/ai/mcp/mcp-client.server"
+import { loadCompressionState, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
 import { sanitizeUploadName, readUploadAsDataUrl } from "@/lib/uploads"
@@ -66,6 +84,7 @@ interface ChatRequestBody {
   maskId?: string // 面具 id(内置面具见 @/lib/ai/builtin-masks);不传时从会话读取
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
+  mcpEnabled?: boolean // 客户端是否注入 MCP 外部工具(默认 true,仅显式 false 时跳过加载)
   settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
 }
 
@@ -80,6 +99,8 @@ interface IncomingMessage {
   content?: string | IncomingPart[]
   parts?: IncomingPart[]
   text?: string
+  /** UIMessage 序列化自带的消息 id(历史消息=数据库 id,本轮新消息=本地临时 id) */
+  id?: string
   /** 后端写入的结构化 UI 提示: { kind: 'branch_summary', ... } */
   metadata?: unknown
 }
@@ -215,11 +236,11 @@ export async function POST(req: NextRequest) {
     const systemParts: string[] = []
 
     const body: ChatRequestBody = await req.json()
-    const { model: modelId, messages: rawMessages, conversationId, deepThink, groupId, webSearch, searchEngine } = body
+    const { model: modelId, messages: rawMessages, conversationId, deepThink, groupId, webSearch, searchEngine, mcpEnabled } = body
     const attachments = Array.isArray(body.attachments) ? body.attachments : []
     const hasImageAttachments = attachments.some((a) => a.type.startsWith("image/"))
 
-    console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}`)
+    console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}, mcpEnabled: ${mcpEnabled}`)
 
     // 新版 preset 优先:body 显式传 stylePreset 时用之;否则从 DB 读 preset;
     // preset 缺失/null 时,回退到旧的 styleOffset(老会话);offset 也无则默认 balanced。
@@ -356,8 +377,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 长上下文压缩(剔除): 该会话已有远期摘要时,把被摘要覆盖的早期原文从本次请求中
+  // 摘除 —— 只发"摘要 + 未覆盖的近期原文",压缩才真正省下 token。
+  // 消息缺 id 或 id 不在覆盖集合(本地临时消息等)一律保留,宁可多发不可漏发。
+  const compressionState =
+    conversationId && conversationOwned
+      ? await loadCompressionState(conversationId)
+      : null
+  const effectiveRawMessages = compressionState
+    ? rawMessages.filter(
+        (m) => typeof m.id !== "string" || !compressionState.coveredIds.has(m.id)
+      )
+    : rawMessages
+
   // Convert incoming messages to ModelMessage format for streamText
-  let messages = convertToModelMessages(rawMessages)
+  let messages = convertToModelMessages(effectiveRawMessages)
 
   // 附件内容注入:图片转多模态 image part(仅视觉模型),文本文件读入正文
   if (attachments.length > 0) {
@@ -432,23 +466,16 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 长上下文压缩: 如果该会话已有"远期摘要",在 messages 头部注入一条 system
-  // (即用摘要替代之前被压缩掉的早期原文,避免长对话撞模型 contextWindow)
-  // 仅本人会话才读取摘要,避免把他人会话内容注入到本次请求(信息泄露)
-  if (conversationId && conversationOwned) {
-    try {
-      const latestSummary = await loadLatestSummary(conversationId)
-      if (latestSummary?.content) {
-        const SUMMARY_HEADER =
-          "## 早期对话摘要（系统自动压缩,可能不完整,不要引用其中未确认的具体数字/代码细节）"
-        systemParts.unshift(`${SUMMARY_HEADER}\n${latestSummary.content}`)
-        console.log(
-          `[chat] injected summary (${latestSummary.content.length} chars, covered ${latestSummary.coveredMessages} msgs) for conv ${conversationId}`
-        )
-      }
-    } catch (err) {
-      console.error("[chat] Failed to inject summary:", err)
-    }
+  // 长上下文压缩(注入): 上方已摘除被覆盖的早期原文,这里把摘要注入 system 段,
+  // 模型无需原文也能接续早期上下文。仅本人会话才读取(信息泄露防护)。
+  if (compressionState?.content) {
+    const SUMMARY_HEADER =
+      "## 早期对话摘要（系统自动压缩,可能不完整,不要引用其中未确认的具体数字/代码细节）"
+    systemParts.unshift(`${SUMMARY_HEADER}\n${compressionState.content}`)
+    console.log(
+      `[chat] injected summary (${compressionState.content.length} chars, ` +
+        `dropped ${rawMessages.length - effectiveRawMessages.length} covered msgs) for conv ${conversationId}`
+    )
   }
 
   // Extract text from the last user message for persistence & memory relevance
@@ -532,6 +559,15 @@ export async function POST(req: NextRequest) {
     systemParts.push(MASK_TOOL_PROMPT)
   }
 
+  // 待办管理:非临时非对比模式注入 manage_todo 工具+规则段;
+  // 临时模式不注入(待办属长期数据,防污染),注入降级提示防虚构。
+  // 与 REST API(/api/todos,新标签页插件)共用 Todo 表,变更互通。
+  if (!isEphemeral && !groupId) {
+    systemParts.push(TODO_TOOL_PROMPT)
+  } else if (!groupId) {
+    systemParts.push(TODO_DISABLED_PROMPT)
+  }
+
   // Style prompt - 用 preset 渲染(新版)
   systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
 
@@ -571,12 +607,44 @@ export async function POST(req: NextRequest) {
       console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine '${engine}'`)
     }
   }
+
+  // 全文阅读工具(read_url):与联网搜索共用开关(同一“联网”意图),无需 Key。
+  // 只读工具,临时模式安全(与 knowledge 同理)。与 web_search 分工:
+  // 搜索回摘要,本工具读链接全文(HTML 正文/PDF 文字层,unpdf 已有依赖)。
+  // 关闭时物理不注入,改注入降级提示防虚构。
+  const urlReaderTool = webSearchEnabled ? createUrlReaderTool() : null
+  if (urlReaderTool) {
+    systemParts.push(URL_READER_TOOL_PROMPT)
+  } else if (!groupId) {
+    systemParts.push(URL_READER_DISABLED_PROMPT)
+  }
+
+  // MCP 外部工具:非临时非对比模式加载用户启用的 server(配置即全局生效)。
+  // 连接失败只记入 failures 随能力段注入降级提示,不阻塞主流程;
+  // 连接在 onFinish 统一 close(临时模式/对比模式根本不加载)。
+  let mcp: McpLoadResult | null = null
+  if (!isEphemeral && !groupId && mcpEnabled !== false) {
+    try {
+      mcp = await loadMcpToolsForUser(userId)
+      if (mcp.promptInfos.length > 0 || mcp.failures.length > 0) {
+        systemParts.push(buildMcpPromptSection(mcp.promptInfos, mcp.failures))
+      }
+      if (Object.keys(mcp.tools).length > 0) {
+        console.log(`[chat] MCP tools attached: ${Object.keys(mcp.tools).length} from ${mcp.clients.length} server(s)`)
+      }
+    } catch (err) {
+      console.error('[chat] Failed to load MCP tools:', err)
+    }
+  }
+  const mcpToolCount = mcp ? Object.keys(mcp.tools).length : 0
+
   // 澄清提问工具(无 execute:输出 tool call 后本轮流结束,等用户在前端卡片上回答)。
   // 对比模式不注入:多泳道各自触发澄清卡片会互相踩踏,v1 仅单聊启用。
   const clarifyTool = clarifyEnabled && !groupId ? createClarifyTool() : null
   const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
+  const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
 
   // 课本知识库检索(半绑定):用户名下有知识切块才注入(物理级闸门,无课本则工具不存在);
   // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
@@ -823,15 +891,18 @@ export async function POST(req: NextRequest) {
     model,
     messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
-    ...((searchTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool)
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
+            ...(mcpToolCount > 0 && mcp ? mcp.tools : {}),
+            ...(urlReaderTool ? { [URL_READER_TOOL_NAME]: urlReaderTool } : {}),
             ...(knowledgeTool ? { [KNOWLEDGE_TOOL_NAME]: knowledgeTool } : {}),
             ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
             ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
+            ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
           },
         }
       : {}),
@@ -869,6 +940,11 @@ export async function POST(req: NextRequest) {
       }
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {
+      // MCP 连接收尾:提前到最前,后续任何 early return 都不会泄漏连接
+      if (mcp && mcp.clients.length > 0) {
+        await closeMcpClients(mcp.clients)
+        mcp = null
+      }
       // 诊断日志:记录流异常结束,便于排查偶发"模型没思考"问题
       if (finishReason === 'length' || finishReason === 'error') {
         console.warn(

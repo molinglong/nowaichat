@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useEffect, useLayoutEffect, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses } from 'lucide-react'
@@ -36,6 +36,30 @@ interface ConversationsPage {
 }
 
 const PAGE_SIZE = 20
+
+/** 滚动到底自动续载哨兵:进入视口(含提前 240px 预载距离)即触发加载下一页,
+ * 替代旧的手动「加载更多」按钮,滚动连续无感;加载完成后哨兵仍在视口内会
+ * 自动续载下一页直到填满视口。 */
+function LoadMoreSentinel({ onVisible, loading }: { onVisible: () => void; loading: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) onVisible()
+      },
+      { rootMargin: '240px' }
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [onVisible])
+  return (
+    <div ref={ref} className="py-2 text-center text-[11px] text-content-muted/60">
+      {loading ? '加载中…' : ''}
+    </div>
+  )
+}
 
 async function fetchConversationsPage(ctx: {
   pageParam: number
@@ -601,13 +625,7 @@ export function Sidebar() {
                     )
                   })}
                   {hasMore && (
-                    <button
-                      onClick={handleLoadMore}
-                      disabled={loadingMore}
-                      className="w-full mt-1 px-3 py-1.5 rounded-lg text-xs text-content-muted hover:text-content-primary hover:bg-surface-subtle/60 transition-colors disabled:opacity-50"
-                    >
-                      {loadingMore ? '加载中…' : `加载更多 (${total - conversations.length} 条剩余)`}
-                    </button>
+                    <LoadMoreSentinel onVisible={handleLoadMore} loading={loadingMore} />
                   )}
                 </>
               )}

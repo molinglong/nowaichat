@@ -171,6 +171,42 @@ export async function loadLatestSummary(
 }
 
 /**
+ * 读取最新摘要与"已被摘要覆盖"的消息 id 集合。
+ *
+ * 覆盖范围 = 时间正序下 rangeEnd(含)之前的所有 user/assistant 消息:
+ * 更早的分代摘要已作为前置上下文合并进最新摘要,按最新 rangeEnd 一条线划清即可。
+ * rangeEnd 消息已不存在(编辑归档等)时返回 null,调用方保守回退为"全量发送/全量估算"。
+ */
+export async function loadCompressionState(
+  conversationId: string
+): Promise<{ content: string; coveredIds: Set<string> } | null> {
+  try {
+    const latest = await prisma.conversationSummary.findFirst({
+      where: { conversationId },
+      orderBy: { createdAt: "desc" },
+      select: { content: true, rangeEnd: true },
+    })
+    if (!latest?.content || !latest.rangeEnd) return null
+
+    // 只取 id 一列;按时间正序定位 rangeEnd 划线,避免逐条内容比对
+    const msgs = await prisma.message.findMany({
+      where: { conversationId, archived: false, role: { in: ["user", "assistant"] } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    })
+    const idx = msgs.findIndex((m) => m.id === latest.rangeEnd)
+    if (idx === -1) return null
+    return {
+      content: latest.content,
+      coveredIds: new Set(msgs.slice(0, idx + 1).map((m) => m.id)),
+    }
+  } catch (err) {
+    console.error("[compress] loadCompressionState failed:", err)
+    return null
+  }
+}
+
+/**
  * 把摘要注入到 messages 列表的最前面(作为一条 system 消息)。
  * 若已有 system 段,合到第一条 system 的 content 里;否则新增一条 system。
  */

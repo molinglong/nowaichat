@@ -10,7 +10,7 @@ import type { PluggableList } from 'unified'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { BookPlus, Check, ChevronDown, ChevronUp, Copy } from 'lucide-react'
-import { parseExamSegments, parseChoice, parseEssay, parseSourceRefLine, countEssayChars, essayToPlainText, type ExamKind, type ExamSourceRef } from '@/lib/ai/exam-markdown'
+import { parseExamSegments, parseChoice, parseEssay, parseTimeline, parseSourceRefLine, countEssayChars, essayToPlainText, type ExamKind, type ExamSourceRef, type ExamChoiceOption } from '@/lib/ai/exam-markdown'
 
 // 可视化熔断开关: 一行降级——出现渲染死循环/性能退化时改 false,
 // 全部消息回到纯文本渲染(两段式渲染的保险丝;历史坑: 流式重渲染 Maximum update depth)
@@ -204,13 +204,36 @@ function promoteStandaloneMath(md: string): string {
   return lines.join('\n')
 }
 
+/**
+ * LaTeX 原生定界符归一化: \(...\) → $...$、\[...\] → $$...$$
+ * 课本 chunk 与部分模型(GLM 系)用 \( \) 风格写公式,remarkMath 只认 $ 定界符——
+ * 不转换会整段漏渲染,且 \\ 换行被 markdown 转义吞成鬼画符;fenced code 内不处理
+ */
+function normalizeMathDelimiters(md: string): string {
+  if (!md.includes('\\(') && !md.includes('\\[')) return md
+  const segs = md.split(/(`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,})/g)
+  return segs
+    .map((seg, i) =>
+      i % 2 === 1
+        ? seg
+        : seg
+            .replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner) => `$${inner}$`)
+            .replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner) => `$$${inner}$$`),
+    )
+    .join('')
+}
+
 function RichSegment({ content, promote = true }: { content: string; promote?: boolean }) {
   // 插件数组引用固定(memo),避免父组件重渲染导致 ReactMarkdown 反复重新解析
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], [])
   const rehypePlugins = useMemo<PluggableList>(() => [[rehypeKatex, { throwOnError: false, strict: false }]], [])
-  // 内容稳定后才进富渲染,预处理只跑一次;promote=false 用于选择题选项/诗行等短文本行——
-  // 单行纯公式升级成块级卡片(math-card/katex-display)在正文里是美化,在选项里每个选项一张大卡是灾难
-  const promoted = useMemo(() => (promote ? promoteStandaloneMath(content) : content), [content, promote])
+  // 内容稳定后才进富渲染,预处理只跑一次;先归一化定界符再决定是否块级升级
+  // promote=false 用于选择题选项/诗行等短文本行——单行纯公式升级成块级卡片(math-card/katex-display)
+  // 在正文里是美化,在选项里每个选项一张大卡是灾难;定界符归一化对选项同样需要,不受 promote 开关影响
+  const promoted = useMemo(() => {
+    const normalized = normalizeMathDelimiters(content)
+    return promote ? promoteStandaloneMath(normalized) : normalized
+  }, [content, promote])
   return (
     <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={mdComponents}>
       {promoted}
@@ -218,16 +241,15 @@ function RichSegment({ content, promote = true }: { content: string; promote?: b
   )
 }
 
-const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', essay: '作文' }
+const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴' }
 
-/** 选择题分区: 题干 + 试卷式选项（长选项通栏，全部短选项时自动两列）；选项内高亮照常生效 */
-function ExamChoiceBody({ text }: { text: string }) {
-  const { stem, options } = useMemo(() => parseChoice(text), [text])
-  if (!options.length) return <RichSegment content={text} />
+/** 单组题面: 题干 + 试卷式选项（长选项通栏，全部短选项时自动两列）；选项内高亮照常生效 */
+function ChoiceGroupView({ stem, options }: { stem: string; options: ExamChoiceOption[] }) {
+  if (!options.length) return <RichSegment content={stem} />
   // 试卷排版启发: 短选项（如古文化常识/词语判断）两列更像卷面，长句选项通栏易读
   const twoCol = options.length > 2 && options.every((o) => o.text.length <= 14)
   return (
-    <>
+    <div className="exam-choice-group">
       {stem && <RichSegment content={stem} />}
       <div className={cn('exam-options', twoCol && 'exam-options-2col')}>
         {options.map((o) => (
@@ -239,6 +261,43 @@ function ExamChoiceBody({ text }: { text: string }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+/** 选择题块渲染: 单题直渲；模型把多题塞进一个块时（parseChoice 拆组成功）逐组渲染，组间虚线分隔 */
+function ExamChoiceBody({ text }: { text: string }) {
+  const { stem, options, groups } = useMemo(() => parseChoice(text), [text])
+  if (!options.length) return <RichSegment content={text} />
+  if (groups.length > 1) {
+    return groups.map((g, i) => <ChoiceGroupView key={i} stem={g.stem} options={g.options} />)
+  }
+  return <ChoiceGroupView stem={stem} options={options} />
+}
+
+/** 时间轴块分区: 左侧年份列+竖轴+节点事件流,行首 * 为关键节点(红点);
+ * 事件名/标题/尾注走行内高亮,说明行走 RichSegment(双色标注/行内公式照常生效) */
+function ExamTimelineBody({ text }: { text: string }) {
+  const { title, events, note } = useMemo(() => parseTimeline(text), [text])
+  return (
+    <>
+      {title && <div className="exam-timeline-title">{withInlineMarks(title)}</div>}
+      <div className="exam-timeline-body">
+        <div className="exam-timeline-axis" aria-hidden />
+        {events.map((ev, i) => (
+          <div key={i} className={cn('exam-timeline-item', ev.key && 'exam-timeline-item-key')}>
+            <span className="exam-timeline-year" aria-hidden>{ev.year}</span>
+            <span className="exam-timeline-node" aria-hidden />
+            <div className="exam-timeline-head">
+              {ev.era && <span className="exam-timeline-era">{ev.era}</span>}
+              <span className="exam-timeline-name">{withInlineMarks(ev.name)}</span>
+            </div>
+            {ev.desc && <div className="exam-timeline-desc"><RichSegment content={ev.desc} promote={false} /></div>}
+            {ev.src && <div className="exam-timeline-src">{ev.src}</div>}
+          </div>
+        ))}
+      </div>
+      {note && <div className="exam-timeline-note">{withInlineMarks(note)}</div>}
     </>
   )
 }
@@ -341,6 +400,9 @@ const SUBJECT_ENUM: Record<string, string> = {
   物理: 'physics',
   化学: 'chemistry',
   生物: 'biology',
+  历史: 'history',
+  政治: 'politics',
+  地理: 'geography',
 }
 
 /** 题卡右上角:出处徽标 + 收进题库(题块与紧邻答案块齐备才显示按钮);入库后变绿勾禁用 */
@@ -454,7 +516,9 @@ function ExamBlock({
       )}
       {kind === 'choice' ? (
         <ExamChoiceBody text={displayText} />
-      ) : kind === 'poem' ? (
+      ) : kind === 'timeline' ? (
+        <ExamTimelineBody text={text} />
+      ) : kind === 'poem' || kind === 'lyrics' ? (
         <ExamPoemBody text={text} />
       ) : kind === 'essay' ? (
         <ExamEssayBody text={text} />

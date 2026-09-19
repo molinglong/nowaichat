@@ -24,6 +24,7 @@ model User {
   customModels  CustomModel[]
   generatedImages GeneratedImage[]
   searchApiKeys  SearchApiKey[]
+  mcpServers     McpServer[]
   courses       Course[]
   providerModelOverrides ProviderModelOverride[]
   compareVotes  CompareVote[]
@@ -45,6 +46,8 @@ model User {
   studyNotes    StudyNote[]
   knowledgeDocs KnowledgeDoc[]
   questions      Question[]
+  todos         Todo[]
+  apiTokens     ApiToken[]
 }
 
 model Account {
@@ -345,6 +348,28 @@ model SearchApiKey {
   @@index([userId])
 }
 
+// MCP 远程服务（Web 端首期仅 HTTP/SSE 远程型,stdio 留给桌面端）。
+// 配置即全局生效:enabled 的 server 在聊天时自动注入其工具,
+// AI 按需调用;excludeTools 可按 server 屏蔽与内置工具重复的能力。
+model McpServer {
+  id                   String   @id @default(cuid())
+  userId               String
+  name                 String   // 显示名(如 "高德地图")
+  slug                 String   // 工具名前缀用,小写字母数字连字符
+  url                  String   // 远程 MCP 端点(https)
+  headerName           String?  // 自定义鉴权 Header 名(如 Authorization)
+  encryptedHeaderValue String?  // Header 值,复用 lib/crypto encrypt
+  excludeTools         String?  // JSON 数组:server 级排除的工具名(如 ["tavily-search"])
+  enabled              Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
 // 文件中转站:上传文件的元数据与解析结果。
 // 上传时即解析(PDF→文本 / 文本→全文),聊天发送时按 fileName 查本表取解析结果注入。
 // 生命周期与磁盘文件同步:未被消息引用且超时的记录随孤儿清理一起删除。
@@ -511,7 +536,7 @@ model Question {
   id         String   @id @default(cuid())
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subject    String   // math/chinese/english/physics/chemistry/biology/other
+  subject    String   // math/chinese/english/physics/chemistry/biology/history/politics/geography/other
   topic      String?  // 考点短语，如「相反数」「去括号」
   kind       String   // choice=选择题 answer=解答题
   stem       String   // 题干(选择题含选项，每行一项「A. …」)
@@ -523,4 +548,42 @@ model Question {
 
   @@index([userId, subject, createdAt])
   @@index([userId, topic])
+}
+
+// ===================== 待办(Todo) =====================
+// 轻量任务条目，供 AI 工具(manage_todo)与 REST API(/api/todos，新标签页插件等)共用，
+// 两边操作同一份数据，变更即时互通。
+// source 区分创建来源: manual=手动(页面/API) ai=AI 工具创建
+model Todo {
+  id        String    @id @default(cuid())
+  userId    String
+  content   String    // 待办内容，如「周五 交物理作业」
+  done      Boolean   @default(false)
+  doneAt    DateTime? // 完成时间(勾选时写入，展示/统计用)
+  dueAt     DateTime? // 截止/提醒时间(AI 从自然语言解析，如「周五」)；无明确时间时为空
+  source    String    @default("manual")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, done, createdAt])
+}
+
+// ===================== API 令牌(ApiToken) =====================
+// 供外部静态页面(新标签页 bento 等)以 Authorization: Bearer 方式调用 REST API，
+// 规避浏览器跨站 cookie 限制。明文仅生成时返回一次，库中只存 sha256 哈希；
+// revokedAt 软撤销(保留审计)，空=有效。
+model ApiToken {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String    @default("默认") // 展示名，如「新标签页」
+  tokenHash  String    @unique           // sha256(token) hex
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
 }

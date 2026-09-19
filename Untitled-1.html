@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史时间轴可视化 - aichatt 预览</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    h1 {
+      font-size: 28px;
+      color: #1a1a1a;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 14px;
+    }
+
+    /* Timeline 主容器 */
+    .timeline-wrapper {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+      padding: 40px;
+      position: relative;
+      overflow-x: auto;
+    }
+
+    .timeline-main {
+      position: relative;
+      padding-left: 120px;
+      min-width: 600px;
+    }
+
+    /* 左侧年份固定列 */
+    .timeline-years {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .year-marker {
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .year-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1a1a;
+      background: #f0f0f0;
+      padding: 4px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      z-index: 2;
+    }
+
+    .year-dot {
+      width: 12px;
+      height: 12px;
+      background: #ff6b6b;
+      border-radius: 50%;
+      position: absolute;
+      right: -6px;
+      z-index: 3;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    /* 垂直连线 */
+    .timeline-main::before {
+      content: '';
+      position: absolute;
+      left: 30px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, #ff6b6b, #4ecdc4, #45b7d1);
+      z-index: 1;
+    }
+
+    /* 事件块 */
+    .events-container {
+      position: relative;
+    }
+
+    .event-card {
+      display: flex;
+      align-items: stretch;
+      margin-bottom: 10px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .event-card:hover {
+      transform: translateX(5px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    }
+
+    .event-content {
+      background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+      border-left: 3px solid #4ecdc4;
+      padding: 16px;
+      border-radius: 0 8px 8px 0;
+      flex: 1;
+      position: relative;
+    }
+
+    .event-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .event-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .event-year-tag {
+      font-size: 12px;
+      color: #fff;
+      background: #1a1a1a;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      min-width: 80px;
+      text-align: center;
+    }
+
+    .event-description {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #555;
+    }
+
+    .event-meta {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #999;
+      font-style: italic;
+    }
+
+    /* 颜色分层 */
+    .event-card:nth-child(odd) .event-content {
+      border-left-color: #ff6b6b;
+      background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+    }
+
+    .event-card:nth-child(even) .event-content {
+      border-left-color: #4ecdc4;
+      background: linear-gradient(135deg, #f0ffff 0%, #ffffff 100%);
+    }
+
+    .event-card:nth-child(3n) .event-content {
+      border-left-color: #45b7d1;
+      background: linear-gradient(135deg, #e8f4f8 0%, #ffffff 100%);
+    }
+
+    /* 响应式 */
+    @media (max-width: 768px) {
+      body {
+        padding: 20px 10px;
+      }
+
+      .timeline-wrapper {
+        padding: 20px;
+      }
+
+      .timeline-main {
+        padding-left: 100px;
+      }
+
+      .timeline-years {
+        width: 100px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🏺 中国历史大事记</h1>
+      <p class="subtitle">以史家之眼讲历史 · aichatt 时间轴可视化预览</p>
+    </header>
+
+    <div class="timeline-wrapper">
+      <div class="timeline-main">
+        <!-- 左侧年份列 -->
+        <div class="timeline-years">
+          <div class="year-marker"><span class="year-label">公元前</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">秦</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">汉</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">唐</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">宋</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">明</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">清</span><div class="year-dot"></div></div>
+          <div class="year-marker"><span class="year-label">现代</span><div class="year-dot"></div></div>
+        </div>
+
+        <!-- 右侧事件流 -->
+        <div class="events-container">
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">孔子诞生</span>
+                <span class="event-year-tag">571 BC</span>
+              </div>
+              <p class="event-description">鲁国陬邑出生，儒家学派创始人。提出「仁者爱人」「有教无类」等核心思想。</p>
+              <div class="event-meta">出处：《史记·孔子世家》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">秦始皇统一六国</span>
+                <span class="event-year-tag">221 BC</span>
+              </div>
+              <p class="event-description">建立首个中央集权帝国。废分封行郡县、书同文车同轨、统一度量衡。</p>
+              <div class="event-meta">出处：《史记·秦始皇本纪》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">张骞出使西域</span>
+                <span class="event-year-tag">138 BC</span>
+              </div>
+              <p class="event-description">奉汉武帝之命联络大月氏，开辟丝绸之路。开启东西方文明交流。</p>
+              <div class="event-meta">出处：《汉书·张骞传》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">科举制正式确立</span>
+                <span class="event-year-tag">605 AD</span>
+              </div>
+              <p class="event-description">隋炀帝设进士科，以考试选拔官员。打破门阀垄断，影响中国千年选官制度。</p>
+              <div class="event-meta">出处：《隋书·文帝纪》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">活字印刷术发明</span>
+                <span class="event-year-tag">1040 AD</span>
+              </div>
+              <p class="event-description">北宋毕昇发明泥活字印刷技术。比欧洲古腾堡早约 400 年。</p>
+              <div class="event-meta">出处：《梦溪笔谈》卷十八</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">郑和下西洋</span>
+                <span class="event-year-tag">1405 AD</span>
+              </div>
+              <p class="event-description">率宝船队七次远航西太平洋与印度洋，最远达东非。</p>
+              <div class="event-meta">出处：《明史·郑和传》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">鸦片战争爆发</span>
+                <span class="event-year-tag">1840 AD</span>
+              </div>
+              <p class="event-description">英国发动侵略战争，清朝战败签订《南京条约》。近代史开端。</p>
+              <div class="event-meta">出处：《清史稿·宣宗纪》</div>
+            </div>
+          </div>
+
+          <div class="event-card">
+            <div class="event-content">
+              <div class="event-header">
+                <span class="event-title">中华人民共和国成立</span>
+                <span class="event-year-tag">1949 AD</span>
+              </div>
+              <p class="event-description">10 月 1 日开国大典。结束百年屈辱史，中国人民从此站起来。</p>
+              <div class="event-meta">出处：官方文献</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

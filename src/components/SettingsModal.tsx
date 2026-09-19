@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
@@ -16,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory/import-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
+import McpSettings from '@/components/settings/McpSettings'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
 
@@ -426,7 +427,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -455,12 +456,14 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'memory', label: '记忆', icon: Brain },
       { id: 'clarify', label: '澄清提问', icon: HelpCircle },
       { id: 'masks', label: '面具管理', icon: VenetianMask },
+      { id: 'mcp', label: 'MCP 工具', icon: Plug },
     ],
   },
   {
     title: '账户',
     items: [
       { id: 'account', label: '账号信息', icon: User },
+      { id: 'apitokens', label: 'API 令牌', icon: KeyRound },
       { id: 'usage', label: '用量统计', icon: BarChart3 },
     ],
   },
@@ -605,7 +608,6 @@ export function SettingsModal() {
   const [refCopied, setRefCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system')
-  const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(true)
 
   // 自定义模型：所有 state + handler 已抽离到 useCustomModels hook
   const {
@@ -1097,11 +1099,6 @@ export function SettingsModal() {
     setThemeChoice(stored === 'light' || stored === 'dark' ? stored : 'system')
   }, [])
 
-  // Init welcome dismissed state from localStorage (首次启动时显示)
-  useEffect(() => {
-    setWelcomeDismissed(localStorage.getItem('chat:welcomeDismissed') === '1')
-  }, [])
-
   // 生图设置自动保存：模型 + 尺寸变化时 PATCH
   useEffect(() => {
     if (!imageSettingsLoadedRef.current) return
@@ -1157,10 +1154,31 @@ export function SettingsModal() {
     }
   }
 
-  function dismissWelcome() {
-    setWelcomeDismissed(true)
-    localStorage.setItem('chat:welcomeDismissed', '1')
-  }
+  // ── 总览(仪表盘化)派生数据:全部来自已加载 state,零新增请求;随渲染重算,量级很小 ──
+  const ovChatDays = usageStats?.chat.byDay ?? []
+  const ovImgDays = usageStats?.image.byDay ?? []
+  const ovLast7 = ovChatDays.slice(-7)
+  const ovMaxChat = Math.max(...ovLast7.map((d) => d.totalTokens), 1)
+  // 生图按尾部对齐聊天天数(两组 byDay 理论上等长,防错位)
+  const ovMaxImg = Math.max(...ovLast7.map((_, i) => ovImgDays[ovImgDays.length - ovLast7.length + i]?.count ?? 0), 1)
+  const ovSum7 = ovLast7.reduce((s, d) => s + d.totalTokens, 0)
+  const ovTodayTok = ovLast7.length > 0 ? ovLast7[ovLast7.length - 1].totalTokens : 0
+  const ovYestTok = ovLast7.length > 1 ? ovLast7[ovLast7.length - 2].totalTokens : 0
+  const ovDeltaPct = ovYestTok > 0 ? Math.round(((ovTodayTok - ovYestTok) / ovYestTok) * 100) : null
+  const ovActiveDays = ovChatDays.reduce(
+    (acc, day, i) => acc + (day.totalTokens > 0 || (ovImgDays[i]?.count ?? 0) > 0 ? 1 : 0),
+    0
+  )
+  const ovTotalModels = providers.reduce((n, p) => n + p.models.length, 0)
+  const fmtTok = (n: number) => (n >= 10000 ? `${(n / 1000).toFixed(1)}K` : n.toLocaleString())
+  const ovGreeting = (() => {
+    const h = new Date().getHours()
+    return h < 6 ? '凌晨好' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好'
+  })()
+  const ovDateLabel = (() => {
+    const d = new Date()
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]}`
+  })()
 
   const getKeyForProvider = useCallback(
     (providerId: string) => keys.find((k) => k.provider === providerId),
@@ -2029,70 +2047,131 @@ export function SettingsModal() {
               </div>
             )}
 
-            {/* 总览 - 始终显示，不需要等 loading */}
+            {/* 总览(仪表盘化):问候行 + KPI + 7 天用量图 + 状态网格 + 快速操作;不等 loading,数据缺省为零值 */}
             {activeSection === 'overview' && !isEphemeral && (
               <div className="space-y-3">
-                {/* 欢迎卡片 - 首次启动时显示，用户关闭后记住状态 */}
-                {!welcomeDismissed && (
-                  <div className="relative rounded-xl border border-line/60 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5">
-                    <button
-                      onClick={dismissWelcome}
-                      className="absolute top-2 right-2 p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle/60 transition-colors"
-                      aria-label="关闭欢迎卡片"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                    <div className="flex items-start gap-3 pr-6">
-                      <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-5 h-5 text-accent" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-content-primary">欢迎使用八号产房</p>
-                        <p className="text-[11px] text-content-muted mt-0.5 leading-relaxed">
-                          在这里管理你的 AI 服务商、记忆设置和用量统计
-                        </p>
-                      </div>
+                {/* 问候行:合并原欢迎卡与账户卡 */}
+                {session?.user && (
+                  <div className="flex items-center gap-2.5 py-0.5">
+                    <div className="w-9 h-9 rounded-full bg-accent/20 flex items-center justify-center shrink-0 overflow-hidden">
+                      {session.user.image ? (
+                        <img
+                          src={session.user.image}
+                          alt={session.user.name ?? '用户'}
+                          className="w-full h-full rounded-full object-cover"
+                        />
+                      ) : (
+                        <User className="w-4 h-4 text-accent" />
+                      )}
                     </div>
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold text-content-primary leading-tight truncate">
+                        {ovGreeting}，{session.user.name ?? '用户'}
+                      </p>
+                      <p className="text-[11px] text-content-muted truncate">
+                        {ovDateLabel}
+                        {session.user.email ? ` · ${session.user.email}` : ''}
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleSignOut}
+                      className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      退出登录
+                    </button>
                   </div>
                 )}
 
-                {/* 账户信息 */}
-                {session?.user && (
-                  <div className="rounded-xl border border-line/60 bg-surface/60 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-9 h-9 rounded-full bg-accent/20 flex items-center justify-center shrink-0">
-                          {session.user.image ? (
-                            <img
-                              src={session.user.image}
-                              alt={session.user.name ?? '用户'}
-                              className="w-full h-full rounded-full object-cover"
-                            />
-                          ) : (
-                            <User className="w-4 h-4 text-accent" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-content-primary truncate">
-                            {session.user.name ?? '用户'}
-                          </p>
-                          <p className="text-[11px] text-content-muted truncate">
-                            {session.user.email}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleSignOut}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        退出登录
-                      </button>
-                    </div>
+                {/* KPI 行:今日 / 30 天 / 活跃天数 */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left">
+                    <p className="text-[10px] text-content-muted">今日 Token</p>
+                    <p className="text-[15px] font-semibold font-mono text-content-primary tabular-nums mt-1 leading-none">
+                      {loading ? '—' : fmtTok(ovTodayTok)}
+                    </p>
+                    <p className="text-[10px] text-content-muted mt-1.5">
+                      {ovDeltaPct === null ? '暂无对比' : `较昨日 ${ovDeltaPct > 0 ? '+' : ''}${ovDeltaPct}%`}
+                    </p>
                   </div>
-                )}
+                  <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left">
+                    <p className="text-[10px] text-content-muted">30 天 Token</p>
+                    <p className="text-[15px] font-semibold font-mono text-content-primary tabular-nums mt-1 leading-none">
+                      {loading ? '—' : fmtTok(usageStats?.chat.totals.totalTokens ?? 0)}
+                    </p>
+                    <p className="text-[10px] text-content-muted mt-1.5">
+                      {usageStats ? `${usageStats.chat.totals.messages.toLocaleString()} 条消息` : '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left">
+                    <p className="text-[10px] text-content-muted">活跃天数</p>
+                    <p className="text-[15px] font-semibold font-mono text-content-primary tabular-nums mt-1 leading-none">
+                      {loading ? '—' : `${ovActiveDays} 天`}
+                    </p>
+                    <p className="text-[10px] text-content-muted mt-1.5">近 30 天</p>
+                  </div>
+                </div>
+
+                {/* 最近 7 天用量:灰白系双柱(聊天=深灰/生图=浅灰),圆角与零值桩样式对齐用量统计页 */}
+                <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <p className="text-[11px] font-medium text-content-secondary text-left">最近 7 天用量</p>
+                    <span className="flex items-center gap-1 text-[10px] text-content-muted">
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent/70" />聊天
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px] text-content-muted">
+                      <span className="w-1.5 h-1.5 rounded-full bg-content-muted/50" />生图
+                    </span>
+                    <button
+                      onClick={() => setActiveSection('usage')}
+                      className="ml-auto text-[11px] font-medium text-accent hover:underline"
+                    >
+                      用量详情
+                    </button>
+                  </div>
+                  {loading || ovLast7.length === 0 ? (
+                    <p className="text-[11px] text-content-muted text-left py-4">暂无统计数据，发起对话后自动记录。</p>
+                  ) : (
+                    <>
+                      <div className="flex items-end gap-[3px] h-20">
+                        {ovLast7.map((d, i) => {
+                          const imgCount = ovImgDays[ovImgDays.length - ovLast7.length + i]?.count ?? 0
+                          return (
+                            <div
+                              key={d.date}
+                              className="flex-1 flex items-end justify-center gap-[2px] h-full group"
+                              title={`${d.date.slice(5)} · ${fmtTok(d.totalTokens)} tok · ${imgCount} 图`}
+                            >
+                              <div
+                                className={cn(
+                                  'flex-1 max-w-[14px] rounded-t-[3px] transition-colors',
+                                  d.totalTokens > 0 ? 'bg-accent/70 group-hover:bg-accent' : 'bg-surface-subtle/60'
+                                )}
+                                style={{
+                                  height: d.totalTokens > 0 ? `${Math.max((d.totalTokens / ovMaxChat) * 100, 4)}%` : '4px',
+                                }}
+                              />
+                              <div
+                                className={cn(
+                                  'flex-1 max-w-[14px] rounded-t-[3px] transition-colors',
+                                  imgCount > 0 ? 'bg-content-muted/50 group-hover:bg-content-muted' : 'bg-surface-subtle/60'
+                                )}
+                                style={{
+                                  height: imgCount > 0 ? `${Math.max((imgCount / ovMaxImg) * 100, 4)}%` : '4px',
+                                }}
+                              />
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between mt-1.5 text-[10px] text-content-muted font-mono">
+                        <span>{ovLast7[0].date.slice(5)}</span>
+                        <span>{fmtTok(ovSum7)} tok</span>
+                        <span>今天</span>
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 {/* 快捷状态卡片 */}
                 <div className="grid grid-cols-2 gap-2">
@@ -2109,12 +2188,12 @@ export function SettingsModal() {
                           ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
                           : 'bg-surface-subtle text-content-muted'
                       )}>
-                        {keys.length} 个
+                        {keys.length} 服务商
                       </span>
                     </div>
-                    <p className="text-xs font-medium text-content-primary">服务商</p>
+                    <p className="text-xs font-medium text-content-primary">服务商 API Key</p>
                     <p className="text-[10px] text-content-muted mt-0.5 truncate">
-                      {keys.length > 0 ? '已配置 API Key' : '点击配置'}
+                      {keys.length > 0 ? `${ovTotalModels} 个模型可用` : '点击配置'}
                     </p>
                   </button>
 
@@ -2130,25 +2209,45 @@ export function SettingsModal() {
                       </span>
                     </div>
                     <p className="text-xs font-medium text-content-primary">记忆</p>
-                    <p className="text-[10px] text-content-muted mt-0.5 truncate">
-                      {memoryEnabled ? '已开启' : '已关闭'}
-                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-[10px] text-content-muted truncate">
+                        {memoryEnabled ? '已开启' : '已关闭'}
+                      </p>
+                      {/* 卡片内开关:span 避免 button 嵌套;stopPropagation 防触发卡片跳转 */}
+                      <span
+                        role="switch"
+                        aria-checked={memoryEnabled}
+                        aria-label="记忆开关"
+                        onClick={(e) => { e.stopPropagation(); handleToggleMemory(!memoryEnabled) }}
+                        className={cn(
+                          'relative w-8 h-[18px] rounded-full transition-colors shrink-0 ml-auto cursor-pointer',
+                          memoryEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-white dark:bg-surface transition-transform',
+                            memoryEnabled && 'translate-x-[14px]'
+                          )}
+                        />
+                      </span>
+                    </div>
                   </button>
 
-                  {/* 用量统计 */}
+                  {/* 自定义模型 */}
                   <button
-                    onClick={() => setActiveSection('usage')}
+                    onClick={() => setActiveSection('models')}
                     className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors group"
                   >
                     <div className="flex items-center justify-between mb-1.5">
-                      <BarChart3 className="w-4 h-4 text-emerald-500" />
+                      <Cpu className="w-4 h-4 text-blue-500" />
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-surface-subtle text-content-muted">
-                        {loading ? '...' : (usageStats ? usageStats.chat.totals.totalTokens.toLocaleString() : '0')}
+                        {customModels.length} 个
                       </span>
                     </div>
-                    <p className="text-xs font-medium text-content-primary">用量统计</p>
+                    <p className="text-xs font-medium text-content-primary">自定义模型</p>
                     <p className="text-[10px] text-content-muted mt-0.5 truncate">
-                      Token 消耗
+                      {customModels.length > 0 ? '全部可用' : '点击添加'}
                     </p>
                   </button>
 
@@ -2165,7 +2264,7 @@ export function SettingsModal() {
                     </div>
                     <p className="text-xs font-medium text-content-primary">外观</p>
                     <p className="text-[10px] text-content-muted mt-0.5 truncate">
-                      主题设置
+                      浅色 · 深色 · 跟随系统
                     </p>
                   </button>
                 </div>
@@ -2181,22 +2280,16 @@ export function SettingsModal() {
                       <Plus className="w-3 h-3" /> 添加服务商
                     </button>
                     <button
-                      onClick={() => setActiveSection('models')}
-                      className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
-                    >
-                      <Cpu className="w-3 h-3" /> 自定义模型
-                    </button>
-                    <button
                       onClick={() => setActiveSection('memory')}
                       className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
-                      <Brain className="w-3 h-3" /> 管理记忆
+                      <Plus className="w-3 h-3" /> 新建记忆
                     </button>
                     <button
-                      onClick={() => setActiveSection('usage')}
+                      onClick={() => setActiveSection('masks')}
                       className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
-                      <BarChart3 className="w-3 h-3" /> 查看用量
+                      <VenetianMask className="w-3 h-3" /> 面具库
                     </button>
                   </div>
                 </div>
@@ -2719,6 +2812,8 @@ export function SettingsModal() {
 
                 {/* 服务商 */}
                 {activeSection === 'masks' && <MasksSettings />}
+
+                {activeSection === 'mcp' && <McpSettings />}
 
                 {activeSection === 'providers' && (
                   <div className="space-y-3">
@@ -3404,6 +3499,9 @@ export function SettingsModal() {
                 )}
 
                 {/* 账号信息 */}
+                {/* API 令牌(外部静态页 Bearer 调用凭证) */}
+                {activeSection === 'apitokens' && <ApiTokensSection />}
+
                 {activeSection === 'account' && (
                   <div className="space-y-3 text-left">
                     {/* 用户卡片 */}
@@ -4954,6 +5052,180 @@ function PresetModelsManager({
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// ============ API 令牌(外部静态页 Bearer 调用凭证) ============
+// 供新标签页(bento)等本地静态页以 Authorization: Bearer 调用待办/快问等 REST API。
+// 明文仅创建响应中返回一次,库中只存哈希;撤销为软删除(保留审计)。
+
+interface ApiTokenRow {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt: string | null
+  revokedAt: string | null
+}
+
+function ApiTokensSection() {
+  const [tokens, setTokens] = useState<ApiTokenRow[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [plaintext, setPlaintext] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tokens')
+      if (!res.ok) throw new Error('load failed')
+      const data = await res.json()
+      setTokens(data.tokens ?? [])
+    } catch {
+      toast.error('令牌列表加载失败')
+      setTokens([])
+    }
+  }, [])
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const createToken = async () => {
+    setBusy(true)
+    try {
+      const res = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '新标签页' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : '生成失败')
+      setPlaintext(data.token as string)
+      setCopied(false)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '生成失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const revokeToken = async (id: string) => {
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/tokens?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(typeof d.error === 'string' ? d.error : '撤销失败')
+      }
+      toast.success('令牌已撤销')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '撤销失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyPlaintext = async () => {
+    if (!plaintext) return
+    try {
+      await navigator.clipboard.writeText(plaintext)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // 剪贴板不可用时静默,用户可手动选中复制
+    }
+  }
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+
+  return (
+    <div className="space-y-3 text-left">
+      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs text-content-secondary">API 令牌</p>
+            <p className="text-[11px] text-content-muted">供新标签页等本地静态页以 Bearer Token 调用待办/快问 API,无需浏览器登录态</p>
+          </div>
+          <button
+            type="button"
+            onClick={createToken}
+            disabled={busy}
+            className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-50 shrink-0"
+          >
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+            生成令牌
+          </button>
+        </div>
+
+        {/* 明文一次性展示卡 */}
+        {plaintext && (
+          <div className="rounded-lg border border-accent/40 bg-accent/5 px-2.5 py-2.5 space-y-2">
+            <p className="text-[11px] text-content-secondary font-medium">令牌已生成 — 仅此一次显示,请立即复制保存</p>
+            <div className="flex items-center gap-1.5">
+              <code className="flex-1 min-w-0 truncate text-[11px] font-mono bg-surface-muted/70 rounded px-2 py-1.5 text-content-secondary">{plaintext}</code>
+              <button
+                type="button"
+                onClick={copyPlaintext}
+                title="复制"
+                className="p-1.5 rounded-md hover:bg-surface-muted/70 text-content-secondary shrink-0"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-accent" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPlaintext(null)}
+              className="text-[11px] text-content-muted hover:text-content-secondary"
+            >
+              我已保存,关闭
+            </button>
+          </div>
+        )}
+
+        {/* 令牌列表 */}
+        <div className="space-y-1.5">
+          {tokens === null ? (
+            <p className="text-[11px] text-content-muted py-1">加载中…</p>
+          ) : tokens.length === 0 ? (
+            <p className="text-[11px] text-content-muted py-1">还没有令牌,点击上方「生成令牌」创建</p>
+          ) : (
+            tokens.map((t) => (
+              <div key={t.id} className="flex items-center justify-between gap-2 rounded-lg bg-surface-muted/50 px-2.5 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs text-content-secondary truncate">
+                    {t.name}
+                    <span className={cn('ml-2 text-[11px]', t.revokedAt ? 'text-content-muted line-through' : 'text-accent')}>
+                      {t.revokedAt ? '已撤销' : '有效'}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-content-muted">
+                    创建 {fmtDate(t.createdAt)}
+                    {t.lastUsedAt ? ` · 最近使用 ${fmtDate(t.lastUsedAt)}` : ''}
+                  </p>
+                </div>
+                {!t.revokedAt && (
+                  <button
+                    type="button"
+                    onClick={() => revokeToken(t.id)}
+                    disabled={busy}
+                    title="撤销令牌(外部页将立即失效)"
+                    className="p-1.5 rounded-md hover:bg-surface-muted/70 text-content-muted hover:text-red-500 disabled:opacity-50 shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   )

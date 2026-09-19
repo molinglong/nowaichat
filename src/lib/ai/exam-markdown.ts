@@ -6,12 +6,15 @@
  *   :::question …（设问+分值）… :::
  *   :::answer …（分点作答）… :::
  *   :::poem …（诗歌原文，一句一行）… :::
+ *   :::lyrics …（歌词原文，一句一行，渲染同诗块但标签为「歌词」）… :::
  *   :::essay …（作文纸：首行标题，正文段落，末行「全文约 X 字」）… :::
+ *   :::timeline …（时间轴：首行可选标题，每行「年份｜朝代｜事件｜一句话｜出处」，行首 * = 关键节点）… :::
+ *   出处行「参考 xx·科目」支持各学科面具：数学/语文/英语/物理/化学/生物/历史/政治/地理
  * 解析为片段流后由 MarkdownRenderer 分别渲染成试卷卡片；
  * 关键词双色标注（==术语== / @@材料词@@）在渲染层处理，见 MarkdownRenderer.tsx。
  */
 
-export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'essay'
+export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'lyrics' | 'essay' | 'timeline'
 
 export type ExamSegment =
   | { type: 'md'; text: string }
@@ -23,34 +26,80 @@ export interface ExamChoiceOption {
   text: string
 }
 
+export interface ExamChoiceGroup {
+  /** 单题题干 */
+  stem: string
+  options: ExamChoiceOption[]
+}
+
 export interface ExamChoice {
   stem: string
   options: ExamChoiceOption[]
+  /** 一块多题兜底拆组：模型把多题塞进一个块时按题拆分（题号行数与「A」重现次数对齐才拆）；单题时为空数组 */
+  groups: ExamChoiceGroup[]
 }
 
 /** 选项行：A. / A、 / A． / A: 等前缀（允许首尾空白），内容非空才算选项 */
 const CHOICE_OPTION_RE = /^\s*([A-Fa-f])[.、．:：]\s*(.+)$/
 
-const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|essay)\s*$/
+/** 题号行：1. / 1、 / 1) 等前缀（数字后紧跟分隔符，避免误伤「755 年乱起」类正文） */
+const QUESTION_NO_RE = /^\s*\d{1,3}[.、．)]\s*(\S.*)$/
+
+const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|lyrics|essay|timeline)(?:\s+(.*?))?\s*$/
 const EXAM_CLOSE_RE = /^:::\s*$/
 
 /**
  * 选择题块内解析：题干与选项分离。
  * 以「A.」等前缀的行识别为选项（字母统一大写），其余行归入题干；
  * 选项内容不连续（中间夹空行）也能正确归组。
+ * 多题兜底：模型偶尔把多题塞进一个块（题干连排+选项连排/交替），
+ * 题号行数与「A」选项重现次数对齐（都 ≥2）时按题拆组；对不齐一律退回单组，不吞内容。
  */
 export function parseChoice(text: string): ExamChoice {
-  const stem: string[] = []
+  const lines = text.split('\n')
+  const stemLines: string[] = []
   const options: ExamChoiceOption[] = []
-  for (const line of text.split('\n')) {
-    const m = line.match(CHOICE_OPTION_RE)
-    if (m) {
-      options.push({ letter: m[1].toUpperCase(), text: m[2].trim() })
-    } else {
-      stem.push(line)
+  const noRows: { text: string; idx: number }[] = []
+  const optRows: ({ letter: string; text: string; idx: number })[] = []
+  const plainRows: { text: string; idx: number }[] = []
+  lines.forEach((line, idx) => {
+    const om = line.match(CHOICE_OPTION_RE)
+    if (om) {
+      const opt = { letter: om[1].toUpperCase(), text: om[2].trim() }
+      options.push(opt)
+      optRows.push({ ...opt, idx })
+      return
     }
+    stemLines.push(line)
+    const qm = line.match(QUESTION_NO_RE)
+    if (qm) noRows.push({ text: qm[2].trim(), idx })
+    else plainRows.push({ text: line, idx })
+  })
+  const base: ExamChoice = { stem: stemLines.join('\n').trim(), options, groups: [] }
+
+  if (noRows.length < 2 || optRows.length < 4) return base
+  const optGroups: typeof optRows[] = []
+  for (const r of optRows) {
+    if (r.letter === 'A' || optGroups.length === 0) optGroups.push([r])
+    else optGroups[optGroups.length - 1].push(r)
   }
-  return { stem: stem.join('\n').trim(), options }
+  if (optGroups.length !== noRows.length) return base
+
+  // 非题干非选项的普通行（说明/空行）：归属 idx 前最近的题号行；首题之前归前言拼入第一组
+  const groupNotes: string[][] = noRows.map(() => [])
+  const prefix: string[] = []
+  let cursor = 0
+  for (const p of plainRows) {
+    while (cursor < noRows.length && noRows[cursor].idx < p.idx) cursor++
+    ;(cursor === 0 ? prefix : groupNotes[cursor - 1]).push(p.text)
+  }
+  const groups: ExamChoiceGroup[] = noRows.map((n, i) => ({
+    stem: [i === 0 && prefix.length ? prefix.join('\n').trim() : '', n.text, groupNotes[i].join('\n').trim()]
+      .filter(Boolean)
+      .join('\n\n'),
+    options: optGroups[i].map((r) => ({ letter: r.letter, text: r.text })),
+  }))
+  return { ...base, groups }
 }
 
 export interface ExamEssay {
@@ -105,6 +154,62 @@ export function essayToPlainText(title: string, body: string): string {
   return (title + '\n\n' + body).replace(/(==+|@@+|\*{2,}|~{2,})/g, '')
 }
 
+export interface ExamTimelineEvent {
+  /** 左侧年份列（如 605 / 前221 / 1905） */
+  year: string
+  /** 朝代/时期徽标（如 隋）；可空 */
+  era: string
+  /** 事件名 */
+  name: string
+  /** 一句话说明；可空 */
+  desc: string
+  /** 出处（如《史记·秦始皇本纪》）；可空 */
+  src: string
+  /** 行首 * 标记的关键节点（渲染为红点） */
+  key: boolean
+}
+
+export interface ExamTimeline {
+  /** 首行标题（可选） */
+  title: string
+  events: ExamTimelineEvent[]
+  /** 未匹配事件行的其余行（尾注，不吞内容） */
+  note: string
+}
+
+/**
+ * 时间轴块内解析：不含分隔符的首行作标题，其余按「年份｜朝代｜事件｜一句话｜出处」
+ * 切分（全角/半角竖线均可，至少 3 段且年份/事件名非空）；行首 * 标记关键节点。
+ * 缺段留空，非事件行入尾注，不吞内容；流式期间逐次重算即可（幂等无状态）。
+ */
+export function parseTimeline(text: string): ExamTimeline {
+  const events: ExamTimelineEvent[] = []
+  const noteBuf: string[] = []
+  let title = ''
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const key = line.startsWith('*')
+    const body = key ? line.slice(1).trim() : line
+    const parts = body.split(/[｜|]/).map((p) => p.trim())
+    if (parts.length >= 3 && parts[0] && parts[2]) {
+      events.push({
+        year: parts[0],
+        era: parts[1] ?? '',
+        name: parts[2],
+        desc: parts[3] ?? '',
+        src: parts[4] ?? '',
+        key,
+      })
+      continue
+    }
+    // 非事件行：首个且尚无事件时当标题，其余入尾注
+    if (!title && !events.length) title = line
+    else noteBuf.push(line)
+  }
+  return { title, events, note: noteBuf.join('\n') }
+}
+
 export interface ExamSourceRef {
   /** 出处定位，如「§1.2.3 例3(2)」（不含「参考」前缀与科目标签） */
   ref: string
@@ -112,8 +217,8 @@ export interface ExamSourceRef {
   subject: string | null
 }
 
-/** 出题协议出处行：块内首行「参考 §1.2.3 例3(2)·数学」（科目标签可选） */
-const SOURCE_REF_RE = /^\s*参考[::\s]*([^·]+?)(?:\s*·\s*(数学|语文|英语|物理|化学|生物))?\s*$/
+/** 出题协议出处行：块内首行「参考 §1.2.3 例3(2)·数学」（科目标签可选，覆盖各学科面具） */
+const SOURCE_REF_RE = /^\s*参考[::\s]*([^·]+?)(?:\s*·\s*(数学|语文|英语|物理|化学|生物|历史|政治|地理))?\s*$/
 
 const REF_SUBJECT_MAP: Record<string, string> = {
   数学: 'math',
@@ -122,6 +227,9 @@ const REF_SUBJECT_MAP: Record<string, string> = {
   物理: 'physics',
   化学: 'chemistry',
   生物: 'biology',
+  历史: 'history',
+  政治: 'politics',
+  地理: 'geography',
 }
 
 /**
@@ -150,6 +258,10 @@ export function parseSourceRefLine(text: string): { sourceRef: ExamSourceRef | n
  * 按 ::: 块切分 markdown 为片段流；无 ::: 时单段返回（渲染路径与旧版一致）。
  * - fenced code 内的 ::: 不识别（代码示例不误伤）
  * - 未闭合块兜底回普通文本（连 ::: 开行一起还原），不吞内容
+ * - 开标记行尾允许携带余料（如模型把出处写成「:::choice 参考 §x.x·数学」），
+ *   余料作块内首行交给块内解析器（choice 的出处行剥离/timeline 的标题行），历史消息同样救回
+ * - 闭合容错: 模型常把闭合「:::」与块内末行写在同一行（如「…让我这样吧 :::」），
+ *   旧约定下永不闭合、整块兜底回纯文本；行尾恰好是 ::: 且前面仍有内容时拆开入块再闭合
  */
 export function parseExamSegments(md: string): ExamSegment[] {
   if (!md.includes(':::')) return [{ type: 'md', text: md }]
@@ -165,6 +277,12 @@ export function parseExamSegments(md: string): ExamSegment[] {
       segments.push({ type: 'md', text: mdBuf.join('\n') })
       mdBuf = []
     }
+  }
+  const closeExam = () => {
+    if (!examKind) return
+    segments.push({ type: 'exam', kind: examKind, text: examBuf.join('\n') })
+    examBuf = []
+    examKind = null
   }
   for (const line of md.split('\n')) {
     const fence = line.trim().match(/^(`{3,}|~{3,})/)
@@ -188,15 +306,24 @@ export function parseExamSegments(md: string): ExamSegment[] {
       if (open) {
         flushMd()
         examKind = open[1] as ExamKind
+        // 开标记行内余料（如「:::choice 参考 §x.x·数学」）作块内首行，不吞内容
+        const inline = (open[2] ?? '').trim()
+        if (inline) examBuf.push(inline)
       } else {
         mdBuf.push(line)
       }
     } else if (EXAM_CLOSE_RE.test(line)) {
-      segments.push({ type: 'exam', kind: examKind, text: examBuf.join('\n') })
-      examBuf = []
-      examKind = null
+      closeExam()
     } else {
-      examBuf.push(line)
+      // 尾随闭合容错: 行尾恰好是「:::」且前面仍有内容时，拆开入块再闭合（见顶部注释）
+      const trimmed = line.trimEnd()
+      const content = trimmed.endsWith(':::') ? trimmed.slice(0, -3).trimEnd() : ''
+      if (content.trim()) {
+        examBuf.push(content)
+        closeExam()
+      } else {
+        examBuf.push(line)
+      }
     }
   }
   if (examKind) mdBuf.push(`:::${examKind}`, ...examBuf)

@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import { MaskPickerMenu } from './MaskPickerMenu'
+import { McpToolMenu } from './McpToolMenu'
 import { ActivityHeatmap } from './ActivityHeatmap'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
@@ -27,6 +28,10 @@ export interface ChatInputProps {
   webSearch?: boolean
   onWebSearchChange?: (enabled: boolean) => void
   webSearchAvailable?: boolean
+  /** MCP 外部工具。用户名下有启用的 MCP server 时才显示开关。 */
+  mcpEnabled?: boolean
+  onMcpEnabledChange?: (enabled: boolean) => void
+  mcpAvailable?: boolean
   // 对比模式
   compareMode?: boolean
   compareModeAvailable?: boolean
@@ -68,6 +73,9 @@ export function ChatInput({
   webSearch = false,
   onWebSearchChange,
   webSearchAvailable = false,
+  mcpEnabled = true,
+  onMcpEnabledChange,
+  mcpAvailable = false,
   compareMode = false,
   compareModeAvailable = false,
   onCompareModeChange,
@@ -91,6 +99,8 @@ export function ChatInput({
   const [isMultiline, setIsMultiline] = useState(false)
   // 仅 welcome 变体使用:面具胶囊菜单开合
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
+  // MCP 工具下拉菜单开合(总开关+逐工具开关)
+  const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // welcome 多行态 textarea 专用 ref(单行/standard 共用 textareaRef,不与多行混用)
   const multilineRef = useRef<HTMLTextAreaElement>(null)
@@ -208,6 +218,8 @@ export function ChatInput({
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // IME 组合态(拼音选词中)不触发发送;Safari 组合结束帧 isComposing 已翻转但 keyCode 仍为 229,一并拦截
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSendDebounced()
@@ -316,6 +328,166 @@ export function ChatInput({
     if (!compareModels || !onCompareModelsChange || compareModels.length <= 2) return
     onCompareModelsChange(compareModels.filter((_, i) => i !== index))
   }
+
+  // ============= 共享胶囊行 =============
+  // welcome(新对话页)与 standard(会话页底部)共用:上传/对比/深度思考/智能搜索/MCP 工具/面具。
+  // 面具菜单弹出方向随变体:welcome 在页面中部向下弹,standard 贴屏幕底部向上弹。
+  // 胶囊样式随变体:welcome 大号带边框;standard 紧凑无边框(与底栏模型选择器同款)
+  const pillSize = variant === 'welcome' ? 'h-8 px-3.5 text-xs border' : 'h-7 px-2.5 text-[11px]'
+  const pillIdle = variant === 'welcome'
+    ? 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong'
+    : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary'
+  const pillActive = variant === 'welcome'
+    ? 'bg-accent text-accent-foreground border-transparent'
+    : 'bg-accent text-accent-foreground'
+  const pillRow = (
+    <div className="flex items-center justify-center gap-2 mt-3">
+            <FileUpload
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
+              disabled={isLoading}
+              hideAttachmentsPreview
+              variant="pill"
+              pillClassName={variant === 'welcome'
+                ? undefined
+                : 'h-7 px-2.5 text-[11px] border-0 bg-surface-muted text-content-secondary hover:bg-surface-subtle hover:text-content-secondary'}
+            />
+            {compareModeAvailable && onCompareModeChange && (
+              <button
+                onClick={() => onCompareModeChange(!compareMode)}
+                disabled={isLoading}
+                className={cn(
+                  'hidden md:inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
+                  pillSize,
+                  compareMode ? pillActive : pillIdle,
+                  isLoading && 'opacity-50 cursor-not-allowed'
+                )}
+                title="对比模式"
+                aria-label="对比模式"
+                aria-pressed={compareMode}
+              >
+                <Columns2 className="w-3.5 h-3.5" />
+                对比
+              </button>
+            )}
+            {/* 深度思考开关胶囊: 与模型选择器菜单里的开关同源(deepThink 状态) */}
+            <button
+              onClick={() => onDeepThinkChange(!deepThink)}
+              disabled={isLoading}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
+                pillSize,
+                deepThink ? pillActive : pillIdle,
+                isLoading && 'opacity-50 cursor-not-allowed'
+              )}
+              title="深度思考(推理增强)"
+              aria-label="深度思考"
+              aria-pressed={deepThink}
+            >
+              <Brain className="w-3.5 h-3.5" />
+              深度思考
+            </button>
+            {/* 智能搜索开关胶囊: 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
+            {webSearchAvailable && onWebSearchChange && (
+              <button
+                onClick={() => onWebSearchChange(!webSearch)}
+                disabled={isLoading}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
+                  pillSize,
+                  webSearch ? pillActive : pillIdle,
+                  isLoading && 'opacity-50 cursor-not-allowed'
+                )}
+                title="智能搜索(联网检索)"
+                aria-label="智能搜索"
+                aria-pressed={webSearch}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                智能搜索
+              </button>
+            )}
+            {/* MCP 工具胶囊: 用户名下有启用的 MCP server 时才显示(与设置页共享 query 缓存);
+                点击弹出工具菜单:顶部会话总开关 + 按 server 分组的逐工具开关 */}
+            {mcpAvailable && onMcpEnabledChange && (
+              <div className="relative shrink-0">
+                <button
+                  onClick={() => setMcpMenuOpen((v) => !v)}
+                  disabled={isLoading}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors',
+                    pillSize,
+                    mcpEnabled ? pillActive : pillIdle,
+                    isLoading && 'opacity-50 cursor-not-allowed'
+                  )}
+                  title="MCP 外部工具(点击管理工具开关)"
+                  aria-label="MCP 工具"
+                  aria-haspopup="menu"
+                  aria-expanded={mcpMenuOpen}
+                  aria-pressed={mcpEnabled}
+                >
+                  <Plug className="w-3.5 h-3.5" />
+                  MCP 工具
+                </button>
+                {mcpMenuOpen && (
+                  <McpToolMenu
+                    mcpEnabled={mcpEnabled}
+                    onMcpEnabledChange={onMcpEnabledChange}
+                    onClose={() => setMcpMenuOpen(false)}
+                  />
+                )}
+              </div>
+            )}
+            {/* 面具胶囊: 未使用时显示入口,使用中反色显示 avatar + 名称 */}
+            {onMaskChange && (
+              <div className="relative">
+                <button
+                  onClick={() => setMaskMenuOpen((v) => !v)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
+                    pillSize,
+                    mask ? pillActive : pillIdle
+                  )}
+                  title={mask ? '当前面具,点击切换' : '选择面具'}
+                  aria-label="选择面具"
+                  aria-haspopup="menu"
+                  aria-expanded={maskMenuOpen}
+                >
+                  {mask ? (
+                    <>
+                      <span aria-hidden>{mask.avatar}</span>
+                      <span className="max-w-[96px] truncate">{mask.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Drama className="w-3.5 h-3.5" aria-hidden />
+                      面具
+                    </>
+                  )}
+                </button>
+                {maskMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+                    <div
+                      className={cn(
+                        'absolute left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5',
+                        variant === 'welcome' ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
+                      )}
+                      role="menu"
+                    >
+                      <MaskPickerMenu
+                        activeMaskId={mask?.id ?? null}
+                        userMasks={userMasks}
+                        onSelect={(id) => { onMaskChange(id); setMaskMenuOpen(false) }}
+                        onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+                        onClear={() => { onMaskChange(null); setMaskMenuOpen(false) }}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+    </div>
+  )
 
   // ============= WELCOME VARIANT =============
   if (variant === 'welcome') {
@@ -542,121 +714,8 @@ export function ChatInput({
             </div>
           </div>
 
-          {/* 输入框下方胶囊行: 上传 / 对比统一入口(单行、多行态均可见) */}
-          <div className="flex items-center justify-center gap-2 mt-3">
-            <FileUpload
-              attachments={attachments}
-              onAttachmentsChange={setAttachments}
-              disabled={isLoading}
-              hideAttachmentsPreview
-              variant="pill"
-            />
-            {compareModeAvailable && onCompareModeChange && (
-              <button
-                onClick={() => onCompareModeChange(!compareMode)}
-                disabled={isLoading}
-                className={cn(
-                  'hidden md:inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
-                  compareMode
-                    ? 'bg-accent text-accent-foreground border-transparent'
-                    : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
-                  isLoading && 'opacity-50 cursor-not-allowed'
-                )}
-                title="对比模式"
-                aria-label="对比模式"
-                aria-pressed={compareMode}
-              >
-                <Columns2 className="w-3.5 h-3.5" />
-                对比
-              </button>
-            )}
-            {/* 深度思考开关胶囊: 与模型选择器菜单里的开关同源(deepThink 状态) */}
-            <button
-              onClick={() => onDeepThinkChange(!deepThink)}
-              disabled={isLoading}
-              className={cn(
-                'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
-                deepThink
-                  ? 'bg-accent text-accent-foreground border-transparent'
-                  : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
-                isLoading && 'opacity-50 cursor-not-allowed'
-              )}
-              title="深度思考(推理增强)"
-              aria-label="深度思考"
-              aria-pressed={deepThink}
-            >
-              <Brain className="w-3.5 h-3.5" />
-              深度思考
-            </button>
-            {/* 智能搜索开关胶囊: 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
-            {webSearchAvailable && onWebSearchChange && (
-              <button
-                onClick={() => onWebSearchChange(!webSearch)}
-                disabled={isLoading}
-                className={cn(
-                  'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full border text-xs font-medium transition-colors shrink-0',
-                  webSearch
-                    ? 'bg-accent text-accent-foreground border-transparent'
-                    : 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong',
-                  isLoading && 'opacity-50 cursor-not-allowed'
-                )}
-                title="智能搜索(联网检索)"
-                aria-label="智能搜索"
-                aria-pressed={webSearch}
-              >
-                <Globe className="w-3.5 h-3.5" />
-                智能搜索
-              </button>
-            )}
-            {/* 面具胶囊: 未使用时显示入口,使用中反色显示 avatar + 名称 */}
-            {onMaskChange && (
-              <div className="relative">
-                <button
-                  onClick={() => setMaskMenuOpen((v) => !v)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full text-xs font-medium transition-colors shrink-0',
-                    mask
-                      ? 'bg-accent text-accent-foreground border border-transparent'
-                      : 'border border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong'
-                  )}
-                  title={mask ? '当前面具,点击切换' : '选择面具'}
-                  aria-label="选择面具"
-                  aria-haspopup="menu"
-                  aria-expanded={maskMenuOpen}
-                >
-                  {mask ? (
-                    <>
-                      <span aria-hidden>{mask.avatar}</span>
-                      <span className="max-w-[96px] truncate">{mask.name}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Drama className="w-3.5 h-3.5" aria-hidden />
-                      面具
-                    </>
-                  )}
-                </button>
-                {maskMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
-                    <div
-                      className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-50 w-64 max-h-80 overflow-y-auto
-                        rounded-xl border border-line bg-surface shadow-lg py-1.5"
-                      role="menu"
-                    >
-                      <MaskPickerMenu
-                        activeMaskId={mask?.id ?? null}
-                        userMasks={userMasks}
-                        onSelect={(id) => { onMaskChange(id); setMaskMenuOpen(false) }}
-                        onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
-                        onClear={() => { onMaskChange(null); setMaskMenuOpen(false) }}
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          {/* 输入框下方胶囊行(共享 pillRow): 上传/对比/深度思考/智能搜索/MCP 工具/面具 */}
+          {pillRow}
           {/* 活跃度热力图：胶囊行下方居中 */}
           <div className="mt-2">
             <ActivityHeatmap />
@@ -887,37 +946,9 @@ export function ChatInput({
             </div>
           )}
 
-          {/* Bottom controls row */}
-          <div className="flex items-center justify-between px-3 pb-2 pt-1.5">
-            {/* Left: attachment + compare mode toggle */}
-            <div className="flex items-center gap-1">
-              <FileUpload
-                attachments={attachments}
-                onAttachmentsChange={setAttachments}
-                disabled={isLoading}
-                hideAttachmentsPreview
-              />
-              {compareModeAvailable && onCompareModeChange && (
-                <button
-                  onClick={() => onCompareModeChange(!compareMode)}
-                  disabled={isLoading}
-                  className={cn(
-                    'hidden md:inline-flex items-center h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors',
-                    compareMode
-                      ? 'bg-accent text-accent-foreground'
-                      : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
-                    isLoading && 'opacity-50 cursor-not-allowed'
-                  )}
-                  title="对比模式"
-                  aria-label="对比模式"
-                  aria-pressed={compareMode}
-                >
-                  对比
-                </button>
-              )}
-            </div>
-
-            {/* Right: model selector + send button */}
+          {/* Bottom controls row: 附件/对比等入口已统一移至卡片下方共享胶囊行(pillRow),此处仅保留模型选择+发送 */}
+          <div className="flex items-center justify-end px-3 pb-2 pt-1.5">
+            {/* Model selector + send button */}
             <div className="flex items-center gap-1">
               {!compareMode && (
                 <ModelSelector
@@ -964,6 +995,9 @@ export function ChatInput({
             </div>
           </div>
         </div>
+
+        {/* 输入框下方胶囊行(共享 pillRow): 上传/对比/深度思考/智能搜索/MCP 工具/面具 */}
+        {pillRow}
       </div>
     </div>
   )

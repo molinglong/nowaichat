@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect, useMemo, KeyboardEvent, memo } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, KeyboardEvent, memo, type CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Bot,
@@ -32,6 +32,13 @@ import { toast } from '@/lib/toast'
 import { useChatStore } from '@/store/chat-store'
 import type { UIMessage } from 'ai'
 import type { Attachment } from '@/lib/attachment-types'
+
+// 长会话性能优化:视口外的消息跳过排版与绘制(DOM 保留,复制/滚动定位等交互不受影响)。
+// containIntrinsicSize 的 'auto' 让浏览器记住真实高度,首渲前用 180px 估算占位。
+const MSG_WRAPPER_STYLE: CSSProperties = {
+  contentVisibility: 'auto',
+  containIntrinsicSize: 'auto 180px',
+}
 
 /**
  * 结构化 UI 提示的子类型集合 —— MessageBubble 据此分发到不同渲染分支。
@@ -688,6 +695,7 @@ function MessageBubbleInner({
     return (
       <div
         ref={wrapperRef}
+        style={MSG_WRAPPER_STYLE}
         data-message-id={message.id}
         className={cn(
           'flex justify-start px-4 py-2 transition-colors group relative',
@@ -749,6 +757,7 @@ function MessageBubbleInner({
   return (
     <div
       ref={wrapperRef}
+      style={MSG_WRAPPER_STYLE}
       data-message-id={message.id}
       className={cn(
         'flex gap-2.5 px-4 py-2 transition-colors group relative',

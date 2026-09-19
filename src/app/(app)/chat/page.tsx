@@ -16,6 +16,7 @@
 
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
@@ -60,12 +61,18 @@ function NewChatContent() {
 
   const defaultModel = allModels[0]?.id || 'gpt-4o'
 
+  // 跳转桥: /chat?q= 外部入口(bento AI 卡片「继续对话」等)自动发送;
+  // useSearchParams 读取,ChatPanel 内部空会话触发一次并清参数
+  const searchParams = useSearchParams()
+  const autoSendText = searchParams.get('q') || undefined
+
   return (
     <ChatPanel
       key={`new-chat-${newChatNonce}`}
       initialMessages={[]}
       initialModel={defaultModel}
       allModels={allModels}
+      autoSendText={autoSendText}
     />
   )
 }

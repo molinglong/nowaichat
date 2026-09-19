@@ -7,8 +7,12 @@ import { toast } from '@/lib/toast'
 
 interface ContextInfo {
   estimatedTokens: number
+  /** 已被摘要覆盖、不再计入占用的估算 token */
+  compressedTokens: number
   realTokens: number
   messageCount: number
+  /** 已被摘要覆盖的消息条数 */
+  coveredMessages: number
   lastSummary: {
     coveredMessages: number
     createdAt: string
@@ -130,6 +134,14 @@ export function ContextMeter({ conversationId, contextWindow, refreshSignal }: C
               <span>消息数</span>
               <span>{info.messageCount}</span>
             </div>
+            {info.coveredMessages > 0 && (
+              <div className="flex justify-between">
+                <span>已压缩</span>
+                <span>
+                  {info.coveredMessages} 条 · 节省 {info.compressedTokens.toLocaleString()} tokens
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>真实用量(已统计轮次)</span>
               <span>{info.realTokens > 0 ? info.realTokens.toLocaleString() : '—'}</span>

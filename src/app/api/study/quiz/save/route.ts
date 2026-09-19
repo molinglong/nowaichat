@@ -12,7 +12,7 @@ import { prisma } from '@/lib/db'
 
 const KINDS = ['choice', 'answer']
 const DIFFICULTIES = ['basic', 'medium', 'hard']
-const SUBJECTS = ['math', 'chinese', 'english', 'physics', 'chemistry', 'biology', 'other']
+const SUBJECTS = ['math', 'chinese', 'english', 'physics', 'chemistry', 'biology', 'history', 'politics', 'geography', 'other']
 const SOURCES = ['ai_generated', 'exam_import']
 
 export async function POST(req: NextRequest) {
