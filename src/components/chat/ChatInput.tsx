@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug, Check, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { McpToolMenu } from './McpToolMenu'
+import { MiniSwitch } from '@/components/settings/MiniSwitch'
 import { ActivityHeatmap } from './ActivityHeatmap'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
@@ -95,15 +96,13 @@ export function ChatInput({
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [sendError, setSendError] = useState<string | null>(null)
   const [draftRestored, setDraftRestored] = useState(false)
-  // 仅 welcome 变体使用:控制单行 / 多行 UI 切换
-  const [isMultiline, setIsMultiline] = useState(false)
-  // 仅 welcome 变体使用:面具胶囊菜单开合
+  // welcome 变体:面具胶囊菜单开合
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
   // MCP 工具下拉菜单开合(总开关+逐工具开关)
   const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
+  // ⋯ 更多工具菜单开合(收纳: 对比模式 + 移动端的面具/MCP)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // welcome 多行态 textarea 专用 ref(单行/standard 共用 textareaRef,不与多行混用)
-  const multilineRef = useRef<HTMLTextAreaElement>(null)
 
   // 引用回复状态
   const replyingTo = useChatStore((s) => s.replyingTo)
@@ -125,8 +124,6 @@ export function ChatInput({
     const draft = draftsMap[draftKey]
     if (draft && draft.text) {
       setInput(draft.text)
-      // 多行草稿直接展开多行态,避免长文挤在 56px 单行里滚动
-      if (draft.text.includes('\n') || draft.text.length > 60) setIsMultiline(true)
       setDraftRestored(true)
       // 3 秒后自动隐藏"已恢复"提示
       const t = setTimeout(() => setDraftRestored(false), 3000)
@@ -159,59 +156,23 @@ export function ChatInput({
     return () => clearTimeout(t)
   }, [input, draftKey, storeSetDraft])
 
-  // Auto-resize textarea (standard 变体专用)
+  // Auto-resize textarea (standard/welcome 自适应卡片共用;welcome 上限 164 ≈6 行)
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current
     if (!textarea) return
     textarea.style.height = 'auto'
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`
-  }, [])
+    textarea.style.height = `${Math.min(textarea.scrollHeight, variant === 'welcome' ? 164 : 200)}px`
+  }, [variant])
 
   useEffect(() => {
-    if (variant !== 'standard') return
     adjustHeight()
-  }, [input, adjustHeight, variant])
+  }, [input, adjustHeight])
 
-  // 发送结束/单行↔多行切换后归还焦点(多行切换是两个不同节点,光标手动挪到结尾避免输入中断)
+  // 发送结束后归还焦点
   useEffect(() => {
     if (isLoading) return
-    const ta = variant === 'welcome' && isMultiline ? multilineRef.current : textareaRef.current
-    if (!ta) return
-    ta.focus()
-    if (variant === 'welcome') {
-      const len = ta.value.length
-      ta.setSelectionRange(len, len)
-    }
-  }, [isLoading, variant, isMultiline])
-
-  // welcome 变体:文本和附件都清空时回到单行态
-  useEffect(() => {
-    if (variant !== 'welcome') return
-    if (input === '' && attachments.length === 0 && isMultiline) {
-      const ta = textareaRef.current
-      if (ta) {
-        ta.style.height = '56px'
-      }
-      setIsMultiline(false)
-    }
-  }, [input, attachments.length, isMultiline, variant])
-
-  // welcome 变体:首次上传附件后自动展开到多行态(让预览可见)
-  useEffect(() => {
-    if (variant !== 'welcome') return
-    if (attachments.length > 0 && !isMultiline) {
-      setIsMultiline(true)
-    }
-  }, [attachments.length, isMultiline, variant])
-
-  // welcome 多行态: 输入/草稿恢复/粘贴时同步 textarea 高度(上限 ≈6 行,超出内部滚动)
-  useEffect(() => {
-    if (variant !== 'welcome' || !isMultiline) return
-    const ta = multilineRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 164)}px`
-  }, [input, isMultiline, variant])
+    textareaRef.current?.focus()
+  }, [isLoading])
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value)
@@ -278,19 +239,12 @@ export function ChatInput({
     // 发送后立即清掉本会话的草稿(避免下次再误加载)
     storeSetDraft(draftKey, null)
     persistDraft(draftKey, null)
-    // welcome 变体: 重置多行态
-    if (variant === 'welcome') {
-      setIsMultiline(false)
-      const ta = textareaRef.current
-      if (ta) ta.style.height = '56px'
-    } else {
-      // Reset height after send (standard)
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-        }
-      }, 0)
-    }
+    // Reset height after send
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+      }
+    }, 0)
   }
 
   // Single-flight 锁:发送期间屏蔽重复点击,发送完成后解锁
@@ -329,54 +283,36 @@ export function ChatInput({
     onCompareModelsChange(compareModels.filter((_, i) => i !== index))
   }
 
-  // ============= 共享胶囊行 =============
-  // welcome(新对话页)与 standard(会话页底部)共用:上传/对比/深度思考/智能搜索/MCP 工具/面具。
-  // 面具菜单弹出方向随变体:welcome 在页面中部向下弹,standard 贴屏幕底部向上弹。
-  // 胶囊样式随变体:welcome 大号带边框;standard 紧凑无边框(与底栏模型选择器同款)
-  const pillSize = variant === 'welcome' ? 'h-8 px-3.5 text-xs border' : 'h-7 px-2.5 text-[11px]'
-  const pillIdle = variant === 'welcome'
-    ? 'border-line bg-surface text-content-secondary hover:bg-surface-subtle hover:text-content-primary hover:border-line-strong'
-    : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary'
-  const pillActive = variant === 'welcome'
-    ? 'bg-accent text-accent-foreground border-transparent'
-    : 'bg-accent text-accent-foreground'
-  const pillRow = (
-    <div className="flex items-center justify-center gap-2 mt-3">
+  // ============= 共享工具图标组 =============
+  // welcome(新对话页)与 standard(会话页)共用,位于输入框卡片内底部行左侧。
+  // A+B 融合方案:全部图标化圆形钮(桌面 28px/移动 44px 触控),低频入口分端收纳:
+  //   桌面外显 上传/思考/搜索/MCP/面具,对比模式收进 ⋯;
+  //   移动端(<sm)只外显 上传/思考/搜索,MCP/面具/对比全部收进 ⋯(390px 实测不溢出)。
+  // MCP/面具是弹菜单型入口:桌面从各自钮弹出,移动端从 ⋯ 钮弹出(两端互斥渲染)。
+  const iconBtnBase = 'flex items-center justify-center h-7 w-7 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full transition-colors shrink-0'
+  const pillIdle = 'bg-surface-muted hover:bg-surface-subtle text-content-secondary'
+  const pillActive = 'bg-accent text-accent-foreground'
+  const hasCompareEntry = compareModeAvailable && !!onCompareModeChange
+  const hasMcpEntry = mcpAvailable && !!onMcpEnabledChange
+  const hasMaskEntry = !!onMaskChange
+  // ⋯ 钮:有任一收纳项才渲染;桌面端仅当有「对比模式」项时显示(面具/MCP 桌面已外显)
+  const showMoreBtn = hasCompareEntry || hasMcpEntry || hasMaskEntry
+  const toolPills = (
+    <>
             <FileUpload
               attachments={attachments}
               onAttachmentsChange={setAttachments}
               disabled={isLoading}
               hideAttachmentsPreview
               variant="pill"
-              pillClassName={variant === 'welcome'
-                ? undefined
-                : 'h-7 px-2.5 text-[11px] border-0 bg-surface-muted text-content-secondary hover:bg-surface-subtle hover:text-content-secondary'}
+              pillClassName={cn(iconBtnBase, pillIdle, 'border-0')}
             />
-            {compareModeAvailable && onCompareModeChange && (
-              <button
-                onClick={() => onCompareModeChange(!compareMode)}
-                disabled={isLoading}
-                className={cn(
-                  'hidden md:inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
-                  pillSize,
-                  compareMode ? pillActive : pillIdle,
-                  isLoading && 'opacity-50 cursor-not-allowed'
-                )}
-                title="对比模式"
-                aria-label="对比模式"
-                aria-pressed={compareMode}
-              >
-                <Columns2 className="w-3.5 h-3.5" />
-                对比
-              </button>
-            )}
-            {/* 深度思考开关胶囊: 与模型选择器菜单里的开关同源(deepThink 状态) */}
+            {/* 深度思考开关(图标钮): 与模型选择器菜单里的开关同源(deepThink 状态) */}
             <button
               onClick={() => onDeepThinkChange(!deepThink)}
               disabled={isLoading}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
-                pillSize,
+                iconBtnBase,
                 deepThink ? pillActive : pillIdle,
                 isLoading && 'opacity-50 cursor-not-allowed'
               )}
@@ -385,16 +321,14 @@ export function ChatInput({
               aria-pressed={deepThink}
             >
               <Brain className="w-3.5 h-3.5" />
-              深度思考
             </button>
-            {/* 智能搜索开关胶囊: 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
+            {/* 智能搜索开关(图标钮): 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
             {webSearchAvailable && onWebSearchChange && (
               <button
                 onClick={() => onWebSearchChange(!webSearch)}
                 disabled={isLoading}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
-                  pillSize,
+                  iconBtnBase,
                   webSearch ? pillActive : pillIdle,
                   isLoading && 'opacity-50 cursor-not-allowed'
                 )}
@@ -403,19 +337,16 @@ export function ChatInput({
                 aria-pressed={webSearch}
               >
                 <Globe className="w-3.5 h-3.5" />
-                智能搜索
               </button>
             )}
-            {/* MCP 工具胶囊: 用户名下有启用的 MCP server 时才显示(与设置页共享 query 缓存);
-                点击弹出工具菜单:顶部会话总开关 + 按 server 分组的逐工具开关 */}
-            {mcpAvailable && onMcpEnabledChange && (
-              <div className="relative shrink-0">
+            {/* MCP 工具(桌面外显): 点击弹出管理菜单;移动端收纳进 ⋯ */}
+            {hasMcpEntry && (
+              <div className="relative hidden sm:block">
                 <button
                   onClick={() => setMcpMenuOpen((v) => !v)}
                   disabled={isLoading}
                   className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors',
-                    pillSize,
+                    iconBtnBase,
                     mcpEnabled ? pillActive : pillIdle,
                     isLoading && 'opacity-50 cursor-not-allowed'
                   )}
@@ -426,7 +357,6 @@ export function ChatInput({
                   aria-pressed={mcpEnabled}
                 >
                   <Plug className="w-3.5 h-3.5" />
-                  MCP 工具
                 </button>
                 {mcpMenuOpen && (
                   <McpToolMenu
@@ -437,41 +367,28 @@ export function ChatInput({
                 )}
               </div>
             )}
-            {/* 面具胶囊: 未使用时显示入口,使用中反色显示 avatar + 名称 */}
-            {onMaskChange && (
-              <div className="relative">
+            {/* 面具(桌面外显): 未使用显示入口,使用中反色显示 avatar;移动端收纳进 ⋯ */}
+            {hasMaskEntry && (
+              <div className="relative hidden sm:block">
                 <button
                   onClick={() => setMaskMenuOpen((v) => !v)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full font-medium transition-colors shrink-0',
-                    pillSize,
-                    mask ? pillActive : pillIdle
-                  )}
+                  className={cn(iconBtnBase, mask ? pillActive : pillIdle)}
                   title={mask ? '当前面具,点击切换' : '选择面具'}
                   aria-label="选择面具"
                   aria-haspopup="menu"
                   aria-expanded={maskMenuOpen}
                 >
                   {mask ? (
-                    <>
-                      <span aria-hidden>{mask.avatar}</span>
-                      <span className="max-w-[96px] truncate">{mask.name}</span>
-                    </>
+                    <span aria-hidden className="text-[13px] leading-none">{mask.avatar}</span>
                   ) : (
-                    <>
-                      <Drama className="w-3.5 h-3.5" aria-hidden />
-                      面具
-                    </>
+                    <Drama className="w-3.5 h-3.5" aria-hidden />
                   )}
                 </button>
                 {maskMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
                     <div
-                      className={cn(
-                        'absolute left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5',
-                        variant === 'welcome' ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
-                      )}
+                      className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5"
                       role="menu"
                     >
                       <MaskPickerMenu
@@ -486,7 +403,107 @@ export function ChatInput({
                 )}
               </div>
             )}
-    </div>
+            {/* ⋯ 更多工具(收纳菜单): 桌面=对比模式;移动=面具/MCP/对比 */}
+            {showMoreBtn && (
+              <div className="relative shrink-0">
+                <button
+                  onClick={() => setMoreMenuOpen((v) => !v)}
+                  className={cn(
+                    iconBtnBase,
+                    !hasCompareEntry && 'sm:hidden',
+                    moreMenuOpen ? pillActive : pillIdle
+                  )}
+                  title="更多工具"
+                  aria-label="更多工具"
+                  aria-haspopup="menu"
+                  aria-expanded={moreMenuOpen}
+                >
+                  <MoreHorizontal className="w-3.5 h-3.5" />
+                </button>
+                {moreMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
+                    <div
+                      className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                      role="menu"
+                    >
+                      {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
+                      {hasMaskEntry && (
+                        <button
+                          className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
+                          onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
+                        >
+                          <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block font-medium">面具</span>
+                            <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
+                          </span>
+                          <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
+                        </button>
+                      )}
+                      {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
+                      {hasMcpEntry && (
+                        <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors">
+                          <button
+                            className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                            onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
+                          >
+                            <Plug className="w-3.5 h-3.5 shrink-0" />
+                            <span className="flex-1 min-w-0">
+                              <span className="block font-medium">MCP 工具</span>
+                              <span className="block text-[10px] text-content-muted">{mcpEnabled ? '外部工具注入本会话' : '本会话已停用'}</span>
+                            </span>
+                          </button>
+                          <MiniSwitch on={mcpEnabled} onClick={() => onMcpEnabledChange(!mcpEnabled)} />
+                        </div>
+                      )}
+                      {/* 对比模式(全端): 低频开关,开启后 textarea 下方出现多模型行 */}
+                      {hasCompareEntry && (
+                        <button
+                          className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
+                          onClick={() => { onCompareModeChange(!compareMode); setMoreMenuOpen(false) }}
+                        >
+                          <Columns2 className="w-3.5 h-3.5 shrink-0" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block font-medium">对比模式</span>
+                            <span className="block text-[10px] text-content-muted">多模型同时回答</span>
+                          </span>
+                          {compareMode && <Check className="w-3.5 h-3.5 shrink-0" />}
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+                {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
+                <div className="sm:hidden">
+                  {mcpMenuOpen && onMcpEnabledChange && (
+                    <McpToolMenu
+                      mcpEnabled={mcpEnabled}
+                      onMcpEnabledChange={onMcpEnabledChange}
+                      onClose={() => setMcpMenuOpen(false)}
+                    />
+                  )}
+                  {maskMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+                      <div
+                        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                        role="menu"
+                      >
+                        <MaskPickerMenu
+                          activeMaskId={mask?.id ?? null}
+                          userMasks={userMasks}
+                          onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
+                          onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+                          onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+    </>
   )
 
   // ============= WELCOME VARIANT =============
@@ -540,184 +557,112 @@ export function ChatInput({
             </div>
           )}
 
-          {/* 输入框容器: 单行 / 多行自动扩展 + 按钮沉底 */}
+          {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构) */}
           <div
-            className="rounded-xl border border-line bg-surface shadow-sm overflow-hidden
+            className="rounded-xl border border-line bg-surface shadow-sm
               focus-within:border-line-strong focus-within:shadow-md
               transition-[border-color,box-shadow] duration-200"
-            style={{
-              position: 'relative',
-              height: isMultiline ? undefined : '56px',
-            }}
           >
-            {/* 顶栏: 单行时内联 flex 居中, 多行时隐藏。
-                附件/对比入口已统一下沉到输入框下方胶囊行 */}
-            <div
-              className="flex items-center gap-2 px-3"
-              style={{
-                height: '56px',
-                display: isMultiline ? 'none' : 'flex',
-              }}
-            >
-              <ModelSelector
-                models={models}
-                selectedModel={selectedModel}
-                onModelChange={onModelChange}
-                deepThink={deepThink}
-                onDeepThinkChange={onDeepThinkChange}
-                webSearch={webSearch}
-                onWebSearchChange={onWebSearchChange}
-                webSearchAvailable={webSearchAvailable}
-              />
-              <div className="w-px h-7 bg-line shrink-0" />
-              <textarea
-                key="welcome-single"
-                ref={textareaRef}
-                value={input}
-                onChange={handleChange}
-                onKeyDown={handleKeyDown}
-                placeholder="输入问题..."
-                rows={1}
-                disabled={isLoading}
-                className="flex-1 bg-transparent text-sm text-content-primary placeholder:text-content-muted
-                  resize-none focus:outline-none border-0 m-0 disabled:opacity-50"
-                style={{
-                  height: '56px',
-                  padding: '0',
-                  lineHeight: '56px',
-                  verticalAlign: 'middle',
-                }}
-                onInput={(e) => setIsMultiline(e.currentTarget.scrollHeight > 58)}
-              />
-              <button
-                onClick={handleSendDebounced}
-                disabled={(!input.trim() && attachments.length === 0) || isLoading}
-                aria-label="发送"
-                className={cn(
-                  // 移动端 ≥44px;桌面 36px
-                  'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
-                  'active:scale-95 touch-manipulation',
-                  (input.trim() || attachments.length > 0) && !isLoading
-                    ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
-                    : 'bg-surface-subtle text-content-muted cursor-not-allowed'
-                )}
-                style={{ WebkitTapHighlightColor: 'transparent' }}
-              >
-                <ArrowUp className="w-[18px] h-[18px]" />
-              </button>
-            </div>
-
-            {/* 多行态: textarea 自扩展 + 底部工具栏(flex 布局,不用 absolute) */}
-            <div
-              className="flex flex-col"
-              style={{
-                // 用 max-height + opacity 过渡代替 display:none 硬切,
-                // 让单行 ↔ 多行切换时有平滑动画
-                display: 'flex',
-                maxHeight: isMultiline ? '320px' : '0px',
-                opacity: isMultiline ? 1 : 0,
-                overflow: 'hidden',
-                transition: 'max-height 200ms ease-out, opacity 150ms ease-out',
-              }}
-            >
-              {/* 附件预览(放在 textarea 上方,与 standard 变体一致) */}
-              {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-2 px-4 pt-3">
-                  {attachments.map((att, idx) => (
-                    <div
-                      key={att.url + idx}
-                      className={cn(
-                        'group flex items-center gap-2 rounded-lg border',
-                        'border-line bg-surface-muted',
-                        'px-2 py-1.5 w-full sm:max-w-[200px] sm:w-auto'
-                      )}
-                    >
-                      {att.type.startsWith('image/') ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={att.url}
-                          alt={att.name}
-                          className="w-5 h-5 rounded object-cover shrink-0"
-                        />
-                      ) : (
-                        <div className="w-5 h-5 rounded bg-surface-subtle flex items-center justify-center shrink-0 text-[8px] text-content-secondary">
-                          {att.type.split('/')[1]?.toUpperCase().slice(0, 3) || 'FILE'}
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] text-content-primary truncate">
-                          {att.name}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          const removed = attachments[idx]
-                          setAttachments((prev) => prev.filter((_, i) => i !== idx))
-                          // 移除未发送的附件时同步删除服务端文件
-                          if (removed) deleteUploadedFile(removed.url)
-                        }}
-                        className="shrink-0 p-0.5 rounded-md opacity-0 show-on-touch group-hover:opacity-100 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-500 transition-opacity"
-                        aria-label="移除"
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <textarea
-                key="welcome-multi"
-                ref={multilineRef}
-                value={input}
-                onChange={handleChange}
-                onKeyDown={handleKeyDown}
-                placeholder="输入问题..."
-                rows={1}
-                disabled={isLoading}
-                className="block w-full bg-transparent text-sm text-content-primary placeholder:text-content-muted
-                  resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-2 overflow-y-auto disabled:opacity-50"
-                style={{
-                  minHeight: '44px',
-                  maxHeight: '164px',
-                  lineHeight: '24px',
-                }}
-              />
-              <div className="shrink-0 flex items-center justify-end px-3 py-2.5">
-                <div className="flex items-center gap-1">
-                  <ModelSelector
-                    models={models}
-                    selectedModel={selectedModel}
-                    onModelChange={onModelChange}
-                    deepThink={deepThink}
-                    onDeepThinkChange={onDeepThinkChange}
-                    webSearch={webSearch}
-                    onWebSearchChange={onWebSearchChange}
-                    webSearchAvailable={webSearchAvailable}
-                  />
-                  <button
-                    onClick={handleSendDebounced}
-                    disabled={(!input.trim() && attachments.length === 0) || isLoading}
-                    aria-label="发送"
+            {/* 附件预览(放在 textarea 上方,与 standard 变体一致) */}
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-4 pt-3">
+                {attachments.map((att, idx) => (
+                  <div
+                    key={att.url + idx}
                     className={cn(
-                      'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
-                      'active:scale-95 touch-manipulation',
-                      (input.trim() || attachments.length > 0) && !isLoading
-                        ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
-                        : 'bg-surface-subtle text-content-muted cursor-not-allowed'
+                      'group flex items-center gap-2 rounded-lg border',
+                      'border-line bg-surface-muted',
+                      'px-2 py-1.5 w-full sm:max-w-[200px] sm:w-auto'
                     )}
-                    style={{ WebkitTapHighlightColor: 'transparent' }}
                   >
-                    <ArrowUp className="w-[18px] h-[18px]" />
-                  </button>
-                </div>
+                    {att.type.startsWith('image/') ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={att.url}
+                        alt={att.name}
+                        className="w-5 h-5 rounded object-cover shrink-0"
+                      />
+                    ) : (
+                      <div className="w-5 h-5 rounded bg-surface-subtle flex items-center justify-center shrink-0 text-[8px] text-content-secondary">
+                        {att.type.split('/')[1]?.toUpperCase().slice(0, 3) || 'FILE'}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] text-content-primary truncate">
+                        {att.name}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const removed = attachments[idx]
+                        setAttachments((prev) => prev.filter((_, i) => i !== idx))
+                        // 移除未发送的附件时同步删除服务端文件
+                        if (removed) deleteUploadedFile(removed.url)
+                      }}
+                      className="shrink-0 p-0.5 rounded-md opacity-0 show-on-touch group-hover:opacity-100 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-500 transition-opacity"
+                      aria-label="移除"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              placeholder="输入问题..."
+              rows={1}
+              disabled={isLoading}
+              className="block w-full bg-transparent text-sm text-content-primary placeholder:text-content-muted
+                resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-1 overflow-y-auto disabled:opacity-50"
+              style={{
+                minHeight: '44px',
+                maxHeight: '164px',
+                lineHeight: '24px',
+              }}
+            />
+            {/* 底部工具行: 左=工具胶囊组 右=模型选择+发送 */}
+            <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                {toolPills}
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <ModelSelector
+                  models={models}
+                  selectedModel={selectedModel}
+                  onModelChange={onModelChange}
+                  compact
+                  deepThink={deepThink}
+                  onDeepThinkChange={onDeepThinkChange}
+                  webSearch={webSearch}
+                  onWebSearchChange={onWebSearchChange}
+                  webSearchAvailable={webSearchAvailable}
+                />
+                <button
+                  onClick={handleSendDebounced}
+                  disabled={(!input.trim() && attachments.length === 0) || isLoading}
+                  aria-label="发送"
+                  className={cn(
+                    // 移动端 ≥44px;桌面 36px
+                    'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
+                    'active:scale-95 touch-manipulation',
+                    (input.trim() || attachments.length > 0) && !isLoading
+                      ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
+                      : 'bg-surface-subtle text-content-muted cursor-not-allowed'
+                  )}
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  <ArrowUp className="w-[18px] h-[18px]" />
+                </button>
               </div>
             </div>
           </div>
 
-          {/* 输入框下方胶囊行(共享 pillRow): 上传/对比/深度思考/智能搜索/MCP 工具/面具 */}
-          {pillRow}
-          {/* 活跃度热力图：胶囊行下方居中 */}
-          <div className="mt-2">
+          {/* 活跃度热力图: 输入框卡片下方居中 */}
+          <div className="mt-3">
             <ActivityHeatmap />
           </div>
         </div>
@@ -946,10 +891,14 @@ export function ChatInput({
             </div>
           )}
 
-          {/* Bottom controls row: 附件/对比等入口已统一移至卡片下方共享胶囊行(pillRow),此处仅保留模型选择+发送 */}
-          <div className="flex items-center justify-end px-3 pb-2 pt-1.5">
+          {/* Bottom controls row: 左侧工具胶囊组(上传/对比/深度思考/智能搜索/MCP/面具) + 右侧模型选择与发送 */}
+          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1.5">
+            {/* 工具胶囊组(移动端只留图标,允许收窄) */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              {toolPills}
+            </div>
             {/* Model selector + send button */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               {!compareMode && (
                 <ModelSelector
                   models={models}
@@ -995,9 +944,6 @@ export function ChatInput({
             </div>
           </div>
         </div>
-
-        {/* 输入框下方胶囊行(共享 pillRow): 上传/对比/深度思考/智能搜索/MCP 工具/面具 */}
-        {pillRow}
       </div>
     </div>
   )

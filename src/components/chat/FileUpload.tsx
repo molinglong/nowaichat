@@ -300,7 +300,7 @@ export function FileUpload({
           title="添加附件 (图片、文本、PDF, 最大10MB)"
         >
           <Paperclip className="w-3.5 h-3.5" />
-          {variant === 'pill' && <span>上传附件</span>}
+          {/* pill 变体已图标化(与工具组圆形钮同构),不再渲染文字 */}
         </button>
 
         {dragging && (

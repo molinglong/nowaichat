@@ -113,8 +113,7 @@ export default function EphemeralLoginPage() {
         </div>
       </form>
 
-      <p className="auth-reveal auth-delay-5 mt-6 text-center text-[13.5px] text-content-secondary">
-        账号主人？{" "}
+      <p className="auth-reveal auth-delay-5 mt-6 text-center">
         <Link href="/login" className={footerLinkClass}>
           使用主密码登录
         </Link>

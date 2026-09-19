@@ -480,7 +480,7 @@ export function Sidebar() {
               </button>
               <button
                 onClick={() => setMaskMenuOpen((v) => !v)}
-                className={`flex items-center justify-center px-2 py-1.5 rounded-lg transition-all active:scale-[0.98] touch-manipulation
+                className={`flex h-8 items-center justify-center px-2 rounded-lg transition-all active:scale-[0.98] touch-manipulation
                   ${maskMenuOpen || conversationMaskId
                     ? 'bg-surface-muted text-content-primary'
                     : 'bg-surface-subtle text-content-secondary hover:bg-surface-muted hover:text-content-primary'}`}
@@ -639,9 +639,10 @@ export function Sidebar() {
             className="relative px-2 pt-2 pb-2 mt-1 border-t border-line/40"
             data-user-menu-root
           >
+            <div className="flex items-center gap-0.5">
             <button
               onClick={() => setUserMenuOpen((v) => !v)}
-              className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg text-left
+              className="min-w-0 flex-1 flex items-center gap-2 px-1.5 py-1 rounded-lg text-left
                 hover:bg-surface-subtle/60 transition-colors touch-manipulation"
               aria-label="账号菜单"
               aria-expanded={userMenuOpen}
@@ -670,6 +671,19 @@ export function Sidebar() {
                 )}
               </div>
             </button>
+            {/* 快捷设置入口:免两跳直达设置面板(临时模式隐藏,与菜单内账号设置显隐一致) */}
+            {!isEphemeral && (
+              <button
+                onClick={() => { setUserMenuOpen(false); setSettingsOpen(true) }}
+                className="shrink-0 p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all active:scale-95 touch-manipulation"
+                aria-label="设置"
+                title="设置"
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                <Settings className="w-3.5 h-3.5" aria-hidden />
+              </button>
+            )}
+            </div>
 
             {/* 用户菜单:纯色浮层(遵循弹窗纯色背景规范),向上弹出 */}
             {userMenuOpen && (

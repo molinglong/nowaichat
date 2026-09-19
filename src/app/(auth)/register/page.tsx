@@ -140,8 +140,7 @@ export default function RegisterPage() {
         </div>
       </form>
 
-      <p className="auth-reveal auth-delay-5 mt-6 text-center text-[13.5px] text-content-secondary">
-        已有账户？{" "}
+      <p className="auth-reveal auth-delay-5 mt-6 text-center">
         <Link href="/login" className={footerLinkClass}>
           立即登录
         </Link>

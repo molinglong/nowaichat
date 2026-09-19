@@ -17,9 +17,9 @@ export const labelClass =
 export const primaryButtonClass =
   "flex h-11 w-full items-center justify-center rounded-[10px] bg-accent text-sm font-medium text-accent-foreground transition hover:-translate-y-px hover:bg-accent-hover hover:shadow-[0_8px_20px_rgb(var(--fg)/0.14)] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-55"
 
-/* 底部切换链接：下划线 hover 时浮现 */
+/* 底部切换链接：淡底胶囊,hover 边框加深(与全站胶囊风一致) */
 export const footerLinkClass =
-  "font-medium text-content-primary underline decoration-transparent underline-offset-4 transition hover:decoration-line-strong"
+  "inline-flex items-center rounded-full border border-line bg-surface-subtle/60 px-2.5 py-1 text-xs font-medium text-content-primary transition align-middle hover:bg-surface-muted hover:border-line-strong active:scale-95"
 
 /* 错误提示条：灰底低调 + 红点，出现时轻摇（不用大红块） */
 export function ErrorBar({ message }: { message: string }) {
