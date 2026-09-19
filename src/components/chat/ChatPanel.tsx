@@ -28,6 +28,7 @@ import type { Attachment } from './FileUpload'
 const MODEL_STORAGE_KEY = 'chat:selectedModel'
 const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
 const WEB_SEARCH_STORAGE_KEY = 'chat:webSearch'
+const MCP_ENABLED_STORAGE_KEY = 'chat:mcpEnabled'
 const COMPARE_MODE_STORAGE_KEY = 'chat:compareMode'
 const COMPARE_MODELS_STORAGE_KEY = 'chat:compareModels'
 
@@ -66,6 +67,9 @@ interface ChatPanelProps {
   initialMaskId?: string | null
   /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
   initialCompareVote?: { groupId: string; votedModel: string } | null
+  /** 跳转桥: /chat?q= 传入的自动发送文本(bento「继续对话」等外部入口);
+   *  mount 后空会话自动发出一次,随后清掉 URL 参数防刷新重发 */
+  autoSendText?: string
 }
 
 export function ChatPanel({
@@ -80,6 +84,7 @@ export function ChatPanel({
   initialStylePreset,
   initialMaskId,
   initialCompareVote,
+  autoSendText,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
   const [conversationId, setConversationId] = useState(initialConversationId)
@@ -199,10 +204,30 @@ export function ChatPanel({
   })
   const webSearchAvailable = (searchKeysQuery.data?.length ?? 0) > 0
 
+  // MCP 外部工具:默认启用(配置即全局生效),仅显式关闭后本会话请求不注入。
+  // 可用性由用户名下启用的 MCP server 决定;与设置页共享 query 缓存,
+  // 设置里新增/启停后 invalidate 会同步刷新这里的按钮显示。
+  const [mcpEnabled, setMcpEnabled] = useState(true)
+  const mcpServersQuery = useQuery<{ servers: Array<{ enabled: boolean }> }>({
+    queryKey: queryKeys.mcp.servers(),
+    queryFn: () => fetchJson('/api/mcp/servers'),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: STALE.providers,
+  })
+  const mcpAvailable = (mcpServersQuery.data?.servers ?? []).some((s) => s.enabled)
+
   // 从 localStorage 恢复 webSearch 偏好
   useEffect(() => {
     if (!initialConversationId && localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
       setWebSearch(true)
+    }
+  }, [initialConversationId])
+
+  // 从 localStorage 恢复 MCP 工具偏好(默认启用,仅显式 false 时关闭)
+  useEffect(() => {
+    if (!initialConversationId && localStorage.getItem(MCP_ENABLED_STORAGE_KEY) === 'false') {
+      setMcpEnabled(false)
     }
   }, [initialConversationId])
   
@@ -364,6 +389,7 @@ export function ChatPanel({
   const deepThinkRef = useRef(deepThink)
   const webSearchRef = useRef(webSearch)
   const searchEngineRef = useRef(searchEngine)
+  const mcpEnabledRef = useRef(mcpEnabled)
   const conversationStylePresetRef = useRef(conversationStylePreset)
   const conversationMaskIdRef = useRef(conversationMaskId)
   useEffect(() => {
@@ -371,9 +397,10 @@ export function ChatPanel({
     deepThinkRef.current = deepThink
     webSearchRef.current = webSearch
     searchEngineRef.current = searchEngine
+    mcpEnabledRef.current = mcpEnabled
     conversationStylePresetRef.current = conversationStylePreset
     conversationMaskIdRef.current = conversationMaskId
-  }, [currentModel, deepThink, webSearch, searchEngine, conversationStylePreset, conversationMaskId])
+  }, [currentModel, deepThink, webSearch, searchEngine, mcpEnabled, conversationStylePreset, conversationMaskId])
 
   // Create transport with current model, conversationId, deepThink, and webSearch.
   // 用 useMemo 收敛创建;所有可变值都通过 getter 读 ref,保证请求时拿到最新值。
@@ -387,6 +414,7 @@ export function ChatPanel({
           get deepThink() { return deepThinkRef.current },
           get webSearch() { return webSearchRef.current },
           get searchEngine() { return searchEngineRef.current },
+          get mcpEnabled() { return mcpEnabledRef.current },
           get stylePreset() { return conversationStylePresetRef.current },
           get maskId() { return conversationMaskIdRef.current },
           // AI 设置控制: 每次请求前读取最新客户端设置快照,服务端注入 system prompt(读写对称)
@@ -663,6 +691,23 @@ export function ChatPanel({
     if (next) handleSend(next.text, next.attachments)
   }, [isLoading, status, handleSend])
 
+  // 跳转桥: /chat?q= 自动发送一次(外部入口,如 bento AI 卡片「继续对话」)。
+  // 仅空会话触发;发出后立即清掉 URL 参数,刷新不会重发;
+  // consumedRef 兜底防 React 严格模式双调用重复发送。
+  const autoSendConsumedRef = useRef(false)
+  useEffect(() => {
+    if (!autoSendText || autoSendConsumedRef.current) return
+    if (messages.length > 0 || isLoadingRef.current) return
+    autoSendConsumedRef.current = true
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('q')) {
+      url.searchParams.delete('q')
+      const qs = url.searchParams.toString()
+      window.history.replaceState({}, '', url.pathname + (qs ? `?${qs}` : ''))
+    }
+    handleSend(autoSendText)
+  }, [autoSendText, messages.length, handleSend])
+
   // A 流式恢复: 轮询服务端草稿行快照(1.2s),streaming=false 时定格。
   // 定格内容以库中为准(可能是最终内容,比本地快照新)。
   useEffect(() => {
@@ -801,6 +846,11 @@ export function ChatPanel({
   const handleWebSearchChange = useCallback((enabled: boolean) => {
     setWebSearch(enabled)
     localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(enabled))
+  }, [])
+
+  const handleMcpEnabledChange = useCallback((enabled: boolean) => {
+    setMcpEnabled(enabled)
+    localStorage.setItem(MCP_ENABLED_STORAGE_KEY, String(enabled))
   }, [])
 
   const handleRetry = useCallback(() => {
@@ -1038,6 +1088,9 @@ export function ChatPanel({
           webSearch={webSearch}
           onWebSearchChange={handleWebSearchChange}
           webSearchAvailable={webSearchAvailable}
+          mcpEnabled={mcpEnabled}
+          onMcpEnabledChange={handleMcpEnabledChange}
+          mcpAvailable={mcpAvailable}
           compareMode={false}
           compareModeAvailable={!conversationId}
           onCompareModeChange={handleCompareModeChange}
@@ -1050,7 +1103,7 @@ export function ChatPanel({
               <h2
                 className="text-content-primary"
                 style={{
-                  fontFamily: "'PingFang Ultralight', 'PingFang SC', -apple-system, BlinkMacSystemFont, sans-serif",
+                  fontFamily: "'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif",
                   fontWeight: 100,
                   fontSize: '32px',
                   lineHeight: 1.2,
@@ -1148,6 +1201,9 @@ export function ChatPanel({
             webSearch={webSearch}
             onWebSearchChange={handleWebSearchChange}
             webSearchAvailable={webSearchAvailable}
+            mcpEnabled={mcpEnabled}
+            onMcpEnabledChange={handleMcpEnabledChange}
+            mcpAvailable={mcpAvailable}
             compareMode={false}
             compareModeAvailable={!conversationId}
             onCompareModeChange={handleCompareModeChange}

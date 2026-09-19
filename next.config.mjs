@@ -56,6 +56,14 @@ const nextConfig = {
           { key: 'Content-Security-Policy', value: "default-src 'none'; sandbox" },
         ],
       },
+      {
+        // 苹方子集分片:woff2 文件名带内容 hash,可长缓存;
+        // result.css 文件名固定,走默认协商缓存不在此列
+        source: '/fonts-subset/:path*.woff2',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+        ],
+      },
     ]
   },
   webpack: (config, { isServer, nextRuntime }) => {

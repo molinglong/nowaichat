@@ -1,18 +1,22 @@
+/* ── 苹方子集分片说明 ─────────────────────────────
+   分片产物由 scripts/build-fonts.mjs 生成, 静态放在 public/fonts-subset/,
+   由 layout.tsx 的 <link> 直接引入(勿走 CSS @import:
+   1520 个 @font-face 进 webpack 管线会把 dev server 拖到 OOM 死锁)。
+   family 名 'PingFang SC Sub' 排在 'PingFang SC' 之后:
+   macOS/iOS 命中系统原生苹方(零下载), Windows/Android 按需拉分片。 */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ── PingFang SC Ultralight 苹方极细 ───────────────────── */
-@font-face {
-  font-family: 'PingFang Ultralight';
-  src: url('/fonts/pingfangsc-ultralight.otf') format('opentype');
-  font-weight: 100;
-  font-display: swap;
-}
-
 /* ── 统一配色体系：macOS 极简黑白灰 + 单一中灰强调色 ───────────── */
 /* 变量采用 RGB 三元组（配合 Tailwind 的 rgb(var(--x) / <alpha>) 支持透明度）*/
 :root {
+  /* 字体栈: 'PingFang SC' 让 macOS/iOS 直接命中系统苹方(全字重零下载);
+     其他平台落到 'PingFang SC Sub' 子集分片(见文件头 @import) */
+  --font-sans: 'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', -apple-system,
+    BlinkMacSystemFont, sans-serif;
+
   /* 基础 */
   --background: 245 245 247;
   --foreground: 29 29 31;
@@ -432,13 +436,15 @@ body {
   font-weight: 400;
   margin: 0;
 }
-.rich-md .exam-poem .exam-poem-line {
+.rich-md .exam-poem .exam-poem-line,
+.rich-md .exam-lyrics .exam-poem-line {
   text-align: center;
   font-weight: 500;
   letter-spacing: 0.12em;
   line-height: 2.1;
 }
-.rich-md .exam-poem .exam-poem-line p {
+.rich-md .exam-poem .exam-poem-line p,
+.rich-md .exam-lyrics .exam-poem-line p {
   margin: 0;
 }
 /* 作文纸块: 标题居中疏排,正文首行缩进2em(作文纸惯例),分论点加粗走默认 strong;末行字数提为右下虚线徽标 */
@@ -497,6 +503,12 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 0.75rem;
 }
+/* 一块多题拆组: 题与题之间虚线分隔（与解析块虚线语言一致，像卷面上的题间装订线） */
+.rich-md .exam-choice-group + .exam-choice-group {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed rgb(var(--exam-paper-line));
+}
 .rich-md .exam-option {
   display: flex;
   align-items: flex-start;
@@ -511,6 +523,115 @@ body {
 }
 .rich-md .exam-option-letter::after {
   content: '.';
+}
+
+/* 时间轴块 :::timeline —— 历史脉络梳理，与试卷块同一纸面语言（暖纸底/装订线/胶囊标签）；
+   左侧年份列右对齐等宽数字，竖轴+节点事件流，行首 * 关键节点红描边（对应 ==术语== 得分点） */
+.rich-md .exam-timeline {
+  padding: 0.85rem 1.1rem 1rem;
+}
+.rich-md .exam-timeline .exam-block-tag {
+  color: rgb(var(--accent-foreground));
+  background: rgb(var(--accent));
+}
+.rich-md .exam-timeline-title {
+  margin: 0 0 0.7rem;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: rgb(var(--content-primary));
+}
+.rich-md .exam-timeline-body {
+  position: relative;
+  padding-left: 58px;
+}
+.rich-md .exam-timeline-axis {
+  position: absolute;
+  left: 44px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: rgb(var(--exam-paper-line));
+  border-radius: 1px;
+}
+.rich-md .exam-timeline-item {
+  position: relative;
+  padding: 0 0 14px;
+}
+.rich-md .exam-timeline-item:last-child {
+  padding-bottom: 2px;
+}
+.rich-md .exam-timeline-year {
+  position: absolute;
+  left: -58px;
+  top: 0;
+  width: 38px;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.9;
+  color: rgb(var(--content-secondary));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rich-md .exam-timeline-node {
+  position: absolute;
+  left: -17.5px;
+  top: 7px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgb(var(--exam-paper));
+  border: 2px solid rgb(var(--content-secondary));
+  z-index: 1;
+}
+.rich-md .exam-timeline-item-key .exam-timeline-node {
+  border-color: rgb(var(--exam-term));
+}
+.rich-md .exam-timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.rich-md .exam-timeline-era {
+  font-size: 11px;
+  line-height: 1.7;
+  color: rgb(var(--accent-foreground));
+  background: rgb(var(--accent) / 0.85);
+  padding: 0.5px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  letter-spacing: 0.08em;
+}
+.rich-md .exam-timeline-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: rgb(var(--content-primary));
+}
+.rich-md .exam-timeline-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgb(var(--content-secondary));
+}
+.rich-md .exam-timeline-desc p {
+  margin: 0;
+}
+.rich-md .exam-timeline-src {
+  margin-top: 3px;
+  font-size: 11px;
+  color: rgb(var(--content-muted));
+  letter-spacing: 0.02em;
+}
+.rich-md .exam-timeline-src::before {
+  content: '◦ ';
+}
+.rich-md .exam-timeline-note {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgb(var(--exam-paper-line));
+  font-size: 12px;
+  color: rgb(var(--content-secondary));
 }
 
 /* 关键词双色: 红=荧光笔（必背得分点），蓝=批注笔（材料对应） */
@@ -537,9 +658,9 @@ body {
 }
 
 /* ── 认证页（登录/注册）品牌分栏共用样式 ─────────────────── */
-/* 极细展示字体：标题/Logo 徽标专用，复用上方已注册的苹方 Ultralight */
+/* 极细展示字体：标题/Logo 徽标专用，复用苹方子集分片 100 字重 */
 .font-ultra {
-  font-family: 'PingFang Ultralight', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  font-family: 'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', sans-serif;
   font-weight: 100;
 }
 

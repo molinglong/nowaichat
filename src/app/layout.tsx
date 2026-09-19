@@ -4,32 +4,9 @@ import { Providers } from "@/components/Providers";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 
-const pingfang = localFont({
-  src: [
-    {
-      path: "./fonts/pingfangsc-light.woff2",
-      weight: "300",
-      style: "normal",
-    },
-    {
-      path: "./fonts/pingfangsc-regular.woff2",
-      weight: "400",
-      style: "normal",
-    },
-    {
-      path: "./fonts/pingfangsc-medium.woff2",
-      weight: "500",
-      style: "normal",
-    },
-    {
-      path: "./fonts/pingfangsc-semibold.woff2",
-      weight: "600",
-      style: "normal",
-    },
-  ],
-  variable: "--font-sans",
-  display: "swap",
-});
+// 苹方不再走 next/font(全量 woff2 会被 preload ~18MB):
+// 改用 globals.css 顶部的 cn-font-split 子集分片 + :root --font-sans 系统栈,
+// macOS/iOS 命中系统原生苹方零下载, 其他平台按需拉分片。
 const geistMono = localFont({
   src: "./fonts/GeistMonoVF.woff",
   variable: "--font-geist-mono",
@@ -76,6 +53,16 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
+        {/* 苹方子集分片: public 静态直出, unicode-range 按需拉 woff2。
+            不走 CSS @import/webpack(1500+ font-face 会拖垮 dev server);
+            macOS/iOS 命中系统苹方时浏览器不会下载分片, 零开销 */}
+        {['100', '300', '400', '500', '600'].map((w) => (
+          <link
+            key={w}
+            rel="stylesheet"
+            href={`/fonts-subset/${w}/result.css`}
+          />
+        ))}
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -99,7 +86,7 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${pingfang.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground`}
+        className={`${geistMono.variable} font-sans antialiased bg-background text-foreground`}
       >
         <Providers>
           {/* Tauri/Web 双端统一结构:不再渲染自定义标题栏,浏览器/原生窗口各自负责头部控件 */}
