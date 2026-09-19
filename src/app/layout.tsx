@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
-import "katex/dist/katex.min.css";
+// katex 样式已并入 globals.css 顶部 @import(见该文件),
+// 单独在此 import 会让 root layout 挂两个 css chunk —— 触发 Next 14.2 的
+// css-entry 关联 bug: 后一个 chunk 挤掉 globals.css, HTML 拿不到 Tailwind 全站裸奔。
 
 // 苹方不再走 next/font(全量 woff2 会被 preload ~18MB):
 // 改用 globals.css 顶部的 cn-font-split 子集分片 + :root --font-sans 系统栈,

@@ -1,3 +1,11 @@
+/* 第三方库样式内联入口:
+   必须在注释之后、其他规则之前出现(CSS 规范 @import 置顶),
+   统一从这一个口子进 webpack 管线 —— 各自在组件/布局里 import css
+   会让 Next 14.2 的 css-entry 关联错乱(chunk 互相挤占、HTML 漏注入主样式)。
+   注意: 切勿把 fonts-subset 的 1520 个 @font-face 也放进来(会拖死 dev server)。 */
+@import "katex/dist/katex.min.css";
+@import "izitoast/dist/css/iziToast.min.css";
+
 /* ── 苹方子集分片说明 ─────────────────────────────
    分片产物由 scripts/build-fonts.mjs 生成, 静态放在 public/fonts-subset/,
    由 layout.tsx 的 <link> 直接引入(勿走 CSS @import:

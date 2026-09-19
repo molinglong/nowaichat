@@ -25,15 +25,11 @@ async function ensureClient(): Promise<Izitoast | null> {
   initializing = true
 
   initPromise = (async () => {
-    // 动态加载 JS + CSS,避免污染服务端 bundle
+    // 动态加载 JS 即可,CSS 已由 globals.css 顶部 @import 静态内联(修 Next 14.2 css chunk 关联 bug)
     // iziToast 是 CJS 包(`module.exports = ...`),在 Next.js webpack ESM 互操作下,
     // 既可能是整个 module,也可能被包成 `{ default: <module> }`。
     // 兼容两种形态,以及 iziToast 自己挂在 `.iziToast` 上的 UMD 形态。
-    const [mod, cssMod] = await Promise.all([
-      import('izitoast'),
-      import('izitoast/dist/css/iziToast.min.css'),
-    ])
-    void cssMod // 仅触发 CSS 注入
+    const mod = await import('izitoast')
 
     if (!cssLoaded) cssLoaded = true
 
