@@ -63,7 +63,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 })
   }
 
-  const encryptedKey = encrypt(apiKey)
+  let encryptedKey: string
+  try {
+    encryptedKey = encrypt(apiKey)
+  } catch (err) {
+    // 服务端缺 ENCRYPTION_KEY 时给出可读错误,而不是裸 500
+    console.error("[keys] encrypt failed:", err)
+    return NextResponse.json(
+      { error: "服务端未配置 ENCRYPTION_KEY，无法加密保存，请检查服务器环境变量" },
+      { status: 500 }
+    )
+  }
 
   // Verify the user record still exists in DB (session may be stale if DB was reset)
   const user = await prisma.user.findUnique({ where: { id: session.user.id } })
