@@ -18,6 +18,13 @@ const geistMono = localFont({
 export const metadata: Metadata = {
   title: "八号产房 - AI 多模型对话助手",
   description: "支持 OpenAI、Anthropic、DeepSeek、通义千问、文心一言的多模型 AI 对话平台",
+  // PWA 清单: 添加到主屏幕后 standalone 全屏运行,
+  // 配合 viewport-fit=cover + globals.css 的 --sat/--sab 安全区变量
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/icons/icon-192.png",
+    apple: "/icons/icon-180.png",
+  },
   // iOS 添加到主屏幕后,以 standalone 模式运行,顶部状态栏样式(translucent 需要配合 viewport-fit=cover)
   appleWebApp: {
     capable: true,
@@ -55,6 +62,9 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
+        {/* Chrome 新版 PWA 规范标签(仅写 apple-mobile-web-app-capable 会报 deprecated 警告);
+            旧 iOS 标签仍由 metadata.appleWebApp 自动生成,两者并存 */}
+        <meta name="mobile-web-app-capable" content="yes" />
         {/* 苹方子集分片: public 静态直出, unicode-range 按需拉 woff2。
             不走 CSS @import/webpack(1500+ font-face 会拖垮 dev server);
             macOS/iOS 命中系统苹方时浏览器不会下载分片, 零开销 */}

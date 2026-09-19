@@ -52,6 +52,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aichatt}?schema=public
       AUTH_SECRET: ${AUTH_SECRET:?必须设置 AUTH_SECRET}
       AUTH_URL: ${AUTH_URL:?必须设置 AUTH_URL,例如 https://chat.yuban.icu}
+      # API Key 加密根密钥(aes-256-gcm 派生源),缺失时 /api/keys 保存 500、聊天报未配置 key
+      # 生成: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      # 部署后勿更换,否则已保存的 Key 无法解密,需在设置页重新保存
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?必须设置 ENCRYPTION_KEY}
       NODE_ENV: production
       # standalone server.js 监听地址/端口(容器内 3000, 映射宿主机 3001)
       HOSTNAME: 0.0.0.0
