@@ -19,6 +19,9 @@ RUN npm ci --no-audit --no-fund
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+# 限 V8 堆防 OOM: 2核4G VPS(系统已用 ~1.4G)上 next build 峰值易超内存被 OOM kill;
+# 2560MB 堆上限配合 2G swap 兜底(swap 需部署前在宿主机创建)
+ENV NODE_OPTIONS="--max-old-space-size=2560"
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
