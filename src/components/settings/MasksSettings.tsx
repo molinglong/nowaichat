@@ -285,7 +285,7 @@ export default function MasksSettings() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-xs font-medium text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
               {form.rowId ? '保存修改' : '创建面具'}
@@ -317,7 +317,7 @@ export default function MasksSettings() {
           </div>
           <button
             onClick={() => setForm({ ...EMPTY_FORM })}
-            className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
+            className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-accent-foreground transition-opacity hover:opacity-90"
           >
             <Plus className="w-3 h-3" />
             新增面具

@@ -11,6 +11,7 @@ import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
 import { resolveMaskBadge, type MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useStartNewChat } from '@/hooks/useStartNewChat'
+import { useBackgroundStreamWatcher } from '@/hooks/useBackgroundStreamWatcher'
 // 暂时下线新消息提醒(如需恢复,连同下方调用一起取消注释)
 // import { useUnreadToastNotifier } from '@/hooks/useUnreadToastNotifier'
 import { useIsTauri } from '@/lib/tauri'
@@ -91,6 +92,9 @@ export function Sidebar() {
   const setConversationMaskId = useChatStore((s) => s.setConversationMaskId)
   const removeConversationRead = useChatStore((s) => s.removeConversationRead)
   const queryClient = useQueryClient()
+
+  // 后台生成跟踪:生成中切走的会话完成后点亮蓝点(轮询注册表,完成即刷新列表)
+  useBackgroundStreamWatcher()
 
   useLayoutEffect(() => {
     if (!hydrated) {
@@ -391,7 +395,7 @@ export function Sidebar() {
           {inTauri && sidebarEffectiveOpen && <TrafficLights />}
           {sidebarEffectiveOpen ? (
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <h1 className="text-base font-semibold tracking-tight truncate">八号产房</h1>
+              <h1 className="text-base font-semibold tracking-tight truncate">aichatt</h1>
             </div>
           ) : (
             <button

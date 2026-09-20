@@ -281,6 +281,8 @@ ${transcript.slice(0, 16000)}
     temperature: 0,
     maxOutputTokens: SUMMARY_MAX_TOKENS,
     prompt,
+    // 摘要任务不思考:自动压缩在响应结束后异步执行,避免拖慢下一轮请求
+    providerOptions: { deepseek: { thinking: { type: "disabled" } } },
   })
 
   return result.text.trim()

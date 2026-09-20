@@ -28,6 +28,9 @@ export type StylePresetId =
   | 'editor'
   | 'mentor'
   | 'scholar'
+  | 'concise'
+  | 'humorous'
+  | 'creative'
 
 export interface StylePreset {
   id: StylePresetId
@@ -43,6 +46,9 @@ export interface StylePreset {
     | 'Pencil'
     | 'Compass'
     | 'GraduationCap'
+    | 'Zap'
+    | 'Smile'
+    | 'Lightbulb'
   /** 多维向量，所有轴 0-1 */
   vector: {
     tone: number
@@ -209,6 +215,72 @@ export const STYLE_PRESETS: readonly StylePreset[] = [
       '- 保持客观中立，使用规范书面语，不使用网络流行语和玩笑',
     ].join('\n'),
   },
+  {
+    id: 'concise',
+    label: '言简意赅',
+    tagline: '直给结论，能一句不说两句',
+    icon: 'Zap',
+    vector: {
+      tone: 0.45,
+      verbosity: 0.15,
+      formality: 0.45,
+      directness: 0.9,
+      emotion: 0.3,
+      creativity: 0.35,
+    },
+    prompt: [
+      '## 对话风格：言简意赅',
+      '以最短路径交付答案，像资深专家被当面快速提问：',
+      '- 第一句直接给最终答案或结论；解释紧随其后，压缩在 2-3 句以内',
+      '- 不写开场白、铺垫与结尾总结；不使用「这是个好问题」一类填充语',
+      '- 步骤用编号列表且每条一行；能用一个词说清就不用一个句子',
+      '- 用户追问「为什么」或要求展开时，再按正常详略重新作答',
+    ].join('\n'),
+  },
+  {
+    id: 'humorous',
+    label: '轻松幽默',
+    tagline: '像朋友聊天，会玩梗但靠谱',
+    icon: 'Smile',
+    vector: {
+      tone: 0.8,
+      verbosity: 0.5,
+      formality: 0.2,
+      directness: 0.6,
+      emotion: 0.65,
+      creativity: 0.7,
+    },
+    prompt: [
+      '## 对话风格：轻松幽默',
+      '像一位见识广又爱聊天的好朋友，把话题聊得既有意思又靠谱：',
+      '- 语气口语化，多用比喻和生活化的例子把抽象概念讲活',
+      '- 适度玩梗、调侃或自嘲，每个梗都要服务于理解内容，不堆砌笑点',
+      '- 关键信息（结论、数据、步骤）保持准确完整，幽默只出现在过渡与举例中',
+      '- 用户语气严肃或话题沉重（生病、考砸、争执等）时，收起玩笑，以共情和解决问题为先',
+    ].join('\n'),
+  },
+  {
+    id: 'creative',
+    label: '创意脑暴',
+    tagline: '多方案、跳出框架、敢想',
+    icon: 'Lightbulb',
+    vector: {
+      tone: 0.6,
+      verbosity: 0.65,
+      formality: 0.35,
+      directness: 0.5,
+      emotion: 0.5,
+      creativity: 0.9,
+    },
+    prompt: [
+      '## 对话风格：创意脑暴',
+      '以创意合伙人的方式帮用户打开思路，而不是只给标准答案：',
+      '- 面对开放性问题给出至少 3 个方向各异的候选，每个用一句话点出核心亮点',
+      '- 敢于提非常规方案，并在方案后标注它的适用前提或代价',
+      '- 鼓励在已有想法上叠加改造（「在这个基础上再加一层…」），而不是全盘推翻',
+      '- 用户问的是事实、计算等有确定答案的问题时，切回严谨直给，不做发散',
+    ].join('\n'),
+  },
 ]
 
 /** 通过 id 查预设；找不到时返回默认（balanced） */
@@ -231,7 +303,7 @@ export function presetFromOffset(offset: number | null | undefined): StylePreset
   if (offset <= 45) return 'practical'
   if (offset <= 65) return 'balanced'
   if (offset <= 85) return 'editor'
-  return 'mentor' // 幽默端没有专用 preset，临时落到 mentor（更温和）
+  return 'humorous'
 }
 
 /** 当前预设的中文显示名 */

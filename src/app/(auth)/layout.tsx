@@ -16,10 +16,10 @@ export default function AuthLayout({
         {/* 顶部 Logo */}
         <div className="auth-reveal auth-delay-1 relative z-10 flex items-center gap-[11px]">
           <div className="font-ultra flex h-[34px] w-[34px] items-center justify-center rounded-full border border-line-strong bg-surface/70 text-[15px] text-content-primary">
-            八
+            a
           </div>
           <span className="text-sm font-medium tracking-[0.12em] text-content-primary">
-            八号产房
+            aichatt
           </span>
         </div>
 
@@ -49,7 +49,7 @@ export default function AuthLayout({
 
         {/* 底部版权 */}
         <div className="auth-reveal auth-delay-4 relative z-10 text-xs tracking-[0.1em] text-content-muted">
-          © {new Date().getFullYear()} 八号产房 · AI 多模型对话助手
+          © {new Date().getFullYear()} aichatt · AI 多模型对话助手
         </div>
 
         {/* 缩影：CSS 画的对话卡片，暗示产品形态（纯装饰，宽屏才显示避免拥挤） */}

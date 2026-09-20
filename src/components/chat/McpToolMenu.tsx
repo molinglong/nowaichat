@@ -101,7 +101,7 @@ export function McpToolMenu({
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
-        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-80 max-w-[calc(100%-1rem)]
+        className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-80 max-w-[calc(100vw-2rem)]
           rounded-xl border border-line bg-surface shadow-lg"
         role="menu"
       >
@@ -156,7 +156,8 @@ export function McpToolMenu({
                         <div
                           key={t.name}
                           className={cn(
-                            'flex items-center gap-2 rounded-md py-1 pl-1.5 pr-2 transition-colors hover:bg-surface-subtle',
+                            // 移动端 py-1.5 提升触控高度(≥40px),sm 回落桌面紧凑密度
+                            'flex items-center gap-2 rounded-md py-1.5 sm:py-1 pl-1.5 pr-2 transition-colors hover:bg-surface-subtle',
                             (!server.enabled || !mcpEnabled) && 'opacity-60'
                           )}
                         >

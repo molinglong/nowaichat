@@ -319,7 +319,7 @@ export default function McpSettings() {
               onClick={handleSave}
               disabled={saving || !form.name.trim() || !form.url.trim()}
               className={cn(
-                'flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs text-white',
+                'flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs text-accent-foreground',
                 'hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
               )}
             >

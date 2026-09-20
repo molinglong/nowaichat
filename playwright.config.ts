@@ -36,6 +36,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json" },
     },
+    {
+      // 写作画布用例:复用 admin 会话
+      name: "write-smoke",
+      testMatch: /write\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
   ],
   webServer: {
     command: "npm run dev",

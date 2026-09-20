@@ -12,10 +12,20 @@ test("新建对话后可输入", async ({ page }) => {
 test("发送消息收到流式回复", async ({ page }) => {
   await page.goto("/chat")
   const input = page.locator("textarea").first()
-  await expect(input).toBeVisible()
-  // 新对话默认 GPT-4o,admin 未配 openai Key,先切到已配置的 DeepSeek
-  await page.getByRole("button", { name: "GPT-4o" }).first().click()
-  await page.getByText("DeepSeek-V3", { exact: true }).first().click()
+  // dev server 高负载时首屏水合可能超过默认 15s;本用例整体放宽到 3 分钟
+  await expect(input).toBeVisible({ timeout: 30_000 })
+  test.setTimeout(180_000)
+  // 新对话默认 GPT-4o,admin 未配 openai Key,切到已配置 Key 的 DeepSeek 分组
+  // 型号名随注册表升级漂移,不硬编码。下拉打开后才异步拉取 Key 名单,未就绪时
+  // 只剩 custom 分组(拉取失败被静默吞掉)—— 每轮重开下拉重新拉取,直至分组出现
+  const selectorBtn = page.getByRole("button", { name: "GPT-4o" }).first()
+  const searchBox = page.getByPlaceholder("搜索模型...")
+  const deepseekItem = page.getByRole("button", { name: /^DeepSeek-/ }).first()
+  await expect(async () => {
+    if (await searchBox.isVisible()) await selectorBtn.click()
+    await selectorBtn.click()
+    await deepseekItem.click({ timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
   await input.fill("用一句话介绍你自己")
   await page.getByRole("button", { name: "发送", exact: true }).first().click()
   // 用户气泡与 assistant 气泡各有一个「复制」按钮,回复渲染完成即出现第 2 个

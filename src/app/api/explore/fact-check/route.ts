@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     const userId = session.user.id
 
     // === 1. 选择可用的内置模型 (按用户已配置 key 的优先级) ===
-    const candidateModels = ['gpt-4o', 'claude-3-5-sonnet', 'deepseek-chat', 'gemini-1.5-pro']
+    const candidateModels = ['gpt-4o', 'claude-3-5-sonnet', 'deepseek-flash', 'gemini-1.5-pro']
     let chosenModelId: string | null = null
     let apiKey: string | null = null
 
@@ -183,6 +183,8 @@ ${topic ? `辩论主题：${topic}\n` : ''}${searchResults ? `搜索证据：\n$
       model: aiProvider(chosenModelId),
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
+      // 工具型核查调用不思考:省 token 与延迟(DeepSeek V4 默认 enabled)
+      providerOptions: { deepseek: { thinking: { type: 'disabled' } } },
     })
 
     // === 5. 解析 AI 输出, 失败时保留原文而非直接 unverifiable ===

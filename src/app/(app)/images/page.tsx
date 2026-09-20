@@ -1436,7 +1436,7 @@ function ImageCard({
         </span>
       )}
       {image.editType && image.editType !== 't2i' && !image.referenceImageUrl && (
-        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] bg-accent/85 text-white shadow">
+        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] bg-accent/85 text-accent-foreground shadow">
           {image.editType === 'edit'
             ? '二创'
             : image.editType === 'inpaint'

@@ -6,10 +6,10 @@ import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
 import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus, Play } from 'lucide-react'
-import Link from 'next/link'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
+import { WriteDocPanel } from '@/components/write/WriteDocPanel'
 import { OutlineSidebar } from './OutlineSidebar'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { ContextMeter } from './ContextMeter'
@@ -87,7 +87,15 @@ export function ChatPanel({
   autoSendText,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
+  // 写作画布面板打开时桌面端压缩聊天区让位(与 WriteDocPanel 同宽并排,豆包式)
+  const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
   const [conversationId, setConversationId] = useState(initialConversationId)
+
+  // 切换会话/新建对话时自动收起写作画布面板(含 remount 首跑):
+  // 发送首条消息新建会话只更新内部 state,不改 props.initialConversationId,不会误关
+  useEffect(() => {
+    useChatStore.getState().closeWritePanel()
+  }, [initialConversationId])
 
   // A 流式恢复: 页面加载时若历史里最后一条 assistant 消息带 streaming 标记,
   // 说明服务端可能仍在生成(草稿行快照中),进入轮询续显模式。
@@ -355,6 +363,8 @@ export function ChatPanel({
   const pendingContinuation = useChatStore((s) => s.pendingContinuation)
   const setPendingContinuation = useChatStore((s) => s.setPendingContinuation)
   const markConversationRead = useChatStore((s) => s.markConversationRead)
+  const registerBackgroundStreaming = useChatStore((s) => s.registerBackgroundStreaming)
+  const unregisterBackgroundStreaming = useChatStore((s) => s.unregisterBackgroundStreaming)
 
   // 切换/挂载会话时:
   //  - 通知 store(Sidebar 监听)
@@ -420,6 +430,10 @@ export function ChatPanel({
           // AI 设置控制: 每次请求前读取最新客户端设置快照,服务端注入 system prompt(读写对称)
           get settingsSnapshot() {
             return buildSettingsSnapshot()
+          },
+          // 写作画布面板当前打开的文档:让 AI 可用 append 续写这篇(面板未开为 null)
+          get currentWriteDocId() {
+            return useChatStore.getState().writePanelDocId
           },
           // Attachments are read from ref at send time
           get attachments() {
@@ -532,6 +546,22 @@ export function ChatPanel({
   useEffect(() => {
     isLoadingRef.current = isLoading
   }, [isLoading])
+
+  // 后台生成跟踪:进入会话时先注销(切回来由本地流/轮询续显接管);
+  // 离开(卸载或切换)时若仍在生成则注册,由 useBackgroundStreamWatcher 轮询,
+  // 生成完成后 bumpConversationVersion 点亮侧边栏蓝点——否则后台完成无人报信,
+  // 列表缓存里的 updatedAt 不前进,蓝点永远不亮。refs 在 cleanup 时读到最终态。
+  useEffect(() => {
+    if (initialConversationId) {
+      unregisterBackgroundStreaming(initialConversationId)
+    }
+    return () => {
+      const convId = conversationIdRef.current
+      if (convId && isLoadingRef.current) {
+        registerBackgroundStreaming(convId)
+      }
+    }
+  }, [initialConversationId, registerBackgroundStreaming, unregisterBackgroundStreaming])
 
   // 流式跟随滚动: 默认贴底跟随最新内容;用户向上滚动立即脱离跟随(生成中也能自由回看历史),
   // 滚回底部或点"回到底部"按钮恢复跟随。
@@ -963,6 +993,7 @@ export function ChatPanel({
   // 对比模式: 渲染并排泳道视图(key 确保模型列表变化时重建泳道)
   if (compareMode) {
     return (
+      <>
       <ComparePanel
         key={compareModels.join('+')}
         conversationId={initialConversationId}
@@ -981,11 +1012,13 @@ export function ChatPanel({
         onConversationCreated={handleCompareConversationCreated}
         initialVote={initialCompareVote ?? null}
       />
+      <WriteDocPanel />
+      </>
     )
   }
 
   return (
-    <div className="flex flex-col h-full relative overflow-hidden">
+    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
 
       {/* Error banner */}
       {error && errorInfo && (
@@ -1012,8 +1045,12 @@ export function ChatPanel({
                 重试
               </button>
               {errorInfo.type === 'api_key' && (
-                <Link
-                  href="/chat/settings"
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsSection('providers')
+                    setSettingsOpen(true)
+                  }}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                     bg-surface-muted text-content-secondary
                     hover:bg-surface-subtle transition-colors
@@ -1021,7 +1058,7 @@ export function ChatPanel({
                 >
                   <SettingsIcon className="w-3.5 h-3.5" />
                   前往设置
-                </Link>
+                </button>
               )}
             </div>
           </div>
@@ -1101,13 +1138,9 @@ export function ChatPanel({
           welcomeHeader={(
             <div className="text-center mb-8">
               <h2
-                className="text-content-primary"
+                className="text-content-primary text-[24px] md:text-[32px] font-thin leading-[1.2] tracking-[0.02em]"
                 style={{
                   fontFamily: "'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif",
-                  fontWeight: 100,
-                  fontSize: '32px',
-                  lineHeight: 1.2,
-                  letterSpacing: '0.02em',
                 }}
               >
                 {getGreeting()}，今天能为你做些什么？
@@ -1264,6 +1297,7 @@ export function ChatPanel({
           </div>
         </>
       )}
+      <WriteDocPanel />
     </div>
   )
 }

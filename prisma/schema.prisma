@@ -47,6 +47,7 @@ model User {
   knowledgeDocs KnowledgeDoc[]
   questions      Question[]
   todos         Todo[]
+  writeDocs     WriteDoc[]
   apiTokens     ApiToken[]
 }
 
@@ -568,6 +569,24 @@ model Todo {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, done, createdAt])
+}
+
+// ===================== 写作画布(WriteDoc) =====================
+// 豆包式「帮我写作」工作区(/write)的文档:一章一文档,正文为纯文本。
+// 生成走 /api/write/generate(流式,不进聊天消息流),CRUD 走 /api/write/docs。
+// charCount 冗余存储:列表页免拉全文即可显示字数,创建/更新时重算。
+model WriteDoc {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String   @default("未命名")
+  content   String   @default("")
+  charCount Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
 }
 
 // ===================== API 令牌(ApiToken) =====================

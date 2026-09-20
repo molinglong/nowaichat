@@ -3,6 +3,7 @@
 /**
  * 中性灰 mini switch：设置页（McpSettings）与聊天输入框 MCP 工具菜单共用。
  * 规范：激活态 bg-accent，未激活 bg-line-strong/60，18×32 圆角滑块。
+ * 圆点反色：开态用 accent-foreground(暗黑模式下为深色,亮灰轨道上可见),关态保持白色。
  */
 import { cn } from '@/lib/utils'
 
@@ -29,8 +30,8 @@ export function MiniSwitch({
     >
       <span
         className={cn(
-          'absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-all',
-          on ? 'left-[16px]' : 'left-[2px]'
+          'absolute top-[2px] h-[14px] w-[14px] rounded-full shadow transition-all',
+          on ? 'left-[16px] bg-accent-foreground' : 'left-[2px] bg-white'
         )}
       />
     </button>

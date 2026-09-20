@@ -47,10 +47,10 @@ export async function POST(request: Request) {
     const userId = session.user.id
 
     // 选择可用的内置模型: 优先用户传入, 否则按用户已配置 key 的优先级兜底
-    const candidates = modelIdInput ? [modelIdInput, 'gpt-4o', 'claude-3-5-sonnet', 'deepseek-chat'] : [
+    const candidates = modelIdInput ? [modelIdInput, 'gpt-4o', 'claude-3-5-sonnet', 'deepseek-flash'] : [
       'gpt-4o',
       'claude-3-5-sonnet',
-      'deepseek-chat',
+      'deepseek-flash',
       'gemini-1.5-pro',
     ]
 
@@ -134,6 +134,8 @@ ${historyText.join('\n\n')}`
       model: aiProvider(chosenModelId),
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
+      // 工具型摘要调用不思考:省 token 与延迟(DeepSeek V4 默认 enabled)
+      providerOptions: { deepseek: { thinking: { type: 'disabled' } } },
     })
 
     try {

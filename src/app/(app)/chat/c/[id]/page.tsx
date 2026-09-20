@@ -205,7 +205,7 @@ function ConversationClientContent() {
       else if (o <= 45) setConversationStylePreset('practical')
       else if (o <= 65) setConversationStylePreset('balanced')
       else if (o <= 85) setConversationStylePreset('editor')
-      else setConversationStylePreset('mentor')
+      else setConversationStylePreset('humorous')
     }
   }, [conversation, setCurrentConversationId, setConversationTitle, setConversationStylePreset])
 

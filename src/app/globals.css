@@ -60,6 +60,18 @@
   --exam-mat: 12 74 170;
   --exam-mat-bg: 229 240 254;
 
+/* 成分分析色板: 每成分一色(从句按功能继承同色)，明色取 tailwind 600/700 号 + 50/100 号底 */
+--sent-subj: 12 74 170;    --sent-subj-bg: 229 240 254;
+--sent-pred: 190 26 34;    --sent-pred-bg: 254 233 234;
+--sent-obj: 21 128 61;     --sent-obj-bg: 220 252 231;
+--sent-preci: 13 148 136;  --sent-preci-bg: 204 251 241;
+--sent-attr: 124 58 237;   --sent-attr-bg: 237 233 254;
+--sent-adv: 194 65 12;     --sent-adv-bg: 255 237 213;
+--sent-comp: 190 24 93;    --sent-comp-bg: 252 231 243;
+--sent-appo: 67 56 202;    --sent-appo-bg: 224 231 255;
+--sent-pare: 100 116 139;  --sent-pare-bg: 226 232 240;
+--sent-head: 161 98 7;     --sent-head-bg: 254 249 195;
+
   /* 试卷纸面: 暖纸底与装订线色（纸质卷面风格，定稿自 preview-chinese-exam 方向A） */
 --exam-paper: 251 250 246;
 --exam-paper-line: 216 210 196;
@@ -100,6 +112,18 @@
   --exam-term-bg: 63 28 30;
   --exam-mat: 118 169 250;
   --exam-mat-bg: 25 46 78;
+
+/* 成分分析色板: 暗色提亮降饱和(400 号 + 900/950 号底) */
+--sent-subj: 118 169 250;  --sent-subj-bg: 25 46 78;
+--sent-pred: 248 113 113;  --sent-pred-bg: 63 28 30;
+--sent-obj: 74 222 128;    --sent-obj-bg: 20 52 34;
+--sent-preci: 45 212 191;  --sent-preci-bg: 19 52 46;
+--sent-attr: 167 139 250;  --sent-attr-bg: 46 32 74;
+--sent-adv: 251 146 60;    --sent-adv-bg: 70 32 12;
+--sent-comp: 244 114 182;  --sent-comp-bg: 76 18 52;
+--sent-appo: 129 140 248;  --sent-appo-bg: 35 30 82;
+--sent-pare: 148 163 184;  --sent-pare-bg: 30 41 59;
+--sent-head: 251 191 36;   --sent-head-bg: 69 46 3;
 
   /* 试卷纸面: 暗色用暖深灰保纸感,线色同步提亮 */
 --exam-paper: 29 28 26;
@@ -251,6 +275,22 @@ body {
   animation: sidebar-item-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
+/* 右键菜单弹出(全局 ContextMenuHost):快速淡入,transform-origin 由组件用 origin-top-left 指定 */
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu-enter {
+  animation: context-menu-in 0.1s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
 /* ── 欢迎页点阵背景 ─────────────────────────────────────
    极淡中性圆点平铺;radial mask 让中心(内容区)淡出、四周渐显,
    点阵只填充边缘留白,不与问候语/输入框抢视觉。
@@ -266,11 +306,11 @@ body {
   mask-image: radial-gradient(ellipse 62% 58% at 50% 45%, transparent 30%, black 82%);
 }
 
-/* 移动端:内容贴顶(justify-start),淡出中心同步上移,避免点阵侵入问候区 */
+/* 移动端:内容中间偏上(justify-center + -6vh),淡出中心同步下移跟随内容块,避免点阵侵入问候/输入区 */
 @media (max-width: 767px) {
   .dot-grid {
-    -webkit-mask-image: radial-gradient(ellipse 92% 42% at 50% 14%, transparent 32%, black 86%);
-    mask-image: radial-gradient(ellipse 92% 42% at 50% 14%, transparent 32%, black 86%);
+    -webkit-mask-image: radial-gradient(ellipse 92% 46% at 50% 42%, transparent 30%, black 86%);
+    mask-image: radial-gradient(ellipse 92% 46% at 50% 42%, transparent 30%, black 86%);
   }
 }
 
@@ -583,6 +623,90 @@ body {
 }
 .rich-md .exam-translate-letter::after {
   content: '.';
+}
+
+/* 句子成分块 :::sentence —— 首行原句大字展示，成分内容自动回标：
+   每成分一色(底色+下划线，课本图解思路)，从句按句法功能继承同色，
+   徽标与回标共用同组色变量，明暗双主题跟随 --sent-* 色板 */
+.rich-md .exam-sentence .exam-sentence-raw {
+  font-size: 14.5px;
+  line-height: 2;
+  margin-bottom: 0.55rem;
+}
+/* 成分着色: 徽标与回标共用一组 --sent-c/--sent-bg 变量类(色板见 :root)；
+   未匹配色键时回退中性灰(变量 fallback)，保持不吞内容 */
+.exam-sent-c-subj { --sent-c: var(--sent-subj); --sent-bg: var(--sent-subj-bg); }
+.exam-sent-c-pred { --sent-c: var(--sent-pred); --sent-bg: var(--sent-pred-bg); }
+.exam-sent-c-obj { --sent-c: var(--sent-obj); --sent-bg: var(--sent-obj-bg); }
+.exam-sent-c-preci { --sent-c: var(--sent-preci); --sent-bg: var(--sent-preci-bg); }
+.exam-sent-c-attr { --sent-c: var(--sent-attr); --sent-bg: var(--sent-attr-bg); }
+.exam-sent-c-adv { --sent-c: var(--sent-adv); --sent-bg: var(--sent-adv-bg); }
+.exam-sent-c-comp { --sent-c: var(--sent-comp); --sent-bg: var(--sent-comp-bg); }
+.exam-sent-c-appo { --sent-c: var(--sent-appo); --sent-bg: var(--sent-appo-bg); }
+.exam-sent-c-pare { --sent-c: var(--sent-pare); --sent-bg: var(--sent-pare-bg); }
+.exam-sent-c-head { --sent-c: var(--sent-head); --sent-bg: var(--sent-head-bg); }
+.rich-md .exam-sentence .exam-sentence-hl-c {
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-color: rgb(var(--sent-c));
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  background: rgb(var(--sent-bg) / 0.6);
+  border-radius: 2px;
+}
+.rich-md .exam-sentence .exam-sentence-rows {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 0.3rem;
+}
+.rich-md .exam-sentence .exam-sentence-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.rich-md .exam-sentence .exam-sentence-row-bb {
+  margin-top: 0.15rem;
+  padding: 0.3rem 0.5rem;
+  background: rgb(var(--exam-term-bg) / 0.5);
+  border-radius: 6px;
+}
+.rich-md .exam-sentence .exam-sentence-role {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  user-select: none;
+}
+.rich-md .exam-sentence .exam-sentence-role-bb {
+  color: rgb(var(--exam-term));
+  background: rgb(var(--exam-term-bg));
+}
+.rich-md .exam-sentence .exam-sentence-role-c {
+  color: rgb(var(--sent-c, var(--content-secondary)));
+  background: rgb(var(--sent-bg, transparent));
+}
+.rich-md .exam-sentence .exam-sentence-text {
+  flex: 1;
+  min-width: 0;
+}
+.rich-md .exam-sentence .exam-sentence-text p {
+  margin: 0;
+}
+.rich-md .exam-sentence .exam-sentence-row-bb .exam-sentence-text {
+  font-weight: 600;
+}
+.rich-md .exam-sentence .exam-sentence-note {
+  color: rgb(var(--content-muted));
+  font-size: 12px;
+  margin-left: 2px;
+}
+.rich-md .exam-sentence .exam-sentence-footnote {
+  color: rgb(var(--content-secondary));
+  font-size: 12px;
+  margin-top: 0.4rem;
 }
 
 /* 时间轴块 :::timeline —— 历史脉络梳理，与试卷块同一纸面语言（暖纸底/装订线/胶囊标签）；

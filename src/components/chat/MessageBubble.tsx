@@ -30,6 +30,7 @@ import { ToolCallCard, extractToolCallViews } from './ToolCallCard'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { toast } from '@/lib/toast'
 import { useChatStore } from '@/store/chat-store'
+import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import type { UIMessage } from 'ai'
 import type { Attachment } from '@/lib/attachment-types'
 
@@ -494,12 +495,17 @@ function MessageBubbleInner({
   }, [isEditing])
 
   // Reset edit value when entering edit mode
-  const startEditing = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
+  // beginEdit 是无事件版本:右键菜单项也要进编辑态(菜单里拿不到原 MouseEvent)
+  const beginEdit = useCallback(() => {
     setEditValue(text)
     setIsEditing(true)
   }, [text])
+
+  const startEditing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    beginEdit()
+  }, [beginEdit])
 
   const cancelEditing = useCallback(() => {
     setEditValue('')
@@ -689,6 +695,68 @@ function MessageBubbleInner({
 
   const startEditingDebounced = useSingleFlight(startEditing, [text])
 
+  // ── 右键菜单:把操作栏的 hover 按钮集合升格为右键菜单(桌面端习惯) ──
+  // 菜单项全部复用现有 handlers,不新增 props → 无需改 memo 比较函数。
+  // 无可用项时(如空正文)不 preventDefault,保留浏览器默认菜单。
+  const handleMessageContextMenu = useCallback((e: React.MouseEvent) => {
+    const canCopy = bodyText.length > 0
+    const candidates: (ContextMenuItem | false | undefined)[] = [
+      canCopy && {
+        id: 'copy',
+        label: '复制',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        submenu: [
+          { id: 'copy-text', label: '纯文本', icon: <FileText className="w-3.5 h-3.5" />, onSelect: handleCopy },
+          { id: 'copy-md', label: 'Markdown', icon: <Code2 className="w-3.5 h-3.5" />, onSelect: handleCopyMarkdown },
+          { id: 'copy-html', label: 'HTML（带样式）', icon: <FileType className="w-3.5 h-3.5" />, onSelect: handleCopyHtml },
+        ],
+      },
+      isUser && canEdit && onEdit && {
+        id: 'edit',
+        label: '编辑',
+        icon: <Pencil className="w-3.5 h-3.5" />,
+        onSelect: beginEdit,
+      },
+      isAssistant && isLastAssistant && canRegenerate && onRegenerate && {
+        id: 'regenerate',
+        label: '重新生成',
+        icon: <RotateCw className="w-3.5 h-3.5" />,
+        onSelect: handleRegenerateDebounced,
+      },
+      canCopy && {
+        id: 'reply',
+        label: '引用回复',
+        icon: <Reply className="w-3.5 h-3.5" />,
+        // 与操作栏「引用回复」按钮同一通路:setReplyingTo 由 ChatInput 消费
+        onSelect: () => {
+          const { setReplyingTo } = useChatStore.getState()
+          setReplyingTo({
+            id: message.id,
+            role: message.role,
+            text: bodyText.slice(0, 120),
+          })
+        },
+      },
+      !isStreaming && (isUser || isAssistant) && {
+        id: 'study',
+        label: studySaveState === 'saved' ? '已存入错题本' : '存入错题本',
+        icon: studySaveState === 'saved' ? <CheckCircle2 className="w-3.5 h-3.5 text-accent" /> : <BookmarkPlus className="w-3.5 h-3.5" />,
+        disabled: studySaveState !== 'idle',
+        onSelect: handleSaveToStudy,
+      },
+    ]
+    const items = candidates.filter((it): it is ContextMenuItem => !!it)
+    if (!items.length) return
+    e.preventDefault()
+    const { openContextMenu } = useContextMenuStore.getState()
+    openContextMenu({ x: e.clientX, y: e.clientY }, items)
+  }, [
+    bodyText, isUser, isAssistant, canEdit, onEdit, isLastAssistant, canRegenerate,
+    onRegenerate, beginEdit, handleCopy, handleCopyMarkdown, handleCopyHtml,
+    handleRegenerateDebounced, handleSaveToStudy, studySaveState, isStreaming,
+    message.id, message.role,
+  ])
+
   // 结构化摘要卡片分支 —— system + branch_summary metadata 走独立渲染
   // 整张卡片独占一行,不显示 AI 头像 / 操作按钮,视觉上与正常消息流明确区分
   if (isSummaryCard && summaryMeta) {
@@ -759,6 +827,7 @@ function MessageBubbleInner({
       ref={wrapperRef}
       style={MSG_WRAPPER_STYLE}
       data-message-id={message.id}
+      onContextMenu={handleMessageContextMenu}
       className={cn(
         'flex gap-2.5 px-4 py-2 transition-colors group relative',
         isUser ? 'justify-end' : 'justify-start',

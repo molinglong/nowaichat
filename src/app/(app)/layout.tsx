@@ -3,6 +3,8 @@ import { auth } from '@/lib/auth'
 import { Sidebar } from '@/components/sidebar/Sidebar'
 import { TopBar } from '@/components/TopBar'
 import { SettingsModal } from '@/components/SettingsModal'
+import { BottomDock } from '@/components/BottomDock'
+import { ContextMenuHost } from '@/components/ui/ContextMenu'
 
 /**
  * 四个主 tab(chat/images/explore/study)共享的 shell layout。
@@ -36,9 +38,13 @@ export default async function AppLayout({
           <main className="flex-1 overflow-hidden">
             {children}
           </main>
+          {/* 移动端底部 Dock(页面导航下沉,md 以下渲染;桌面端 null) */}
+          <BottomDock />
         </div>
       </div>
       <SettingsModal />
+      {/* 全局右键菜单宿主(单例):消息气泡 / 代码块 / 会话列表等场景通过 contextMenuStore 弹出 */}
+      <ContextMenuHost />
     </div>
   )
 }

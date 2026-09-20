@@ -2,7 +2,7 @@
  * AI 对话风格参数配置（新版：preset 驱动）
  *
  * 历史背景：早期版本用一个 0-100 的 styleOffset 数字（0=严肃、50=平衡、100=幽默），
- * 现已升级为 6 个具名预设（balanced/practical/dev/editor/mentor/scholar），具体见
+ * 现已升级为 9 个具名预设（balanced/practical/dev/editor/mentor/scholar/concise/humorous/creative），具体见
  * `./style-presets.ts`。下方只保留向后兼容的 legacy 函数，新代码请直接用
  * `./style-presets` 暴露的 `getStylePromptFromPreset` / `getStylePresetLabel`。
  */

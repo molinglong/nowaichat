@@ -51,6 +51,11 @@ import {
   createMaskGeneratorTool,
 } from "@/lib/ai/mask-tool"
 import {
+  WRITE_DOC_TOOL_NAME,
+  WRITE_DOC_TOOL_PROMPT,
+} from "@/lib/ai/write-doc-tool"
+import { createWriteDocTool } from "@/lib/ai/write-doc-tool.server"
+import {
   URL_READER_TOOL_NAME,
   URL_READER_TOOL_PROMPT,
   URL_READER_DISABLED_PROMPT,
@@ -80,12 +85,13 @@ interface ChatRequestBody {
   groupId?: string
   attachments?: Attachment[]
   styleOffset?: number // 旧版 0-100, default 50 if not provided(向后兼容)
-  stylePreset?: string // 新版 preset id(balanced/practical/dev/editor/mentor/scholar)
+  stylePreset?: string // 新版 preset id(见 src/lib/ai/style-presets.ts 的 STYLE_PRESETS)
   maskId?: string // 面具 id(内置面具见 @/lib/ai/builtin-masks);不传时从会话读取
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
   mcpEnabled?: boolean // 客户端是否注入 MCP 外部工具(默认 true,仅显式 false 时跳过加载)
   settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
+  currentWriteDocId?: string // 写作画布面板当前打开的文档 id（注入提示词供 append 续写）
 }
 
 /** 客户端传入的消息（UIMessage 格式的结构化子集） */
@@ -252,7 +258,9 @@ export async function POST(req: NextRequest) {
 
     // 解析面具:body 显式传 maskId 时用之;否则从 DB 读;未知 id 视为无面具。
     // user: 前缀为自定义面具(getMaskById 内部校验归属)
-    const requestedMask = await getMaskById(body.maskId ?? null, userId)
+    // 写作画布面板当前打开的文档(前端随请求附带):注入上下文让 AI 可用 append 续写这篇
+const currentWriteDocId = typeof body.currentWriteDocId === "string" ? body.currentWriteDocId : null
+const requestedMask = await getMaskById(body.maskId ?? null, userId)
     const requestedMaskRef = requestedMask?.ref
 
     let conversationStylePreset: string | null = null
@@ -559,6 +567,23 @@ export async function POST(req: NextRequest) {
     systemParts.push(MASK_TOOL_PROMPT)
   }
 
+  // 写作文档:非临时非对比模式注入(正文写库,写入类临时隔离;同 mask 无用户开关,
+  // 模型仅在用户要求成篇幅正文时调用,产出落 WriteDoc 表与 /write 互通)
+  if (!isEphemeral && !groupId) {
+    // 面板打开时附带当前文档(校验属主),AI 可用 append 动作续写这篇
+    let currentDocHint = ""
+    if (currentWriteDocId) {
+      const curDoc = await prisma.writeDoc.findFirst({
+        where: { id: currentWriteDocId, userId },
+        select: { title: true },
+      })
+      if (curDoc) {
+        currentDocHint = `\n- 用户当前在写作画布打开的文档:《${curDoc.title}》(id=${currentWriteDocId})。用户说续写/接着写/往这篇补充/修改这篇时，这是对该文档的编辑请求，必须调用 write_document 且 action=append 传该 id，content 只写新增正文(与原文自然衔接，不要重复原文)，不要把正文直接回复在聊天里；创作全新内容仍用 create`
+      }
+    }
+    systemParts.push(WRITE_DOC_TOOL_PROMPT + currentDocHint)
+  }
+
   // 待办管理:非临时非对比模式注入 manage_todo 工具+规则段;
   // 临时模式不注入(待办属长期数据,防污染),注入降级提示防虚构。
   // 与 REST API(/api/todos,新标签页插件)共用 Todo 表,变更互通。
@@ -645,6 +670,7 @@ export async function POST(req: NextRequest) {
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
+  const writeDocTool = !isEphemeral && !groupId ? createWriteDocTool(userId) : null
 
   // 课本知识库检索(半绑定):用户名下有知识切块才注入(物理级闸门,无课本则工具不存在);
   // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
@@ -713,7 +739,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Apply reasoning extraction middleware for models that need it (not DeepSeek native)
-    // DeepSeek's deepseek-reasoner has NATIVE reasoning_content support via API
+    // DeepSeek V4 native thinking returns reasoning_content via API (no middleware needed)
     // Third-party providers (Fireworks, Groq, Together, etc.) require extractReasoningMiddleware
     const isDeepSeekNativeReasoning = modelDef.provider === 'deepseek' && modelDef.supportsReasoning
     if (!isDeepSeekNativeReasoning) {
@@ -891,7 +917,21 @@ export async function POST(req: NextRequest) {
     model,
     messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || mcpToolCount > 0)
+    // DeepSeek V4.1 起“思考”由请求参数控制(默认 enabled):deepThink 开 → enabled,
+    // 关 → disabled,保证日常快答不被强制思考。reasoning_content 仍走原生解析,
+    // 不经过 <think> middleware(见上方 isDeepSeekNativeReasoning 分支)。
+    // 其他 provider 不读 deepseek 命名空间,该选项对它们无副作用。
+    ...(modelDef.provider === "deepseek"
+      ? {
+          providerOptions: {
+            deepseek: {
+              thinking: { type: deepThink ? "enabled" : "disabled" },
+              ...(deepThink ? { reasoningEffort: "high" } : {}),
+            },
+          },
+        }
+      : {}),
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
@@ -903,6 +943,7 @@ export async function POST(req: NextRequest) {
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
+            ...(writeDocTool ? { [WRITE_DOC_TOOL_NAME]: writeDocTool } : {}),
           },
         }
       : {}),

@@ -17,6 +17,7 @@ const EPHEMERAL_DENIED_PREFIXES = [
   "/api/user/ephemeral-settings", // 访客密码/临时记忆开关
   "/api/study", // 学习功能(错题本/复习状态写入)
   "/api/todos", // 待办(长期数据,防临时模式污染)
+  "/api/write", // 写作画布文档(长期数据资产,防临时模式污染;入口在临时模式下本就隐藏)
 ]
 
 /** 方法敏感类：GET 等读操作放行，写操作拦截 */
@@ -49,6 +50,8 @@ function isDeniedForEphemeral(pathname: string, method: string): boolean {
 const API_CORS_ALLOW_ORIGINS = [
   "http://localhost:8090", // bento 起始页(静态 server)
   "http://127.0.0.1:8090",
+  "http://localhost:8137", // 主页本地预览(Python http.server)
+  "http://127.0.0.1:8137",
 ]
 
 function corsHeaders(res: NextResponse, origin: string | null): NextResponse {
@@ -151,7 +154,9 @@ export async function middleware(req: NextRequest) {
 export const config = {
   // 排除静态资源:uploads(字体/图片)与 fonts(苹方子集分片)不走 middleware,
   // 避免每个资源请求都执行 JWT 解码;未登录时字体请求也不会被 307 重定向成 HTML。
+  // manifest.json 与 icons(PWA 图标)同理:浏览器请求它们不携带 cookie,
+  // 被 307 成登录页 HTML 会导致「添加到主屏幕」的 PWA 安装直接失败。
   // uploads 的安全头(X-Content-Type-Options/CSP sandbox)由 next.config.mjs headers() 独立提供,
   // 文件名 nanoid(12)/分片 hash 不可枚举,未登录直访风险可控
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|fonts).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|fonts|manifest.json|icons).*)"],
 }

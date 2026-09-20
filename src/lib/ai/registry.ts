@@ -41,9 +41,22 @@ export function getAllModels(): ModelDefinition[] {
   return Object.values(providers).flatMap(p => p.models)
 }
 
+// DeepSeek 旧模型名归一化:V3 时代的 chat/reasoner/coder 已并入 deepseek-flash,
+// 思考与否改由 thinking 请求参数控制(见 chat 路由)。老会话 model 字段存的旧 id
+// 在 getModel/getEffectiveModel 查找时统一映射,老对话无需迁移即可继续使用。
+const LEGACY_MODEL_ALIASES: Record<string, string> = {
+  "deepseek-chat": "deepseek-flash",
+  "deepseek-reasoner": "deepseek-flash",
+  "deepseek-coder": "deepseek-flash",
+}
+
+export function normalizeModelId(modelId: string): string {
+  return LEGACY_MODEL_ALIASES[modelId] ?? modelId
+}
+
 // Get a specific builtin model definition (no user override)
 export function getModel(modelId: string): ModelDefinition | undefined {
-  return getAllModels().find(m => m.id === modelId)
+  return getAllModels().find(m => m.id === normalizeModelId(modelId))
 }
 
 // Get the provider for a given model (no user override)
@@ -114,7 +127,7 @@ export async function getEffectiveModel(
   modelId: string
 ): Promise<ModelDefinition | undefined> {
   const all = await getEffectiveModels(userId)
-  return all.find(m => m.id === modelId)
+  return all.find(m => m.id === normalizeModelId(modelId))
 }
 
 /**

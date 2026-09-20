@@ -1,6 +1,7 @@
 'use client'
 
 import React, { memo, useMemo, useState, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -9,8 +10,11 @@ import type { Components } from 'react-markdown'
 import type { PluggableList } from 'unified'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { BookPlus, Check, ChevronDown, ChevronUp, Copy } from 'lucide-react'
-import { parseExamSegments, parseChoice, parseEssay, parseTimeline, parseSourceRefLine, countEssayChars, essayToPlainText, type ExamKind, type ExamSourceRef, type ExamChoiceOption } from '@/lib/ai/exam-markdown'
+import { BookPlus, Check, ChevronDown, ChevronUp, Copy, Sparkles, Wrench, StickyNote, Eye } from 'lucide-react'
+import { parseExamSegments, parseChoice, parseEssay, parseTimeline, parseSentence, parseSourceRefLine, countEssayChars, essayToPlainText, type ExamKind, type ExamSourceRef, type ExamChoiceOption, type ExamSentencePart } from '@/lib/ai/exam-markdown'
+import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
+import { insertTextToInput } from '@/lib/input-bridge'
+import { useChatStore } from '@/store/chat-store'
 
 // 可视化熔断开关: 一行降级——出现渲染死循环/性能退化时改 false,
 // 全部消息回到纯文本渲染(两段式渲染的保险丝;历史坑: 流式重渲染 Maximum update depth)
@@ -94,6 +98,113 @@ function withInlineMarks(children: React.ReactNode): React.ReactNode {
   return walk(children, 0)
 }
 
+// ── 代码块右键菜单辅助:从 <pre> 的 children(<code class="language-x">…</code>)提取语言与纯文本代码 ──
+// react-markdown 块级 code 走 CodeInline 组件,className 由 ast 属性透传,仍在 props 上
+function codeNodeToText(node: React.ReactNode): string {
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(codeNodeToText).join('')
+  if (React.isValidElement(node)) {
+    return codeNodeToText((node.props as { children?: React.ReactNode }).children)
+  }
+  return ''
+}
+
+function extractCodeInfo(children: React.ReactNode): { language: string; code: string } {
+  const child = Array.isArray(children) ? children[0] : children
+  if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(child)) {
+    const m = /language-([\w+#.-]+)/.exec(child.props.className ?? '')
+    return {
+      language: m ? m[1] : '',
+      code: codeNodeToText(child.props.children),
+    }
+  }
+  return { language: '', code: typeof child === 'string' ? child : '' }
+}
+
+/**
+ * 代码块:在原 pre 样式上接右键菜单(复制 / 交给 AI 处理 / 全屏预览)。
+ * 性能红线:本组件随每条消息渲染 —— memo + 无常驻隐藏 DOM,菜单状态全在
+ * 全局 contextMenuStore,不在本组件持有;流式纯文本分支不经过这里。
+ * 「交给 AI」走 input-bridge 事件注入输入框,不新增 props 链。
+ */
+const CodeBlock = memo(function CodeBlock({ children }: { children?: React.ReactNode }) {
+  const { language, code } = useMemo(() => extractCodeInfo(children), [children])
+  // 「交给 AI」类操作只在聊天页有意义(其他 surface 的输入桥接不存在);
+  // 非聊天页仅保留复制,避免点击后无响应
+  const pathname = usePathname()
+  const inChat = !!pathname?.startsWith('/chat')
+
+  const handleCopy = useCallback(() => {
+    if (!navigator.clipboard?.writeText) {
+      toast.error('当前浏览器不支持自动复制', { title: '复制失败' })
+      return
+    }
+    navigator.clipboard.writeText(code)
+      .then(() => toast.success('已复制代码', { title: '复制' }))
+      .catch((err) => {
+        console.error('[CodeBlock] copy failed:', err)
+        toast.error('复制失败', { title: '复制' })
+      })
+  }, [code])
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (!code.trim()) return
+    e.preventDefault()
+    const langLabel = language || '这段'
+    const mdSource = '```' + language + '\n' + code + '\n```'
+    const candidates: (ContextMenuItem | false | undefined)[] = [
+      {
+        id: 'copy',
+        label: '复制代码',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        onSelect: handleCopy,
+      },
+      inChat && {
+        id: 'explain',
+        label: '让 AI 解释这段代码',
+        icon: <Sparkles className="w-3.5 h-3.5" />,
+        dividerBefore: true,
+        onSelect: () => insertTextToInput(`请解释以下${langLabel}代码:\n\n${mdSource}`),
+      },
+      inChat && {
+        id: 'fix',
+        label: '让 AI 修复 / 优化这段代码',
+        icon: <Wrench className="w-3.5 h-3.5" />,
+        onSelect: () => insertTextToInput(`请修复并优化以下${langLabel}代码,指出问题所在:\n\n${mdSource}`),
+      },
+      inChat && {
+        id: 'comment',
+        label: '让 AI 为代码添加注释',
+        icon: <StickyNote className="w-3.5 h-3.5" />,
+        onSelect: () => insertTextToInput(`请为以下${langLabel}代码添加逐段注释:\n\n${mdSource}`),
+      },
+      inChat && (language === 'html' || language === 'svg') && {
+        id: 'preview',
+        label: '全屏预览',
+        icon: <Eye className="w-3.5 h-3.5" />,
+        dividerBefore: true,
+        onSelect: () => {
+          // 复用 ChatPanel 的预览通道(store 驱动),直接进全屏 iframe
+          const { setPreviewCode, setIsPreviewFullscreen } = useChatStore.getState()
+          setPreviewCode(code)
+          setIsPreviewFullscreen(true)
+        },
+      },
+    ]
+    const items = candidates.filter((it): it is ContextMenuItem => !!it)
+    if (!items.length) return
+    const { openContextMenu } = useContextMenuStore.getState()
+    openContextMenu({ x: e.clientX, y: e.clientY }, items, language ? language.toUpperCase() : undefined)
+  }, [code, language, handleCopy, inChat])
+
+  return (
+    <pre onContextMenu={handleContextMenu} className="my-3 overflow-x-auto rounded-lg border border-line bg-code-bg p-3 text-[13px] leading-relaxed">
+      {children}
+    </pre>
+  )
+})
+
 // markdown 元素 → 项目中性灰 token 样式。只映射视觉关键元素,
 // strong/em 等走浏览器默认;不引入 @tailwindcss/typography(依赖与样式都可控)
 // 行内容器(h1-h4/p/li/a/th/td/strong/em)的 children 统一过 withInlineMarks 接上双色高亮
@@ -151,11 +262,7 @@ const mdComponents: Components = {
     <th className="border-b border-line px-2.5 py-1.5 text-left font-medium text-content-secondary">{withInlineMarks(children)}</th>
   ),
   td: ({ children }) => <td className="border-b border-line px-2.5 py-1.5 align-top">{withInlineMarks(children)}</td>,
-  pre: ({ children }) => (
-    <pre className="my-3 overflow-x-auto rounded-lg border border-line bg-code-bg p-3 text-[13px] leading-relaxed">
-      {children}
-    </pre>
-  ),
+  pre: CodeBlock,
   // 行内 code 样式;块级 code 在 pre 内由 globals.css 的 .rich-md pre code 覆盖为无背景无边框
   code: CodeInline,
   img: ({ src, alt }) => (
@@ -241,7 +348,7 @@ function RichSegment({ content, promote = true }: { content: string; promote?: b
   )
 }
 
-const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴', translate: '译文' }
+const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴', translate: '译文', sentence: '成分分析' }
 
 /** 单组题面: 题干 + 试卷式选项（长选项通栏，全部短选项时自动两列）；选项内高亮照常生效 */
 function ChoiceGroupView({ stem, options }: { stem: string; options: ExamChoiceOption[] }) {
@@ -291,6 +398,112 @@ function ExamTranslateBody({ text }: { text: string }) {
           </div>
         ))}
       </div>
+    </>
+  )
+}
+
+/** 成分配色映射: 每种成分一色，从句按句法功能继承同色(定语从句=定语色、状语从句=状语色…)；
+ * 色值见 globals.css 的 --sent-* 色板，键对应 .exam-sent-c-* 变量类 */
+const SENTENCE_ROLE_COLOR: Record<string, string> = {
+  主语: 'subj', 主语从句: 'subj',
+  谓语: 'pred', 谓语动词: 'pred',
+  宾语: 'obj', 宾语从句: 'obj',
+  表语: 'preci', 表语从句: 'preci',
+  定语: 'attr', 定语从句: 'attr',
+  状语: 'adv', 状语从句: 'adv',
+  补语: 'comp',
+  同位语: 'appo', 同位语从句: 'appo',
+  插入语: 'pare',
+  中心语: 'head',
+  从句: 'attr',
+}
+
+function sentenceRoleColor(role: string): string {
+  return SENTENCE_ROLE_COLOR[role] ?? ''
+}
+
+/** 成分回标: 把明细行的成分片段在原句中定位(找不到再试大小写不敏感),
+ * 重叠消解后按区间切分渲染——每成分一色底色+下划线(课本图解思路)。
+ * 回标是纯展示增强: 匹配失败只是不着色,不吞内容;主干行不参与(内容为主干提炼非原句片段) */
+interface SentenceMark { start: number; end: number; color: string }
+
+function collectSentenceMarks(sentence: string, parts: ExamSentencePart[]): SentenceMark[] {
+  if (!sentence) return []
+  const plain = sentence.replace(/(==+|@@+)/g, '')
+  const marks: SentenceMark[] = []
+  for (const p of parts) {
+    if (p.backbone || !p.text) continue
+    const color = sentenceRoleColor(p.role)
+    if (!color) continue
+    const needle = p.text.trim()
+    if (needle.length < 2) continue
+    let idx = plain.indexOf(needle)
+    if (idx < 0) {
+      const li = plain.toLowerCase().indexOf(needle.toLowerCase())
+      if (li >= 0) idx = li
+    }
+    if (idx < 0) continue
+    marks.push({ start: idx, end: idx + needle.length, color })
+  }
+  marks.sort((a, b) => a.start - b.start || b.end - a.end)
+  const out: SentenceMark[] = []
+  let lastEnd = -1
+  for (const m of marks) {
+    if (m.start >= lastEnd) {
+      out.push(m)
+      lastEnd = m.end
+    }
+  }
+  return out
+}
+
+function SentenceAnnotated({ sentence, marks }: { sentence: string; marks: SentenceMark[] }) {
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  marks.forEach((m, i) => {
+    if (m.start > cursor) nodes.push(<span key={`t${i}`}>{sentence.slice(cursor, m.start)}</span>)
+    nodes.push(
+      <span key={`m${i}`} className={cn('exam-sentence-hl-c', `exam-sent-c-${m.color}`)}>
+        {sentence.slice(m.start, m.end)}
+      </span>,
+    )
+    cursor = m.end
+  })
+  if (cursor < sentence.length) nodes.push(<span key="tail">{sentence.slice(cursor)}</span>)
+  return <>{nodes}</>
+}
+
+/** 句子成分块分区: 首行原句(成分内容自动回标着色) + 成分明细列表(徽标+内容+说明);
+ * 徽标分档同源双色(主干红/修饰蓝),保持卷面两色纪律;无原句或成分行时回退普通文本 */
+function ExamSentenceBody({ text }: { text: string }) {
+  const { sentence, parts, note } = useMemo(() => parseSentence(text), [text])
+  const marks = useMemo(() => collectSentenceMarks(sentence, parts), [sentence, parts])
+  if (!sentence && !parts.length) return <RichSegment content={text} promote={false} />
+  return (
+    <>
+      {sentence && <div className="exam-sentence-raw"><SentenceAnnotated sentence={sentence} marks={marks} /></div>}
+      {parts.length > 0 && (
+        <div className="exam-sentence-rows">
+          {parts.map((p, i) => (
+            <div key={i} className={cn('exam-sentence-row', p.backbone && 'exam-sentence-row-bb')}>
+              <span
+                className={
+                  p.backbone
+                    ? 'exam-sentence-role exam-sentence-role-bb'
+                    : cn('exam-sentence-role exam-sentence-role-c', `exam-sent-c-${sentenceRoleColor(p.role)}`)
+                }
+              >
+                {p.role}
+              </span>
+              <div className="exam-sentence-text">
+                {p.text && <RichSegment content={p.text} promote={false} />}
+                {p.note && <span className="exam-sentence-note">｜{p.note}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {note && <div className="exam-sentence-footnote"><RichSegment content={note} promote={false} /></div>}
     </>
   )
 }
@@ -546,6 +759,8 @@ function ExamBlock({
         <ExamQuestionBody text={displayText} />
       ) : kind === 'translate' ? (
         <ExamTranslateBody text={text} />
+      ) : kind === 'sentence' ? (
+        <ExamSentenceBody text={text} />
       ) : kind === 'answer' ? (
         <ExamAnswerBody text={text} collapsible={!!answerCollapsible} />
       ) : (

@@ -8,6 +8,9 @@ import {
   Pencil,
   Compass,
   GraduationCap,
+  Zap,
+  Smile,
+  Lightbulb,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -26,6 +29,9 @@ const ICON_MAP: Record<StylePreset['icon'], LucideIcon> = {
   Pencil,
   Compass,
   GraduationCap,
+  Zap,
+  Smile,
+  Lightbulb,
 }
 
 interface StylePickerProps {

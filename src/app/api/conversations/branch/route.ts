@@ -133,6 +133,8 @@ ${transcript.slice(0, 24000)}`
     temperature: 0,
     maxOutputTokens: 800,
     prompt,
+    // 摘要任务不思考:省 token 与延迟(DeepSeek V4 默认 enabled)
+    providerOptions: { deepseek: { thinking: { type: "disabled" } } },
   })
   return text.trim()
 }

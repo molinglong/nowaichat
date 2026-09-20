@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, MoreHorizontal, Check, ChevronDown, MessageSquarePlus, BookOpen, Settings as SettingsIcon, Keyboard } from 'lucide-react'
+import { Menu, Plus, Sparkles, Scale, Check, ChevronDown, MessageSquarePlus, BookOpen, PenLine, Settings as SettingsIcon, Keyboard } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
@@ -10,9 +10,7 @@ import { useIsTauri } from '@/lib/tauri'
 import { useStartNewChat } from '@/hooks/useStartNewChat'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { queryKeys, STALE, IMAGES_PAGE_SIZE } from '@/lib/query/keys'
-import { fetchJson } from '@/lib/query/fetcher'
-import type { ModelDefinition } from '@/lib/ai/types'
+import { prefetchTabData as prefetchTabDataShared, type TabKey } from '@/lib/query/prefetchTab'
 
 // 快捷键提示表:与已实现行为一一对应(j/k 与 Enter 复制见 MessageList,搜索见 Sidebar)
 const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
@@ -23,8 +21,6 @@ const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
   { keys: 'Esc', desc: '取消选中' },
   { keys: '⌘ / Ctrl + K', desc: '搜索会话' },
 ]
-
-type TabKey = 'chat' | 'images' | 'explore'
 
 export function TopBar() {
   const inTauri = useIsTauri()
@@ -37,10 +33,9 @@ export function TopBar() {
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const bumpConversationVersion = useChatStore((s) => s.bumpConversationVersion)
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
+  // 写作画布面板打开时顶栏同步让位(与 ChatPanel/WriteDocPanel 同宽同动画)
+  const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
   const [title, setTitle] = useState(conversationTitle)
-  // 极窄屏(<381px)折叠菜单的开关
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
   // 中部胶囊「更多」二级菜单(收纳观点探索/错题本,保持胶囊组精简)
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
@@ -58,9 +53,8 @@ export function TopBar() {
     setTitle(conversationTitle)
   }, [conversationTitle])
 
-  // 路由变化时自动关闭折叠菜单 / 更多菜单 + 清掉 pendingTab
+  // 路由变化时自动关闭更多菜单 + 清掉 pendingTab
   useEffect(() => {
-    setMenuOpen(false)
     setMoreOpen(false)
     setPendingTab(null)
   }, [pathname])
@@ -70,82 +64,14 @@ export function TopBar() {
     router.prefetch('/chat')
     router.prefetch('/images')
     router.prefetch('/explore')
+    router.prefetch('/write')
   }, [router])
 
   // ── Tab 数据预热 ────────────────────────────────────────
-  // 用户点 tab 之前已经在某些场景下耗时地下载 JS chunk / 拉数据。
-  // 提前 prefetch 让切到目标页时 useQuery 走 cache 同步命中,不再 spinner。
-  //
-  // 关键点:
-  // 1. hover 也触发 — 桌面端用户在鼠标进入 tab 的瞬间就把数据备好
-  // 2. 每个 tab 都有自己要用的 query key(列表分别预热),不滥用
-  // 3. 与 router.prefetch 互补:router prefetch 是下载 RSC chunk,
-  //    queryClient.prefetchQuery 是拉服务端数据,二者缺一不可
+  // 实现体抽到 lib/query/prefetchTab.ts(移动端 BottomDock 共用同一套预热),
+  // 这里保留同名薄包装 —— 所有调用点零改动。
   const prefetchTabData = useCallback(
-    (tab: TabKey) => {
-      // 所有 tab 都会用到 providers — 总是预热
-      queryClient.prefetchQuery({
-        queryKey: queryKeys.providers(),
-        queryFn: async () => {
-          const payload = await fetchJson<
-            | Array<{ id?: string; effectiveModels: ModelDefinition[] }>
-            | { providers: Array<{ id?: string; effectiveModels: ModelDefinition[] }> }
-          >('/api/providers')
-          const list = Array.isArray(payload) ? payload : payload.providers ?? []
-          return list.flatMap((p) =>
-            p.effectiveModels.map((m): ModelDefinition => ({
-              id: m.id,
-              name: m.name,
-              provider: p.id ?? '',
-              contextWindow: m.contextWindow,
-              supportsVision: m.supportsVision,
-              supportsFiles: m.supportsFiles,
-              supportsReasoning: m.supportsReasoning,
-            }))
-          )
-        },
-        staleTime: STALE.providers,
-      })
-
-      // /chat 新对话页 + /chat/c/[id] 都需要 models — providers 已经覆盖
-      // 已有会话的内容由 React Query 的 staleTime(10s)自动管理,不强 prefetch
-
-      if (tab === 'images') {
-        // 生图历史列表:生图页主体用本地 state 渲染、首次挂载必拉接口。
-        // 这里预热首页数据(生图页拉完也会写回同一 key),切到生图页时
-        // 直接从缓存同步回填,不再主区空白 1.5s。
-        queryClient.prefetchQuery({
-          queryKey: queryKeys.images.list(IMAGES_PAGE_SIZE, 0),
-          queryFn: () =>
-            fetchJson<{ items?: unknown[]; total?: number }>(
-              `/api/images?limit=${IMAGES_PAGE_SIZE}&offset=0`
-            ),
-          staleTime: STALE.images,
-        })
-
-        queryClient.prefetchQuery({
-          queryKey: queryKeys.images.settings(),
-          queryFn: () =>
-            fetchJson<{
-              settings?: { imageModel?: string; imageSize?: string }
-              builtinModels?: Array<Record<string, unknown>>
-              customModels?: Array<Record<string, unknown>>
-            }>('/api/image-settings'),
-          staleTime: STALE.imageSettings,
-        })
-      }
-
-      if (tab === 'explore') {
-        queryClient.prefetchQuery({
-          queryKey: queryKeys.customModels(),
-          queryFn: () =>
-            fetchJson<ModelDefinition[] | { items?: ModelDefinition[] }>(
-              '/api/custom-models'
-            ).then((d) => (Array.isArray(d) ? d : d?.items ?? [])),
-          staleTime: STALE.customModels,
-        })
-      }
-    },
+    (tab: TabKey) => prefetchTabDataShared(queryClient, tab),
     [queryClient]
   )
 
@@ -154,34 +80,33 @@ export function TopBar() {
     prefetchTabData('chat')
   }, [prefetchTabData])
 
-  // 点击外部关闭折叠菜单 / 更多二级菜单
+  // 点击外部关闭「更多」二级菜单
   useEffect(() => {
-    if (!menuOpen && !moreOpen) return
+    if (!moreOpen) return
     function onPointerDown(e: PointerEvent) {
-      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-      }
       if (moreOpen && moreRef.current && !moreRef.current.contains(e.target as Node)) {
         setMoreOpen(false)
       }
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [menuOpen, moreOpen])
+  }, [moreOpen])
 
   // 在 /images 页面显示固定的页面标题
   const isImagesPage = pathname?.startsWith('/images')
   const isExplorePage = pathname?.startsWith('/explore')
   const isStudyPage = pathname?.startsWith('/study')
-  const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : isStudyPage ? '错题本' : (title || '新对话')
+  const isWritePage = pathname?.startsWith('/write')
+  const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : isStudyPage ? '错题本' : isWritePage ? '写作画布' : (title || '新对话')
 
   // 活跃态
-  const isChatActive = (!isImagesPage && !isExplorePage && !isStudyPage) || pendingTab === 'chat'
+  const isChatActive = (!isImagesPage && !isExplorePage && !isStudyPage && !isWritePage) || pendingTab === 'chat'
   const isStudyActive = Boolean(isStudyPage)
   const isImagesActive = Boolean(isImagesPage) || pendingTab === 'images'
   const isExploreActive = Boolean(isExplorePage) || pendingTab === 'explore'
-  // 「更多」按钮的激活态:探索/错题本任一页面即点亮(收纳入口的父级高亮)
-  const isMoreActive = isExploreActive || isStudyActive
+  const isWriteActive = Boolean(isWritePage) || pendingTab === 'write'
+  // 「更多」按钮的激活态:探索/错题本/写作任一页面即点亮(收纳入口的父级高亮)
+  const isMoreActive = isExploreActive || isStudyActive || isWriteActive
 
   const navigateTo = useCallback((tab: TabKey, go: () => void) => {
     setPendingTab(tab)
@@ -211,6 +136,11 @@ export function TopBar() {
     prefetchTabData('explore')
     navigateTo('explore', () => router.push('/explore'))
   }, [navigateTo, pathname, router, prefetchTabData])
+
+  const handleGoWrite = useCallback(() => {
+    if (pathname?.startsWith('/write')) return
+    navigateTo('write', () => router.push('/write'))
+  }, [navigateTo, pathname, router])
 
   /**
    * 「在新对话继续」:把当前对话(含所有上下文消息)用 LLM 压缩成结构化摘要,
@@ -269,7 +199,7 @@ export function TopBar() {
 
   return (
     <header
-      className="relative z-40 flex items-center h-9 px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl"
+      className={`relative z-40 flex items-center h-11 md:h-9 px-1.5 md:px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl transition-[margin] duration-300 ease-out ${writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}
       {...(inTauri
         ? {
             'data-tauri-drag-region': '',
@@ -281,17 +211,17 @@ export function TopBar() {
         : {})}
     >
       {/* Left: 汉堡菜单(仅移动端可见) + 当前页标题 */}
-      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[40%]">
+      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[60%] md:max-w-[40%]">
         <button
           onClick={toggleSidebar}
-          className="md:hidden shrink-0 p-1.5 -ml-1 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors active:scale-95 touch-manipulation"
+          className="md:hidden shrink-0 p-2 -ml-1 md:p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors active:scale-95 touch-manipulation"
           aria-label="打开侧边栏"
           title="打开侧边栏"
           style={{ WebkitTapHighlightColor: 'transparent' }}
         >
           <Menu className="w-4 h-4" />
         </button>
-        <span className="text-xs font-medium text-content-muted truncate ml-1">
+        <span className="text-sm font-medium text-content-secondary truncate ml-1.5 md:ml-1 md:text-xs md:text-content-muted">
           {displayTitle}
         </span>
       </div>
@@ -299,7 +229,7 @@ export function TopBar() {
       {/* Center: 胶囊选项卡 — 绝对居中 */}
       <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none">
         {/* ≥381px: 完整胶囊 */}
-        <div className="hidden min-[381px]:flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-subtle/70 pointer-events-auto">
+        <div className="hidden md:flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-subtle/70 pointer-events-auto">
           <button
             onClick={handleNewChat}
             onMouseEnter={() => prefetchTabData('chat')}
@@ -385,6 +315,23 @@ export function TopBar() {
                   role="menuitem"
                   onClick={() => {
                     setMoreOpen(false)
+                    handleGoWrite()
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
+                    isWriteActive
+                      ? 'bg-surface-subtle text-content-primary'
+                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
+                  )}
+                >
+                  <PenLine className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1">写作画布</span>
+                  {isWriteActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreOpen(false)
                     if (!isStudyActive) router.push('/study')
                   }}
                   className={cn(
@@ -405,115 +352,20 @@ export function TopBar() {
           )}
         </div>
 
-        {/* <381px: 极窄屏折叠菜单 */}
-        <div ref={menuRef} className="min-[381px]:hidden relative pointer-events-auto">
-          <button
-            onClick={() => setMenuOpen(o => !o)}
-            onMouseEnter={() => {
-              // 折叠态下预先把 tab 数据热起来，展开后任意点击都秒开
-              // 临时模式只热聊天（生图/探索入口已隐藏，预热无意义）
-              prefetchTabData('chat')
-              if (!isEphemeral) {
-                prefetchTabData('images')
-                prefetchTabData('explore')
-              }
-            }}
-            className="flex items-center justify-center w-7 h-7 rounded-lg bg-surface-subtle/70 hover:bg-surface-subtle text-content-secondary hover:text-content-primary transition-all active:scale-95 touch-manipulation"
-            aria-label="切换页面"
-            aria-expanded={menuOpen}
-            aria-haspopup="menu"
-            title="切换页面"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <MoreHorizontal className="w-4 h-4" />
-          </button>
-          {menuOpen && (
-            <div
-              role="menu"
-              className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 w-44 bg-surface border border-line/60 rounded-lg shadow-xl z-50 py-1 overflow-hidden"
-            >
-              <button
-                role="menuitem"
-                onClick={handleNewChat}
-                onMouseEnter={() => prefetchTabData('chat')}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                  isChatActive
-                    ? 'bg-surface-subtle text-content-primary'
-                    : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                )}
-              >
-                <Plus className="w-3.5 h-3.5 shrink-0" />
-                <span className="flex-1">聊天</span>
-                {isChatActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-              </button>
-              {/* 临时聊天模式：折叠菜单同样只保留聊天 */}
-              {!isEphemeral && (
-              <>
-              <button
-                role="menuitem"
-                onClick={handleGoImages}
-                onMouseEnter={() => prefetchTabData('images')}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                  isImagesActive
-                    ? 'bg-surface-subtle text-content-primary'
-                    : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                )}
-              >
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span className="flex-1">生图工作台</span>
-                {isImagesActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-              </button>
-              <button
-                role="menuitem"
-                onClick={handleGoExplore}
-                onMouseEnter={() => prefetchTabData('explore')}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                  isExploreActive
-                    ? 'bg-surface-subtle text-content-primary'
-                    : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                )}
-              >
-                <Scale className="w-3.5 h-3.5 shrink-0" />
-                <span className="flex-1">观点探索</span>
-                {isExploreActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-              </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false)
-                  if (!isStudyActive) router.push('/study')
-                }}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                  isStudyActive
-                    ? 'bg-surface-subtle text-content-primary'
-                    : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                )}
-              >
-                <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                <span className="flex-1">错题本</span>
-                {isStudyActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-              </button>
-              </>
-              )}
-            </div>
-          )}
-        </div>
+        {/* 极窄屏折叠菜单已移除:移动端页面导航由 BottomDock(底部毛玻璃 Dock)接管 */}
       </div>
 
       {/* Right: 「在新对话继续」按钮(仅在已有具体对话时显示) + 设置(固定最右侧)。
           不设 max-w 上限:flex-1 吸收左侧剩余空间,justify-end 把内容钉在右边缘,
           中间胶囊是绝对定位不受影响 */}
       <div className="flex items-center gap-0.5 min-w-0 flex-1 justify-end">
-        {canBranch && (
+        {/* 写作画布面板打开时顶栏压缩,次要入口隐藏(canBranch 已含面板态判断) */}
+        {canBranch && !writePanelOpen && (
           <button
             onClick={handleBranchConversation}
             disabled={isBranching}
             className={cn(
-              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
+              'hidden md:inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
               'text-content-secondary hover:text-content-primary hover:bg-surface-subtle active:scale-95',
               isBranching && 'opacity-60 cursor-wait'
             )}
@@ -526,7 +378,7 @@ export function TopBar() {
           </button>
         )}
         {/* 快捷键说明:轻量弹层,提升 j/k 等隐藏快捷键的可发现性(紧邻设置入口) */}
-        <div className="relative shrink-0">
+        <div className={writePanelOpen ? 'hidden' : 'relative shrink-0 hidden md:block'}>
           <button
             onClick={() => setHotkeysOpen((v) => !v)}
             className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
@@ -565,7 +417,7 @@ export function TopBar() {
             账户管理类板块及其数据加载已在 SettingsModal 内按 isEphemeral 跳过) */}
         <button
           onClick={() => setSettingsOpen(true)}
-            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+            className="shrink-0 inline-flex items-center justify-center p-2 md:p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
             aria-label="设置"
             title="设置"
             style={{ WebkitTapHighlightColor: 'transparent' }}

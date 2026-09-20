@@ -10,12 +10,13 @@
  *   :::essay …（作文纸：首行标题，正文段落，末行「全文约 X 字」）… :::
  *   :::timeline …（时间轴：首行可选标题，每行「年份｜朝代｜事件｜一句话｜出处」，行首 * = 关键节点）… :::
  *   :::translate …（英文题目的中文译文：首行题干，之后每行「A. 选项中文」；无选项行时整块按普通文本渲染）… :::
+ *   :::sentence …（句子成分分析：首行原句，之后每行「成分名：内容｜说明」，主干行「主干：主语 ‖ 谓语 ‖ 宾语」；成分内容须为原句连续片段，渲染层自动回标着色）… :::
  *   出处行「参考 xx·科目」支持各学科面具：数学/语文/英语/物理/化学/生物/历史/政治/地理
  * 解析为片段流后由 MarkdownRenderer 分别渲染成试卷卡片；
  * 关键词双色标注（==术语== / @@材料词@@）在渲染层处理，见 MarkdownRenderer.tsx。
  */
 
-export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'lyrics' | 'essay' | 'timeline' | 'translate'
+export type ExamKind = 'choice' | 'material' | 'question' | 'answer' | 'poem' | 'lyrics' | 'essay' | 'timeline' | 'translate' | 'sentence'
 
 export type ExamSegment =
   | { type: 'md'; text: string }
@@ -46,7 +47,7 @@ const CHOICE_OPTION_RE = /^\s*([A-Fa-f])[.、．:：]\s*(.+)$/
 /** 题号行：1. / 1、 / 1) 等前缀（数字后紧跟分隔符，避免误伤「755 年乱起」类正文） */
 const QUESTION_NO_RE = /^\s*\d{1,3}[.、．)]\s*(\S.*)$/
 
-const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|lyrics|essay|timeline|translate)(?:\s+(.*?))?\s*$/
+const EXAM_OPEN_RE = /^:::(choice|material|question|answer|poem|lyrics|essay|timeline|translate|sentence)(?:\s+(.*?))?\s*$/
 const EXAM_CLOSE_RE = /^:::\s*$/
 
 /**
@@ -209,6 +210,59 @@ export function parseTimeline(text: string): ExamTimeline {
     else noteBuf.push(line)
   }
   return { title, events, note: noteBuf.join('\n') }
+}
+
+export interface ExamSentencePart {
+  /** 成分名（主干/主语/谓语/宾语/表语/定语/状语/补语/同位语/插入语/从句及各类从句） */
+  role: string
+  /** 成分内容（约定为原句连续片段，渲染层据此回标；主干行内容为主干提炼不回标） */
+  text: string
+  /** ｜后的说明（从句类型/修饰对象等）；可空 */
+  note: string
+  /** 主干行（主干：…）：渲染层单独强调 */
+  backbone: boolean
+}
+
+export interface ExamSentence {
+  /** 首行原句；模型省略原句直接列成分时为空串 */
+  sentence: string
+  parts: ExamSentencePart[]
+  /** 未按「成分名：」格式的其余行（尾注，不吞内容） */
+  note: string
+}
+
+/** 成分行格式：「成分名：内容」，成分名白名单（长词在前避免「主语从句」被「主语」截胡）；配色由渲染层按 role 映射 */
+const SENTENCE_ROLE_RE = /^(主干|主语从句|主语|谓语动词|谓语|宾语从句|宾语|表语从句|表语|定语从句|定语|状语从句|状语|补语|同位语从句|同位语|插入语|中心语|从句)\s*[:：]\s*(.*)$/
+
+/**
+ * 句子成分块内解析：首个非成分行作原句（剥离可选「原句：」前缀），
+ * 其余按「成分名：内容｜说明」逐行切分（全角/半角冒号与竖线均可）；
+ * 首行即成分行时视为省略原句（sentence 为空，渲染层只列明细）。
+ * 白名单外或无冒号的行入尾注，不吞内容；流式逐次重算幂等。
+ */
+export function parseSentence(text: string): ExamSentence {
+  const parts: ExamSentencePart[] = []
+  const noteBuf: string[] = []
+  let sentence = ''
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const pm = line.match(SENTENCE_ROLE_RE)
+    if (!pm) {
+      if (!sentence && !parts.length) sentence = line.replace(/^原句\s*[:：]\s*/, '')
+      else noteBuf.push(line)
+      continue
+    }
+    const role = pm[1]
+    const segs = (pm[2] ?? '').split(/[｜|]/)
+    parts.push({
+      role,
+      text: segs[0].trim(),
+      note: segs.slice(1).join('｜').trim(),
+      backbone: role === '主干',
+    })
+  }
+  return { sentence, parts, note: noteBuf.join('\n') }
 }
 
 export interface ExamSourceRef {

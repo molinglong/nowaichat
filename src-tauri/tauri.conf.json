@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "八号产房",
+  "productName": "aichatt",
   "version": "0.1.0",
   "identifier": "com.aichatt.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "八号产房",
+        "title": "aichatt",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

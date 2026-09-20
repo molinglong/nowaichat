@@ -50,6 +50,12 @@ interface ChatState {
   /** 会话列表刷新信号：新会话创建时 +1，侧边栏监听此值重新拉取列表 */
   conversationVersion: number
   bumpConversationVersion: () => void
+  /** 后台生成跟踪:生成中切走的会话 ID → 注册时刻.
+   *  useBackgroundStreamWatcher(Sidebar 常驻)轮询这些会话的最新消息,
+   *  生成完成后 bumpConversationVersion 点亮侧边栏蓝点并移除跟踪. */
+  backgroundStreaming: Record<string, number>
+  registerBackgroundStreaming: (conversationId: string) => void
+  unregisterBackgroundStreaming: (conversationId: string) => void
   /** 新对话重置信号:每次「开新对话」动作 +1.
    *  chat/page.tsx 把它拼进 ChatPanel 的 key —— 即使 React 因
    *  history.replaceState 造成的路由状态与树不一致而复用同一棵 page
@@ -88,6 +94,10 @@ interface ChatState {
   markConversationRead: (conversationId: string) => void
   /** 删除会话时同步清理已读记录 */
   removeConversationRead: (conversationId: string) => void
+  /** 聊天内嵌写作画布面板:当前打开的文档 id,null=关闭(豆包式右侧滑出,不跳转页面) */
+  writePanelDocId: string | null
+  openWritePanel: (docId: string) => void
+  closeWritePanel: () => void
   /** 键盘导航(j/k)选中的消息 ID,null 表示未选中任何消息 */
   focusedMessageId: string | null
   setFocusedMessageId: (id: string | null) => void
@@ -153,6 +163,24 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   conversationVersion: 0,
   bumpConversationVersion: () =>
     set((state) => ({ conversationVersion: state.conversationVersion + 1 })),
+  backgroundStreaming: {},
+  registerBackgroundStreaming: (conversationId) => {
+    if (!conversationId) return
+    set((state) =>
+      state.backgroundStreaming[conversationId]
+        ? state // 已注册:返回原引用,避免触发无关订阅
+        : { backgroundStreaming: { ...state.backgroundStreaming, [conversationId]: Date.now() } }
+    )
+  },
+  unregisterBackgroundStreaming: (conversationId) => {
+    if (!conversationId) return
+    set((state) => {
+      if (!(conversationId in state.backgroundStreaming)) return state
+      const next = { ...state.backgroundStreaming }
+      delete next[conversationId]
+      return { backgroundStreaming: next }
+    })
+  },
   newChatNonce: 0,
   bumpNewChatNonce: () =>
     set((state) => ({ newChatNonce: state.newChatNonce + 1 })),
@@ -203,6 +231,9 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
       return { lastReadAt: next }
     })
   },
+  writePanelDocId: null,
+  openWritePanel: (docId) => set({ writePanelDocId: docId }),
+  closeWritePanel: () => set({ writePanelDocId: null }),
   focusedMessageId: null,
   setFocusedMessageId: (id) => set({ focusedMessageId: id }),
   replyingTo: null,

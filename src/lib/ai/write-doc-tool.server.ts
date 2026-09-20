@@ -1,0 +1,63 @@
+import { tool } from "ai"
+import { prisma } from "@/lib/db"
+import { MAX_WRITE_CONTENT_CHARS, normalizeWriteTitle } from "@/lib/write/doc-input"
+import { writeDocToolSchema, type WriteDocToolOutput } from "@/lib/ai/write-doc-tool"
+
+/**
+ * write_document 工具工厂（服务端专用，依赖 prisma；勿从客户端组件 import）。
+ * 常量与 schema 在 write-doc-tool.ts（isomorphic），拆分原因见该文件头注释。
+ *
+ * 与 REST API（/api/write/docs）共用 WriteDoc 表与校验口径
+ * （normalizeWriteTitle 同一函数），聊天创建的文档与 /write 手动新建完全互通。
+ */
+export function createWriteDocTool(userId: string) {
+  return tool({
+    description:
+      "把成篇幅的正文（小说/故事/作文/演讲稿/文案/文稿）创建为用户的写作文档，" +
+      "在写作画布(/write)中打开继续编辑。用户要求写这类内容时调用；" +
+      "短回答、问答、翻译、代码等不要调用。",
+    inputSchema: writeDocToolSchema,
+    execute: async ({ action, docId, title, content }): Promise<WriteDocToolOutput> => {
+      const body = content.trim()
+      if (!body) {
+        return { ok: false, message: "正文内容为空" }
+      }
+      try {
+        if (action === "append") {
+          if (!docId) {
+            return { ok: false, message: "缺少要续写的文档 id" }
+          }
+          const doc = await prisma.writeDoc.findFirst({
+            where: { id: docId, userId },
+            select: { id: true, title: true, content: true },
+          })
+          if (!doc) {
+            return { ok: false, message: "要续写的文档不存在或无权限" }
+          }
+          const merged = `${doc.content}\n\n${body}`
+          if (merged.length > MAX_WRITE_CONTENT_CHARS) {
+            return { ok: false, message: "续写后超过文档长度上限，请缩短本次内容" }
+          }
+          const updated = await prisma.writeDoc.update({
+            where: { id: doc.id },
+            data: { content: merged, charCount: merged.length },
+            select: { id: true, title: true, charCount: true },
+          })
+          return { ok: true, action: "append", docId: updated.id, title: updated.title, charCount: updated.charCount }
+        }
+        const doc = await prisma.writeDoc.create({
+          data: {
+            userId,
+            title: normalizeWriteTitle(title),
+            content: body,
+            charCount: body.length,
+          },
+          select: { id: true, title: true, charCount: true },
+        })
+        return { ok: true, action: "create", docId: doc.id, title: doc.title, charCount: doc.charCount }
+      } catch {
+        return { ok: false, message: "文档保存失败，请稍后重试" }
+      }
+    },
+  })
+}

@@ -1,11 +1,13 @@
 'use client'
 
-import { useState, useRef, useEffect, KeyboardEvent, memo } from 'react'
+import { useState, useRef, useEffect, useCallback, KeyboardEvent, memo } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { Trash2, Pencil, Check, X } from 'lucide-react'
+import { useRouter, usePathname } from 'next/navigation'
+import { Trash2, Pencil, Check, X, GitBranch, Copy, Download } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { useChatStore } from '@/store/chat-store'
+import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { isUnread } from '@/lib/last-read'
 
@@ -32,6 +34,7 @@ const STAGGER_MAX_INDEX = 15
 function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 0, lastMessageAt, onDelete, onRename }: ConversationItemProps) {
   const staggerDelay = Math.min(index, STAGGER_MAX_INDEX) * STAGGER_STEP_MS
   const pathname = usePathname()
+  const router = useRouter()
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const lastReadAt = useChatStore((s) => s.lastReadAt)
   // Fall back to the store because after the first message of a new chat the URL
@@ -45,6 +48,9 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(title)
   const inputRef = useRef<HTMLInputElement>(null)
+  // 右键菜单的分支/导出动作自带异步状态(不新增 props,不触碰 memo 比较函数)
+  const [branching, setBranching] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   // Focus and select all text when entering edit mode
   useEffect(() => {
@@ -59,11 +65,16 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
     setEditValue(title)
   }, [title])
 
+  // beginEdit 是无事件版本:右键菜单项也要进编辑态(菜单里拿不到原 MouseEvent)
+  const beginEdit = useCallback(() => {
+    setEditValue(title)
+    setIsEditing(true)
+  }, [title])
+
   function startEditing(e: React.MouseEvent) {
     e.preventDefault()
     e.stopPropagation()
-    setEditValue(title)
-    setIsEditing(true)
+    beginEdit()
   }
 
   const startEditingDebounced = useSingleFlight(startEditing, [title])
@@ -77,6 +88,150 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
   }
 
   const handleDeleteDebounced = useSingleFlight(handleDelete, [id, onDelete])
+
+  // ── 右键菜单:分支此对话(与 TopBar 同一 API,自含实现不透传回调) ──
+  const handleBranch = useCallback(async () => {
+    if (branching) return
+    setBranching(true)
+    try {
+      const res = await fetch('/api/conversations/branch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId: id }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}))
+        throw new Error(detail?.error ?? `HTTP ${res.status}`)
+      }
+      const newConv = (await res.json()) as {
+        id: string
+        title?: string
+        mode?: 'compressed' | 'cloned'
+        summary?: string
+        warning?: string
+      }
+      const modeLabel =
+        newConv.mode === 'compressed'
+          ? '已压缩上文,新对话已就绪'
+          : newConv.mode === 'cloned'
+            ? '压缩失败,已克隆原对话'
+            : '新对话已就绪'
+      const summaryPreview = newConv.summary ? newConv.summary.slice(0, 80) + '…' : ''
+      toast.success(summaryPreview ? `${modeLabel}\n${summaryPreview}` : modeLabel, {
+        title: '分支对话',
+      })
+      // 通知侧边栏刷新会话列表(创建了新对话),并跳转到新对话
+      useChatStore.getState().bumpConversationVersion()
+      router.push(`/chat/c/${newConv.id}`)
+    } catch (err) {
+      console.error('[ConversationItem] branch failed:', err)
+      toast.error(err instanceof Error ? err.message : '创建分支对话失败,请重试', {
+        title: '分支对话',
+      })
+    } finally {
+      setBranching(false)
+    }
+  }, [branching, id, router])
+
+  // ── 右键菜单:导出 Markdown(分页拉全量消息,desc+cursor 逐页追齐后反拼) ──
+  const handleExport = useCallback(async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      type ExportMessage = { role: string; content: string; createdAt?: string }
+      const all: ExportMessage[] = []
+      let cursor: string | null | undefined
+      // 50 页 × 100 条 = 5000 条保险上限,防止异常循环
+      for (let page = 0; page < 50; page++) {
+        const params = new URLSearchParams({ limit: '100' })
+        if (cursor) params.set('cursor', cursor)
+        const res = await fetch(`/api/conversations/${id}/messages?${params}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as { messages?: ExportMessage[]; nextCursor?: string | null }
+        all.push(...(data.messages ?? []))
+        if (!data.nextCursor) break
+        cursor = data.nextCursor
+      }
+      if (!all.length) {
+        toast.error('该对话暂无可导出的消息', { title: '导出' })
+        return
+      }
+      // 接口按时间倒序分页返回,反拼成时间正序
+      all.reverse()
+      const lines: string[] = [`# ${title}`, '']
+      for (const m of all) {
+        const who = m.role === 'user' ? '用户' : m.role === 'assistant' ? 'AI' : '系统'
+        lines.push(`**${who}**`, '', m.content, '', '---', '')
+      }
+      const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${(title || '对话').replace(/[\\/:*?"<>|\n]/g, ' ').slice(0, 50) || '对话'}.md`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success(`已导出 ${all.length} 条消息`, { title: '导出' })
+    } catch (err) {
+      console.error('[ConversationItem] export failed:', err)
+      toast.error('导出失败,请重试', { title: '导出' })
+    } finally {
+      setExporting(false)
+    }
+  }, [exporting, id, title])
+
+  // ── 右键菜单:会话级操作集合(hover 按钮之外补充的桌面端入口) ──
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const { openContextMenu } = useContextMenuStore.getState()
+    const items: ContextMenuItem[] = []
+    if (onRename) {
+      items.push({
+        id: 'rename',
+        label: '重命名',
+        icon: <Pencil className="w-3.5 h-3.5" />,
+        onSelect: beginEdit,
+      })
+    }
+    items.push({
+      id: 'branch',
+      label: branching ? '正在创建分支…' : '分支此对话',
+      icon: <GitBranch className="w-3.5 h-3.5" />,
+      disabled: branching,
+      onSelect: handleBranch,
+    })
+    items.push({
+      id: 'copy-title',
+      label: '复制标题',
+      icon: <Copy className="w-3.5 h-3.5" />,
+      onSelect: () => {
+        if (!navigator.clipboard?.writeText) {
+          toast.error('当前浏览器不支持自动复制', { title: '复制失败' })
+          return
+        }
+        navigator.clipboard.writeText(title)
+          .then(() => toast.success('已复制标题', { title: '复制' }))
+          .catch(() => toast.error('复制失败', { title: '复制' }))
+      },
+    })
+    items.push({
+      id: 'export',
+      label: exporting ? '正在导出…' : '导出 Markdown',
+      icon: <Download className="w-3.5 h-3.5" />,
+      disabled: exporting,
+      onSelect: handleExport,
+    })
+    if (onDelete) {
+      items.push({
+        id: 'delete',
+        label: '删除对话',
+        danger: true,
+        dividerBefore: true,
+        icon: <Trash2 className="w-3.5 h-3.5" />,
+        onSelect: () => onDelete(id),
+      })
+    }
+    openContextMenu({ x: e.clientX, y: e.clientY }, items)
+  }, [onRename, beginEdit, branching, handleBranch, exporting, handleExport, onDelete, id, title])
 
   function cancelEditing() {
     setEditValue(title)
@@ -140,6 +295,7 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
     <Link
       href={`/chat/c/${id}`}
       style={{ animationDelay: `${staggerDelay}ms` }}
+      onContextMenu={handleContextMenu}
       className={cn(
         'sidebar-item-enter group flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm transition-colors',
         isActive

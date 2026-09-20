@@ -16,7 +16,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "八号产房 - AI 多模型对话助手",
+  title: "aichatt - AI 多模型对话助手",
   description: "支持 OpenAI、Anthropic、DeepSeek、通义千问、文心一言的多模型 AI 对话平台",
   // PWA 清单: 添加到主屏幕后 standalone 全屏运行,
   // 配合 viewport-fit=cover + globals.css 的 --sat/--sab 安全区变量
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
   // iOS 添加到主屏幕后,以 standalone 模式运行,顶部状态栏样式(translucent 需要配合 viewport-fit=cover)
   appleWebApp: {
     capable: true,
-    title: "八号产房",
+    title: "aichatt",
     statusBarStyle: "black-translucent",
   },
   formatDetection: {

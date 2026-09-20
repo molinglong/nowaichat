@@ -2492,7 +2492,7 @@ export function SettingsModal() {
                           <button
                             onClick={handleTestSearch}
                             disabled={searchTesting || !searchQuery.trim() || !key}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-white hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-accent-foreground hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             {searchTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
                             搜索
@@ -3301,7 +3301,7 @@ export function SettingsModal() {
                             type="text"
                             value={cmForm.modelId}
                             onChange={(e) => setCmForm({ ...cmForm, modelId: e.target.value })}
-                            placeholder="模型 ID (如：deepseek-chat)"
+                            placeholder="模型 ID (如：deepseek-flash)"
                             className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
                           />
                         </div>
@@ -4361,13 +4361,14 @@ export function SettingsModal() {
                       </div>
                     )}
 
-                    {/* ── 记忆列表（始终可滚动）──────────────────── */}
+                    {/* ── 记忆列表(自然展开,由弹窗滚动区统一滚动,
+                        内嵌 max-h 小滚动区会把最后一条裁半且形成双层滚动)────────── */}
                     {memories.length === 0 ? (
                       <p className="text-[11px] text-content-muted text-left py-1">
                         暂无记忆。聊天中告诉 AI 你的喜好，它会自动记下来。
                       </p>
                     ) : (
-                      <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                      <ul className="space-y-1.5">
                         {memories.map((m) => (
                           <li
                             key={m.id}
@@ -4491,8 +4492,9 @@ export function SettingsModal() {
 
                 {/* 通用 */}
                 {activeSection === 'general' && (
-                  <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                  <div className="space-y-2.5">
                     {/* Style Settings */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
                     <div className="text-left">
                       <p className="text-xs text-content-secondary">AI 风格</p>
                       <p className="text-[11px] text-content-muted">选择 AI 回答的语气与详略风格</p>
@@ -4524,13 +4526,17 @@ export function SettingsModal() {
                         }
                       }}
                       label="对话风格"
+                      className="mt-2.5"
                     />
+                    </div>
 
-                    <div className="text-left pt-2 border-t border-line/60">
+                    {/* 外观 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                    <div className="text-left">
                       <p className="text-xs text-content-secondary">外观</p>
                       <p className="text-[11px] text-content-muted">选择界面明暗主题</p>
                     </div>
-                    <div className="flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
+                    <div className="mt-2.5 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
                       {THEME_OPTIONS.map((opt) => (
                         <button
                           key={opt.value}
@@ -4546,9 +4552,11 @@ export function SettingsModal() {
                         </button>
                       ))}
                     </div>
+                    </div>
 
-                    {/* 聊天行为:思考完毕自动折叠(纯本地偏好) */}
-                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
+                    {/* 聊天行为:开关组(卡内两行,行间细线分隔) */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-1">
+                    <div className="flex items-center justify-between gap-3 py-2">
                       <div className="text-left min-w-0">
                         <p className="text-xs text-content-secondary">思考完毕自动折叠</p>
                         <p className="text-[11px] text-content-muted">深度思考输出完后自动收起思考框,点击标题可重新展开</p>
@@ -4574,7 +4582,8 @@ export function SettingsModal() {
 
                     {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项;临时模式不渲染(依赖被 403 的 /api/settings/ai-control) */}
                     {!isEphemeral && (
-                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-line/60">
+                    <>
+                    <div className="flex items-center justify-between gap-3 py-2 border-t border-line/60">
                       <div className="text-left min-w-0">
                         <p className="text-xs text-content-secondary">AI 设置控制</p>
                         <p className="text-[11px] text-content-muted">开启后可在对话中让 AI 直接修改主题、侧边栏等设置</p>
@@ -4597,10 +4606,12 @@ export function SettingsModal() {
                         />
                       </button>
                     </div>
+                      <p className="text-[11px] text-content-muted/80 text-left leading-relaxed pb-2.5">
+                        此开关仅能在此手动更改，AI 无法操作。关闭后 AI 会如实告知功能已关闭，不会尝试修改设置。
+                      </p>
+                    </>
                     )}
-                    <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
-                      此开关仅能在此手动更改，AI 无法操作。关闭后 AI 会如实告知功能已关闭，不会尝试修改设置。
-                    </p>
+                    </div>
                   </div>
                 )}
 
@@ -4707,7 +4718,7 @@ export function SettingsModal() {
                       <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center">
                         <MessageSquare className="w-6 h-6 text-accent-foreground" />
                       </div>
-                      <p className="text-sm font-semibold text-content-primary">八号产房</p>
+                      <p className="text-sm font-semibold text-content-primary">aichatt</p>
                       <p className="text-[11px] text-content-muted">AI 多模型对话助手 · v0.1.0</p>
                     </div>
 
@@ -5034,7 +5045,7 @@ function PresetModelsManager({
                         <button
                           onClick={onSave}
                           disabled={pendingId !== null || !form.modelId || !form.name}
-                          className="px-2 py-1 rounded-md text-[10px] font-medium bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-2 py-1 rounded-md text-[10px] font-medium bg-accent text-accent-foreground hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {pendingId ? <Loader2 className="w-3 h-3 animate-spin inline" /> : '保存'}
                         </button>
@@ -5158,7 +5169,7 @@ function ApiTokensSection() {
             type="button"
             onClick={createToken}
             disabled={busy}
-            className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-50 shrink-0"
+            className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-medium text-accent-foreground disabled:opacity-50 shrink-0"
           >
             {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
             生成令牌

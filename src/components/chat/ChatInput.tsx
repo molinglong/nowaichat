@@ -9,10 +9,12 @@ import { MaskPickerMenu } from './MaskPickerMenu'
 import { McpToolMenu } from './McpToolMenu'
 import { MiniSwitch } from '@/components/settings/MiniSwitch'
 import { ActivityHeatmap } from './ActivityHeatmap'
+import { RecentChats } from './RecentChats'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useChatStore } from '@/store/chat-store'
 import { draftKeyFor, setDraft as persistDraft } from '@/lib/draft-storage'
+import { INPUT_INSERT_EVENT } from '@/lib/input-bridge'
 import type { ModelDefinition } from '@/lib/ai/types'
 
 export interface ChatInputProps {
@@ -156,6 +158,19 @@ export function ChatInput({
     return () => clearTimeout(t)
   }, [input, draftKey, storeSetDraft])
 
+  // 外部注入文本(右键代码块「让 AI 解释」等深层入口):追加到输入框并聚焦。
+  // 草稿持久化由上方 input effect 自动完成,这里只管 setState。
+  useEffect(() => {
+    function onInsert(e: Event) {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text
+      if (typeof text !== 'string' || !text) return
+      setInput((prev) => (prev ? `${prev}\n\n${text}` : text))
+      requestAnimationFrame(() => textareaRef.current?.focus())
+    }
+    window.addEventListener(INPUT_INSERT_EVENT, onInsert)
+    return () => window.removeEventListener(INPUT_INSERT_EVENT, onInsert)
+  }, [])
+
   // Auto-resize textarea (standard/welcome 自适应卡片共用;welcome 上限 164 ≈6 行)
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current
@@ -297,6 +312,95 @@ export function ChatInput({
   const hasMaskEntry = !!onMaskChange
   // ⋯ 钮:有任一收纳项才渲染;桌面端仅当有「对比模式」项时显示(面具/MCP 桌面已外显)
   const showMoreBtn = hasCompareEntry || hasMcpEntry || hasMaskEntry
+  // ⋯ 更多工具/面具/MCP 弹层(welcome 与 standard 两变体共用):
+  // 挂在 ⋯ 按钮自身的 wrapper 上,以按钮为锚居中向上弹出;
+  // 宽度钳制必须用视口单位(calc(100vw-2rem)):百分比 max-w 相对锚点 wrapper(仅 44px)解析,
+  // 会把弹层压瘪成竖条(曾实测 28px)。w-60/w-64 加视口钳制后任何屏宽不溢出视口。
+  const moreMenus = (
+    <>
+      {moreMenuOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
+          <div
+            className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+            role="menu"
+          >
+            {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
+            {hasMaskEntry && (
+              <button
+                className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
+                onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
+              >
+                <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
+                <span className="flex-1 min-w-0">
+                  <span className="block font-medium">面具</span>
+                  <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
+                </span>
+                <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
+              </button>
+            )}
+            {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
+            {hasMcpEntry && (
+              <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors">
+                <button
+                  className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                  onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
+                >
+                  <Plug className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium">MCP 工具</span>
+                    <span className="block text-[10px] text-content-muted">{mcpEnabled ? '外部工具注入本会话' : '本会话已停用'}</span>
+                  </span>
+                </button>
+                <MiniSwitch on={mcpEnabled} onClick={() => onMcpEnabledChange(!mcpEnabled)} />
+              </div>
+            )}
+            {/* 对比模式(全端): 低频开关,开启后 textarea 下方出现多模型行 */}
+            {hasCompareEntry && (
+              <button
+                className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
+                onClick={() => { onCompareModeChange(!compareMode); setMoreMenuOpen(false) }}
+              >
+                <Columns2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block font-medium">对比模式</span>
+                  <span className="block text-[10px] text-content-muted">多模型同时回答</span>
+                </span>
+                {compareMode && <Check className="w-3.5 h-3.5 shrink-0" />}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
+      <div className="sm:hidden">
+        {mcpMenuOpen && onMcpEnabledChange && (
+          <McpToolMenu
+            mcpEnabled={mcpEnabled}
+            onMcpEnabledChange={onMcpEnabledChange}
+            onClose={() => setMcpMenuOpen(false)}
+          />
+        )}
+        {maskMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+            <div
+              className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+              role="menu"
+            >
+              <MaskPickerMenu
+                activeMaskId={mask?.id ?? null}
+                userMasks={userMasks}
+                onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
+                onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+                onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  )
   const toolPills = (
     <>
             <FileUpload
@@ -420,19 +524,64 @@ export function ChatInput({
                 >
                   <MoreHorizontal className="w-3.5 h-3.5" />
                 </button>
+                {/* ⋯ 弹层: 以按钮为锚居中向上弹出(welcome/standard 共用) */}
+                {moreMenus}
               </div>
             )}
     </>
   )
 
+  // 对比模式: 多模型选择行(welcome 与 standard 共用);移动端隐藏(md:flex),开启后替代右侧单模型选择器
+  const compareModelsRow =
+    compareMode && compareModels && onCompareModelsChange ? (
+      <div className="hidden md:flex items-center justify-end gap-1 px-3 pt-1.5">
+        {compareModels.map((modelId, index) => (
+          <div key={modelId} className="flex items-center gap-0.5">
+            <ModelSelector
+              models={models}
+              selectedModel={modelId}
+              onModelChange={(id) => handleCompareModelChange(index, id)}
+              compact
+              deepThink={deepThink}
+              onDeepThinkChange={onDeepThinkChange}
+              webSearch={webSearch}
+              onWebSearchChange={onWebSearchChange}
+              webSearchAvailable={webSearchAvailable}
+            />
+            {compareModels.length > 2 && (
+              <button
+                onClick={() => handleRemoveCompareModel(index)}
+                className="shrink-0 p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-surface-subtle transition-colors"
+                aria-label="移除模型"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            )}
+          </div>
+        ))}
+        {compareModels.length < 3 && (
+          <button
+            onClick={handleAddCompareModel}
+            className="flex items-center gap-0.5 h-7 px-2 rounded-full text-[11px] font-medium
+              border border-dashed border-line text-content-secondary
+              hover:bg-surface-subtle transition-colors shrink-0"
+            title="添加对比模型"
+            aria-label="添加对比模型"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+    ) : null
+
   // ============= WELCOME VARIANT =============
   if (variant === 'welcome') {
     return (
       <div
-        className={cn('relative flex-1 w-full flex flex-col md:justify-center px-4', className)}
+        className={cn('relative flex-1 w-full flex flex-col justify-center px-4', className)}
         style={{
           // 键盘弹出时让内容贴底(否则依旧被键盘遮住);
-          // 没键盘时桌面垂直居中、移动也保持居中(只加 paddingBottom 占键盘)。
+          // 没键盘时桌面/移动都垂直居中(只加 paddingBottom 占键盘)。
           // 取键盘高度与底部安全区的较大者: 键盘弹出时用键盘高度,
           // 收起时用 Home Indicator 安全区(PWA 全屏模式下非 0)。
           paddingBottom: 'max(var(--keyboard-height, 0px), var(--sab, 0px))',
@@ -441,8 +590,8 @@ export function ChatInput({
         {/* 点阵背景: 中心(内容区)淡出、四周渐显,纯装饰 */}
         <div className="dot-grid" aria-hidden="true" />
 
-        <div className="relative w-full max-w-2xl mx-auto md:-translate-y-[8vh]">
-          {/* 可选问候语(slot); md 以上整体上移 8vh,视觉重心中间偏上 */}
+        <div className="relative w-full max-w-2xl mx-auto -translate-y-[6vh] md:-translate-y-[8vh]">
+          {/* 可选问候语(slot); 整体上移 6vh(移动)/8vh(桌面),视觉重心中间偏上 */}
           {welcomeHeader}
 
           {/* 草稿已恢复提示 —— 仅在有草稿时短暂出现 */}
@@ -478,9 +627,9 @@ export function ChatInput({
             </div>
           )}
 
-          {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构) */}
+          {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构);relative 供 ⋯ 弹层锚定 */}
           <div
-            className="rounded-xl border border-line bg-surface shadow-sm
+            className="relative rounded-xl border border-line bg-surface shadow-sm
               focus-within:border-line-strong focus-within:shadow-md
               transition-[border-color,box-shadow] duration-200"
           >
@@ -545,23 +694,28 @@ export function ChatInput({
                 lineHeight: '24px',
               }}
             />
+
+            {/* 对比模式: 多模型选择行(welcome 与 standard 共用) */}
+            {compareModelsRow}
             {/* 底部工具行: 左=工具胶囊组 右=模型选择+发送 */}
             <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1">
               <div className="flex items-center gap-1.5 min-w-0">
                 {toolPills}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <ModelSelector
-                  models={models}
-                  selectedModel={selectedModel}
-                  onModelChange={onModelChange}
-                  compact
-                  deepThink={deepThink}
-                  onDeepThinkChange={onDeepThinkChange}
-                  webSearch={webSearch}
-                  onWebSearchChange={onWebSearchChange}
-                  webSearchAvailable={webSearchAvailable}
-                />
+                {!compareMode && (
+                  <ModelSelector
+                    models={models}
+                    selectedModel={selectedModel}
+                    onModelChange={onModelChange}
+                    compact
+                    deepThink={deepThink}
+                    onDeepThinkChange={onDeepThinkChange}
+                    webSearch={webSearch}
+                    onWebSearchChange={onWebSearchChange}
+                    webSearchAvailable={webSearchAvailable}
+                  />
+                )}
                 <button
                   onClick={handleSendDebounced}
                   disabled={(!input.trim() && attachments.length === 0) || isLoading}
@@ -571,7 +725,7 @@ export function ChatInput({
                     'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
                     'active:scale-95 touch-manipulation',
                     (input.trim() || attachments.length > 0) && !isLoading
-                      ? 'bg-accent text-white hover:bg-accent/90 animate-pop-in'
+                      ? 'bg-accent text-accent-foreground hover:bg-accent/90 animate-pop-in'
                       : 'bg-surface-subtle text-content-muted cursor-not-allowed'
                   )}
                   style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -582,10 +736,12 @@ export function ChatInput({
             </div>
           </div>
 
-          {/* 活跃度热力图: 输入框卡片下方居中 */}
-          <div className="mt-3">
+          {/* 活跃度热力图: 输入框卡片下方居中(仅桌面;手机端以最近对话快捷区替代) */}
+          <div className="hidden md:block mt-3">
             <ActivityHeatmap />
           </div>
+          {/* 最近对话快捷区: 仅手机端欢迎页,最多 3 条,点击直达会话 */}
+          <RecentChats />
         </div>
       </div>
     )
@@ -772,47 +928,8 @@ export function ChatInput({
             />
           </div>
 
-          {/* 对比模式: 多模型选择行(移动端隐藏) */}
-          {compareMode && compareModels && onCompareModelsChange && (
-            <div className="hidden md:flex items-center justify-end gap-1 px-3 pt-1.5">
-              {compareModels.map((modelId, index) => (
-                <div key={modelId} className="flex items-center gap-0.5">
-                  <ModelSelector
-                    models={models}
-                    selectedModel={modelId}
-                    onModelChange={(id) => handleCompareModelChange(index, id)}
-                    compact
-                    deepThink={deepThink}
-                    onDeepThinkChange={onDeepThinkChange}
-                    webSearch={webSearch}
-                    onWebSearchChange={onWebSearchChange}
-                    webSearchAvailable={webSearchAvailable}
-                  />
-                  {compareModels.length > 2 && (
-                    <button
-                      onClick={() => handleRemoveCompareModel(index)}
-                      className="shrink-0 p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-surface-subtle transition-colors"
-                      aria-label="移除模型"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
-              {compareModels.length < 3 && (
-                <button
-                  onClick={handleAddCompareModel}
-                  className="flex items-center gap-0.5 h-7 px-2 rounded-full text-[11px] font-medium
-                    border border-dashed border-line text-content-secondary
-                    hover:bg-surface-subtle transition-colors shrink-0"
-                  title="添加对比模型"
-                  aria-label="添加对比模型"
-                >
-                  <Plus className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          )}
+          {/* 对比模式: 多模型选择行(welcome 与 standard 共用,定义见 compareModelsRow) */}
+          {compareModelsRow}
 
           {/* Bottom controls row: 左侧工具胶囊组(上传/对比/深度思考/智能搜索/MCP/面具) + 右侧模型选择与发送 */}
           <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1.5">
@@ -865,91 +982,6 @@ export function ChatInput({
                 </button>
               )}
             </div>
-          </div>
-
-          {/* ⋯ 更多工具 / 面具 / MCP 弹层 —— 挂在输入卡片(而非按钮)上定位:
-              移动端按钮贴屏边时,以按钮为锚的居中弹层会溢出视口;
-              以卡片为锚 + max-w 约束,任何屏宽都收在视口内 */}
-          {moreMenuOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
-              <div
-                className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 max-w-[calc(100%-1rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
-                role="menu"
-              >
-                {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
-                {hasMaskEntry && (
-                  <button
-                    className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
-                    onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
-                  >
-                    <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
-                    <span className="flex-1 min-w-0">
-                      <span className="block font-medium">面具</span>
-                      <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
-                    </span>
-                    <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
-                  </button>
-                )}
-                {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
-                {hasMcpEntry && (
-                  <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors">
-                    <button
-                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
-                      onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
-                    >
-                      <Plug className="w-3.5 h-3.5 shrink-0" />
-                      <span className="flex-1 min-w-0">
-                        <span className="block font-medium">MCP 工具</span>
-                        <span className="block text-[10px] text-content-muted">{mcpEnabled ? '外部工具注入本会话' : '本会话已停用'}</span>
-                      </span>
-                    </button>
-                    <MiniSwitch on={mcpEnabled} onClick={() => onMcpEnabledChange(!mcpEnabled)} />
-                  </div>
-                )}
-                {/* 对比模式(全端): 低频开关,开启后 textarea 下方出现多模型行 */}
-                {hasCompareEntry && (
-                  <button
-                    className="flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle transition-colors text-left"
-                    onClick={() => { onCompareModeChange(!compareMode); setMoreMenuOpen(false) }}
-                  >
-                    <Columns2 className="w-3.5 h-3.5 shrink-0" />
-                    <span className="flex-1 min-w-0">
-                      <span className="block font-medium">对比模式</span>
-                      <span className="block text-[10px] text-content-muted">多模型同时回答</span>
-                    </span>
-                    {compareMode && <Check className="w-3.5 h-3.5 shrink-0" />}
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-          {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
-          <div className="sm:hidden">
-            {mcpMenuOpen && onMcpEnabledChange && (
-              <McpToolMenu
-                mcpEnabled={mcpEnabled}
-                onMcpEnabledChange={onMcpEnabledChange}
-                onClose={() => setMcpMenuOpen(false)}
-              />
-            )}
-            {maskMenuOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
-                <div
-                  className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto max-w-[calc(100%-1rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
-                  role="menu"
-                >
-                  <MaskPickerMenu
-                    activeMaskId={mask?.id ?? null}
-                    userMasks={userMasks}
-                    onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
-                    onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
-                    onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
-                  />
-                </div>
-              </>
-            )}
           </div>
         </div>
       </div>

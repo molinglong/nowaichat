@@ -63,7 +63,7 @@ export const SETTINGS_REGISTRY: readonly SettingDef[] = [
   {
     key: 'style_preset',
     label: '对话风格',
-    allowedValues: ['balanced', 'practical', 'dev', 'editor', 'mentor', 'scholar'],
+    allowedValues: ['balanced', 'practical', 'dev', 'editor', 'mentor', 'scholar', 'concise', 'humorous', 'creative'],
   },
   {
     key: 'mask',
