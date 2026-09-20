@@ -101,6 +101,9 @@ if [ -d $DistDir ]; then
   mv $DistDir `$OLD
 fi
 mv `$NEW $DistDir
+# uploads 目录被瘦身剔除,但容器 named volume 需要 /app/public/uploads 作挂载点
+# (:ro 只读 rootfs 无法自动建目录,缺失会让容器起不来—— 2026-09-20 踩坑)
+mkdir -p $DistDir/public/uploads
 # 字体不在 tar 包里: 切换后立刻从旧产物原地回填;
 # 若验证失败回滚, OLD 里的字体尚未被搬走, 回滚后线上字体不受影响
 for d in fonts fonts-subset; do
@@ -108,7 +111,17 @@ for d in fonts fonts-subset; do
     mv `$OLD/public/`$d $DistDir/public/`$d
   fi
 done
-docker restart aichatt-app >/dev/null
+# 重启失败(如挂载点缺失)也要回滚,不能靠 set -e 直接退—— 否则线上停在起不来的新产物上
+if ! docker restart aichatt-app >/dev/null; then
+  echo "RESTART FAILED, rolling back..."
+  if [ -d `$OLD ]; then
+    rm -rf $DistDir
+    mv `$OLD $DistDir
+    docker restart aichatt-app >/dev/null || true
+  fi
+  echo "ROLLBACK DONE"
+  exit 1
+fi
 # 健康验证: 最多等 60s, 检查登录页渲染 + session API
 OK=0
 for i in `$(seq 1 12); do
