@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'desc' },
       take: 200,
       select: {
-        id: true, sourceMessageId: true, subject: true, topic: true,
+        id: true, sourceMessageId: true, sourceQuestionId: true, subject: true, topic: true,
         title: true, content: true, analysis: true, mastery: true,
         dueAt: true, lastReviewAt: true, reps: true, lapses: true, createdAt: true,
       },

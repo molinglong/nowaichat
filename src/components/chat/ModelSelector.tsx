@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { Brain, Globe, Search, ChevronDown, Star, Clock } from 'lucide-react'
+import { Search, ChevronDown, Star, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useChatStore } from '@/store/chat-store'
@@ -17,13 +17,6 @@ interface ModelSelectorProps {
   onModelChange: (modelId: string) => void
   className?: string
   compact?: boolean
-  // 深度思考开关
-  deepThink?: boolean
-  onDeepThinkChange?: (enabled: boolean) => void
-  // 联网搜索开关
-  webSearch?: boolean
-  onWebSearchChange?: (enabled: boolean) => void
-  webSearchAvailable?: boolean
 }
 
 export function ModelSelector({
@@ -32,11 +25,6 @@ export function ModelSelector({
   onModelChange,
   className,
   compact = false,
-  deepThink = false,
-  onDeepThinkChange,
-  webSearch = false,
-  onWebSearchChange,
-  webSearchAvailable = false,
 }: ModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set())
@@ -129,7 +117,10 @@ export function ModelSelector({
       const frame1 = requestAnimationFrame(() => {
         frame2 = requestAnimationFrame(() => {
           setDropdownVisible(true)
-          searchInputRef.current?.focus()
+          // 触屏设备不自动聚焦搜索框:会弹出软键盘顶起弹层;需要筛选时用户自会点击搜索框
+          if (!window.matchMedia('(pointer: coarse)').matches) {
+            searchInputRef.current?.focus()
+          }
         })
       })
       return () => {
@@ -286,66 +277,6 @@ export function ModelSelector({
             opacity: dropdownVisible ? 1 : 0,
           }}
         >
-          {/* 功能开关区域 */}
-          <div className="flex items-center gap-1.5 px-2 py-2 border-b border-line/60 shrink-0">
-            {onDeepThinkChange && (
-              <button
-                onClick={() => onDeepThinkChange(!deepThink)}
-                className={cn(
-                  // min-h-[44px] sm:min-h-0:触屏 ≥44px,桌面端取消下限
-                  'group flex-1 flex items-center justify-center gap-1.5 h-7 min-h-[44px] sm:min-h-0 px-2.5 rounded-lg',
-                  'text-[12px] font-medium transition-all duration-200',
-                  deepThink
-                    ? 'bg-accent text-accent-foreground border border-transparent shadow-sm'
-                    : 'bg-transparent text-content-secondary border border-line/60 hover:bg-surface-subtle hover:border-line',
-                  'active:scale-[0.97]'
-                )}
-                title="深度思考"
-              >
-                <Brain className="w-3.5 h-3.5 shrink-0" />
-                <span>深度思考</span>
-                <span
-                  className={cn(
-                    'w-1.5 h-1.5 rounded-full transition-all duration-200',
-                    deepThink
-                      ? 'bg-current scale-100'
-                      : 'bg-content-muted/40 scale-75'
-                  )}
-                />
-              </button>
-            )}
-            {onWebSearchChange && (
-              <button
-                onClick={() => onWebSearchChange(!webSearch)}
-                disabled={!webSearchAvailable}
-                className={cn(
-                  // 移动端 ≥44px 触控目标,桌面端保留 28px 紧凑
-                  'group flex-1 flex items-center justify-center gap-1.5 h-7 min-h-[44px] sm:min-h-0 px-2.5 rounded-lg',
-                  'text-[12px] font-medium transition-all duration-200',
-                  webSearch
-                    ? 'bg-accent text-accent-foreground border border-transparent shadow-sm'
-                    : 'bg-transparent text-content-secondary border border-line/60 hover:bg-surface-subtle hover:border-line',
-                  !webSearchAvailable && 'opacity-60 cursor-not-allowed hover:bg-transparent hover:border-line/60',
-                  'active:scale-[0.97]'
-                )}
-                title={webSearchAvailable ? '智能搜索' : '请先在设置中配置搜索 API Key'}
-              >
-                <Globe className="w-3.5 h-3.5 shrink-0" />
-                <span>智能搜索</span>
-                <span
-                  className={cn(
-                    'w-1.5 h-1.5 rounded-full transition-all duration-200',
-                    webSearch
-                      ? 'bg-current scale-100'
-                      : webSearchAvailable
-                        ? 'bg-content-muted/40 scale-75'
-                        : 'bg-line scale-50'
-                  )}
-                />
-              </button>
-            )}
-          </div>
-
           {/* 搜索框 */}
           <div className="px-2 py-1.5 border-b border-line/60 shrink-0">
             <div className="relative flex items-center">

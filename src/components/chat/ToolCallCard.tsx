@@ -7,9 +7,11 @@ import type { UIMessage } from 'ai'
 import { ClarifyCard } from './ClarifyCard'
 import { GenerateMaskCard } from './GenerateMaskCard'
 import { WriteDocCard } from './WriteDocCard'
+import { TripMapCard } from './TripMapCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
 import { WRITE_DOC_TOOL_NAME } from '@/lib/ai/write-doc-tool'
+import { TRIP_TOOL_NAME } from '@/lib/ai/trip-tool'
 import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
 import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
 import { KNOWLEDGE_TOOL_NAME } from '@/lib/ai/knowledge-tool'
@@ -197,6 +199,11 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
   // 写作文档:一行式卡片(成功→打开按钮;流式→占位;失败→标红)
   if (view.tool === WRITE_DOC_TOOL_NAME) {
     return <WriteDocCard view={view} />
+  }
+
+  // 行程规划:地图卡片(AI 结构化行程,前端段间真实路径规划+时间线联动+全屏总览)
+  if (view.tool === TRIP_TOOL_NAME) {
+    return <TripMapCard view={view} />
   }
 
   // AI 设置控制:一行式卡片,列出全部操作(注册表中文映射);白名单拒绝时右侧标「未生效」

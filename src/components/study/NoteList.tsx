@@ -19,6 +19,7 @@ interface NoteRow {
   reps: number
   lapses: number
   createdAt: string
+  sourceQuestionId: string | null
 }
 
 export function NoteList() {
@@ -135,6 +136,9 @@ export function NoteList() {
                     <span className="px-1.5 py-0.5 rounded bg-accent/10 text-[10px] text-accent truncate">
                       {n.topic}
                     </span>
+                  )}
+                  {n.sourceQuestionId && (
+                    <span className="px-1.5 py-0.5 rounded border border-line/60 text-[10px] text-content-muted shrink-0" title="来自题库练习">题库</span>
                   )}
                   {isOverdue(n.dueAt) && (
                     <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0 ml-auto" title="待复习" />

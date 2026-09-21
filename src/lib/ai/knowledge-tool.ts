@@ -27,7 +27,7 @@ export const knowledgeInputSchema = z.object({
     .max(20)
     .optional()
     .describe(
-      '学科过滤(math/chinese/english/physics/chemistry/biology/other)，不传则查全部学科'
+      '学科过滤(math/chinese/english/physics/chemistry/biology/history/geography/politics/other)；不确定学科就不传，查全部'
     ),
 })
 
@@ -41,6 +41,9 @@ export const KNOWLEDGE_SUBJECT_LABELS: Record<string, string> = {
   physics: '物理',
   chemistry: '化学',
   biology: '生物',
+  history: '历史',
+  geography: '地理',
+  politics: '政治',
   other: '其他',
 }
 

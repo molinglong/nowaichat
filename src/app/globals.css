@@ -405,6 +405,67 @@ body {
   padding: 0;
   border-radius: 0;
 }
+
+/* ── 代码块语法高亮(rehype-highlight / hljs token)──
+   GitHub 配色基准、微降饱和贴合中性灰审美;作用域限定 .rich-md 防污染 */
+.rich-md .hljs-comment,
+.rich-md .hljs-quote { color: #6e7781; font-style: italic; }
+.rich-md .hljs-keyword,
+.rich-md .hljs-selector-tag,
+.rich-md .hljs-doctag { color: #cf222e; }
+.rich-md .hljs-string,
+.rich-md .hljs-regexp { color: #0a3069; }
+.rich-md .hljs-number,
+.rich-md .hljs-literal,
+.rich-md .hljs-section { color: #0550ae; }
+.rich-md .hljs-title,
+.rich-md .hljs-title.function_ { color: #8250df; }
+.rich-md .hljs-title.class_,
+.rich-md .hljs-type,
+.rich-md .hljs-built_in { color: #953800; }
+.rich-md .hljs-attr,
+.rich-md .hljs-attribute,
+.rich-md .hljs-variable,
+.rich-md .hljs-template-variable,
+.rich-md .hljs-selector-attr,
+.rich-md .hljs-selector-class,
+.rich-md .hljs-selector-id { color: #0550ae; }
+.rich-md .hljs-name,
+.rich-md .hljs-tag { color: #116329; }
+.rich-md .hljs-symbol,
+.rich-md .hljs-bullet { color: #b08800; }
+.rich-md .hljs-meta { color: #57606a; }
+.rich-md .hljs-strong { font-weight: 600; }
+.rich-md .hljs-emphasis { font-style: italic; }
+
+/* 暗色主题下换 GitHub Dark 基准色 */
+.dark .rich-md .hljs-comment,
+.dark .rich-md .hljs-quote { color: #8b949e; }
+.dark .rich-md .hljs-keyword,
+.dark .rich-md .hljs-selector-tag,
+.dark .rich-md .hljs-doctag { color: #ff7b72; }
+.dark .rich-md .hljs-string,
+.dark .rich-md .hljs-regexp { color: #a5d6ff; }
+.dark .rich-md .hljs-number,
+.dark .rich-md .hljs-literal,
+.dark .rich-md .hljs-section { color: #79c0ff; }
+.dark .rich-md .hljs-title,
+.dark .rich-md .hljs-title.function_ { color: #d2a8ff; }
+.dark .rich-md .hljs-title.class_,
+.dark .rich-md .hljs-type,
+.dark .rich-md .hljs-built_in { color: #7ee787; }
+.dark .rich-md .hljs-attr,
+.dark .rich-md .hljs-attribute,
+.dark .rich-md .hljs-variable,
+.dark .rich-md .hljs-template-variable,
+.dark .rich-md .hljs-selector-attr,
+.dark .rich-md .hljs-selector-class,
+.dark .rich-md .hljs-selector-id { color: #79c0ff; }
+.dark .rich-md .hljs-name,
+.dark .rich-md .hljs-tag { color: #7ee787; }
+.dark .rich-md .hljs-symbol,
+.dark .rich-md .hljs-bullet { color: #ffa657; }
+.dark .rich-md .hljs-meta { color: #a2a6ad; }
 /* 块级公式($$..$$)与独立成段的行内公式卡片: 与代码块同视觉语言(浅底+细边框),
    公式与正文视觉分离。上下留足呼吸空间(分数/求和类公式较高,小边距会显拥挤);
    首/末张卡片去外边距,对应 mdComponents 的 first:mt-0/last:mb-0 */

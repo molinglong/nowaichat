@@ -48,6 +48,7 @@ model User {
   questions      Question[]
   todos         Todo[]
   writeDocs     WriteDoc[]
+  amapKey       AmapKey?
   apiTokens     ApiToken[]
 }
 
@@ -349,6 +350,20 @@ model SearchApiKey {
   @@index([userId])
 }
 
+// 高德地图 Key(plan_trip 行程卡片):jsKey+安全密钥经 /api/amap-config 下发浏览器渲染,
+// wsKey 仅服务端 POI 坐标校准(加密存)。用户配置优先,环境变量(AMAP_JS_KEY 等)兜底。
+model AmapKey {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  jsKey        String   // JS API Key(浏览器渲染用,本就公开明文)
+  encryptedSec String?  // 安全密钥(Web端 JS API 类型 Key 配套;为空走 v=1.4.4)
+  encryptedWs  String?  // Web服务 Key(服务端 REST 校准;需控制台 IP 白名单)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 // MCP 远程服务（Web 端首期仅 HTTP/SSE 远程型,stdio 留给桌面端）。
 // 配置即全局生效:enabled 的 server 在聊天时自动注入其工具,
 // AI 按需调用;excludeTools 可按 server 屏蔽与内置工具重复的能力。
@@ -449,7 +464,8 @@ model StudyNote {
   id              String    @id @default(cuid())
   userId          String
   sourceMessageId String?   // 来源消息 id,保留追溯(聊天气泡一键存入)
-  subject         String?   // 学科: math/english/chinese/physics/chemistry/biology/other(AI 打标)
+  sourceQuestionId String?  // 来源题库题 id(Question.id,练习做错转入);软关联不设外键,题目删除不影响错题,兼作同题幂等查重
+  subject         String?   // 学科: math/english/chinese/physics/chemistry/biology/history/geography/politics/other(AI 打标)
   topic           String?   // 考点标签,如「十字相乘」(AI 打标)
   title           String    // 题干摘要
   content         String    // 完整题目 + 我的解答

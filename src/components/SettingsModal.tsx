@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
@@ -951,6 +951,13 @@ export function SettingsModal() {
     { id: 'tavily' as const, name: 'Tavily', desc: '英文及多语言，免费额度可用', docsUrl: 'https://docs.tavily.com/documentation/api-reference/endpoint/search' },
   ]
 
+  // 高德地图 Key(plan_trip 行程卡片):设置页配置优先,环境变量兜底;保存后刷新页面生效
+  interface AmapKeyInfo { jsKeyMasked: string; secMasked: string | null; wsMasked: string | null }
+  const [amapInfo, setAmapInfo] = useState<{ config: AmapKeyInfo | null; env: { jsKey: boolean; sec: boolean; ws: boolean } } | null>(null)
+  const [amapDraft, setAmapDraft] = useState({ jsKey: '', sec: '', ws: '' })
+  const [amapSaving, setAmapSaving] = useState(false)
+  const [amapShow, setAmapShow] = useState({ jsKey: false, sec: true, ws: true })
+
   // 外部指定的目标 section（如面具菜单的「管理面具」入口）:打开时切换并消费
   useEffect(() => {
     if (!settingsOpen || !settingsSection) return
@@ -973,6 +980,14 @@ export function SettingsModal() {
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setSearchKeys(data)
+      })
+      .catch(() => {/* silently fail */})
+
+    // 高德地图 Key 配置状态(掩码)
+    fetch('/api/amap/keys')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setAmapInfo(data)
       })
       .catch(() => {/* silently fail */})
   }, [settingsOpen, isEphemeral])
@@ -1056,17 +1071,7 @@ export function SettingsModal() {
       })
   }, [settingsOpen, isEphemeral])
 
-  // Close on Escape
-  useEffect(() => {
-    if (!settingsOpen) return
-    function handleEscape(e: KeyboardEvent) {
-      if (e.key === 'Escape') setSettingsOpen(false)
-    }
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
-  }, [settingsOpen, setSettingsOpen])
-
-  // 桌面端浮动窗口:isDesktop + 拖拽位置(移动端抽屉不参与)
+  // 桌面端浮动窗口：isDesktop + 拖拽位置 (移动端抽屉不参与)
   const cardRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   useEffect(() => {
@@ -1076,6 +1081,65 @@ export function SettingsModal() {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [])
+  
+  // ── 移动端抽屉动画：slide-up(开)/slide-down(关)。
+  // visible=false 渲染首帧即 off-screen(translate-y-full),double RAF 后切 true 触发过渡;
+  // 关闭走 closePending 中间态,等 transform transitionend(450ms 兜底)再真正卸载。
+  // transform 归属:移动端抽屉用 translate-y 类(useWindowDrag 在移动端会清掉 inline transform,类得以生效),
+  // 桌面拖拽用 inline transform(hook 独占写权),md: 变体保证桌面恒为正常位置 ──
+  const [shown, setShown] = useState(false)
+  const [closePending, setClosePending] = useState(false)
+  const visible = shown && !closePending
+  
+  useEffect(() => {
+    if (!settingsOpen) return
+    setShown(false) // 复位上一次会话残留(桌面等直接 setSettingsOpen 关闭的路径不经过 closePending)
+    // double RAF:确保首帧(off-screen)已绘制,下一帧再切 visible 才能触发 slide-up 过渡
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setShown(true))
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
+  }, [settingsOpen])
+  useEffect(() => {
+    if (!closePending) return
+    const el = cardRef.current
+    if (!el) { setClosePending(false); setSettingsOpen(false); return }
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      setShown(false)
+      setClosePending(false)
+      setSettingsOpen(false)
+    }
+    const onEnd = (e: TransitionEvent) => {
+      // 只认卡片自身的 transform 过渡(colors 等旁支过渡不算)
+      if (e.target === el && e.propertyName === 'transform') finish()
+    }
+    el.addEventListener('transitionend', onEnd)
+    const timer = window.setTimeout(finish, 450) // 兜底:transitionend 丢失(后台标签页/系统动画关闭)
+    return () => {
+      el.removeEventListener('transitionend', onEnd)
+      window.clearTimeout(timer)
+    }
+  }, [closePending, setSettingsOpen])
+
+  // 统一关闭入口:桌面模态无滑出动画即时关,移动端先播 slide-down 再卸载
+  const requestClose = useCallback(() => {
+    if (isDesktop) setSettingsOpen(false)
+    else setClosePending(true)
+  }, [isDesktop, setSettingsOpen])
+
+  // Close on Escape(桌面即时关,移动端走滑出动画)
+  useEffect(() => {
+    if (!settingsOpen) return
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') requestClose()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [settingsOpen, requestClose])
   const { onCardPointerDown, onCardPointerMove, onCardPointerUp, onCardPointerCancel, recenter } = useWindowDrag({
     cardRef,
     enabled: isDesktop,
@@ -1310,6 +1374,51 @@ export function SettingsModal() {
       toast.error('删除失败，请重试')
     } finally {
       setSearchKeyDeleting(null)
+    }
+  }
+
+  // 高德地图 Key:只提交填了的内容(留空=该项不修改);删除=整条清除回退服务器 env
+  async function handleSaveAmapKeys() {
+    const body: Record<string, string> = {}
+    if (amapDraft.jsKey.trim()) body.jsKey = amapDraft.jsKey.trim()
+    if (amapDraft.sec.trim()) body.sec = amapDraft.sec.trim()
+    if (amapDraft.ws.trim()) body.ws = amapDraft.ws.trim()
+    if (Object.keys(body).length === 0) return
+    setAmapSaving(true)
+    try {
+      const res = await fetch('/api/amap/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || '保存失败')
+      }
+      toast.success('地图 Key 已保存,刷新页面后生效')
+      setAmapDraft({ jsKey: '', sec: '', ws: '' })
+      const fresh = await fetch('/api/amap/keys').then((r) => (r.ok ? r.json() : null))
+      if (fresh) setAmapInfo(fresh)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setAmapSaving(false)
+    }
+  }
+
+  async function handleDeleteAmapKeys() {
+    if (!confirm('确定删除地图 Key 配置吗？删除后将回退到服务器默认配置。')) return
+    setAmapSaving(true)
+    try {
+      const res = await fetch('/api/amap/keys', { method: 'DELETE' })
+      if (!res.ok) throw new Error('删除失败')
+      toast.success('已删除，回退服务器默认配置')
+      const fresh = await fetch('/api/amap/keys').then((r) => (r.ok ? r.json() : null))
+      if (fresh) setAmapInfo(fresh)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试')
+    } finally {
+      setAmapSaving(false)
     }
   }
 
@@ -1863,20 +1972,21 @@ export function SettingsModal() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center md:justify-center md:pointer-events-none">
-      {/* Backdrop — 纯色压暗：日间 35% 黑、夜间 65% 黑，去掉模糊与饱和度提升，兼顾模态感与性能 */}
+      {/* Backdrop — 纯色压暗：日间 35% 黑、夜间 65% 黑，去掉模糊与饱和度提升，兼顾模态感与性能；移动端随抽屉滑入/滑出同步淡入淡出 */}
       <div
-        className="absolute inset-0 bg-black/35 dark:bg-black/65 md:hidden"
-        onClick={() => setSettingsOpen(false)}
+        className={`absolute inset-0 bg-black/35 dark:bg-black/65 md:hidden transition-opacity duration-300 ease-out ${visible ? 'opacity-50' : 'opacity-0'}`}
+        onClick={requestClose}
       />
 
-      {/* Modal card —— 移动端是底部抽屉(贴底、上方圆角、上限 90vh),平板是居中模态(宽度 90%),桌面端固定宽度 */}
+      {/* Modal card —— 移动端是底部抽屉 (贴底、上方圆角、上限 90vh,左右占满),平板是居中模态 (宽度 90%),桌面端固定宽度;
+          滑入/滑出由 visible 切 translate-y 类驱动,桌面端被 md: 变体固定、transform 留给 useWindowDrag 拖拽 */}
       <div
         ref={cardRef}
         onPointerDown={onCardPointerDown}
         onPointerMove={onCardPointerMove}
         onPointerUp={onCardPointerUp}
         onPointerCancel={onCardPointerCancel}
-        className="relative w-full md:w-[90%] lg:w-[750px] max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto"
+        className={`relative w-full md:w-[90%] lg:w-[750px] max-w-none md:max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto transition-[transform,opacity,background-color,border-color] duration-300 ease-out ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 md:translate-y-0 md:opacity-100'}`}
       >
         {/* Header with macOS red dot */}
         <div className="relative flex items-center px-4 pt-3 pb-2.5 border-b border-line/60 shrink-0 bg-surface md:hidden">
@@ -1896,7 +2006,7 @@ export function SettingsModal() {
             </svg>
           </button>
           <button
-            onClick={() => setSettingsOpen(false)}
+            onClick={requestClose}
             className="md:hidden shrink-0 -ml-1 px-3 py-1.5 rounded-md text-xs text-content-secondary hover:text-content-primary hover:bg-surface-subtle/60 active:scale-95 transition-all touch-manipulation"
             aria-label="关闭"
             style={{ WebkitTapHighlightColor: 'transparent' }}
@@ -2533,6 +2643,95 @@ export function SettingsModal() {
                             )}
                           </div>
                         )}
+                      </div>
+
+                      {/* 地图服务(plan_trip 行程卡片) */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <MapPin className="w-3.5 h-3.5 text-content-secondary" />
+                          <p className="text-xs font-semibold text-content-primary">地图服务（行程规划）</p>
+                          {amapInfo?.config && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
+                              已配置
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-content-secondary leading-relaxed">
+                          「帮我规划 N 日游」的行程地图卡片使用高德地图。配置后刷新页面生效，无需改服务器配置。
+                          <a
+                            href="https://console.amap.com/dev/key/app"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
+                          >
+                            高德控制台 <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </p>
+                        <div className="space-y-2">
+                          {([
+                            { key: 'jsKey' as const, label: 'JS API Key', show: amapShow.jsKey, ph: '「Web端(JS API)」类型 Key' },
+                            { key: 'sec' as const, label: '安全密钥', show: amapShow.sec, ph: '与 JS Key 配套（控制台显示横杠则留空）' },
+                            { key: 'ws' as const, label: 'Web服务 Key', show: amapShow.ws, ph: '坐标校准用（控制台需配 IP 白名单）' },
+                          ]).map((f) => {
+                            const saved = f.key === 'jsKey'
+                              ? amapInfo?.config?.jsKeyMasked
+                              : f.key === 'sec'
+                                ? amapInfo?.config?.secMasked
+                                : amapInfo?.config?.wsMasked
+                            return (
+                              <div key={f.key} className="flex items-center gap-2">
+                                <span className="w-20 shrink-0 text-[11px] text-content-secondary">{f.label}</span>
+                                <div className="relative flex-1">
+                                  <input
+                                    type={f.show ? 'text' : 'password'}
+                                    value={amapDraft[f.key]}
+                                    onChange={(e) => setAmapDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                                    placeholder={saved ? `已保存 ${saved}，输入新值替换` : f.ph}
+                                    className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                                  />
+                                  <button
+                                    type="button"
+                                    tabIndex={-1}
+                                    onClick={() => setAmapShow((s) => ({ ...s, [f.key]: !s[f.key] }))}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
+                                  >
+                                    {f.show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleSaveAmapKeys}
+                            disabled={amapSaving || (!amapDraft.jsKey.trim() && !amapDraft.sec.trim() && !amapDraft.ws.trim())}
+                            className={cn(
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              (amapDraft.jsKey.trim() || amapDraft.sec.trim() || amapDraft.ws.trim()) && !amapSaving
+                                ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
+                                : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                            )}
+                          >
+                            {amapSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            保存
+                          </button>
+                          {amapInfo?.config && (
+                            <button
+                              onClick={handleDeleteAmapKeys}
+                              disabled={amapSaving}
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                            >
+                              {amapSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                              删除（回退服务器默认）
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-content-muted leading-relaxed">
+                          · 留空的项沿用服务器默认配置；「Web服务」Key 用于把站点名校准为真实坐标——
+                          控制台需把服务器出口 IP 加入其 IP 白名单，否则校准自动跳过（行程仍可用，但路径规划易降级直线）；
+                          JS Key 建议配置域名白名单防盗用。
+                        </p>
                       </div>
                     </div>
                   )

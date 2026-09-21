@@ -13,6 +13,10 @@ import {
 /** 最近使用模型历史上限:超过此值的最旧条目会被淘汰 */
 const MAX_RECENT_MODELS = 10
 
+/** 一次性面具信号:侧边栏「选面具开新对话」写入,ChatPanel 新对话挂载时消费并立即清除。
+ *  新对话默认不带面具(上次的面具总忘记关),只有这里的显式选择才会带入。 */
+export const NEW_CHAT_MASK_SIGNAL_KEY = 'chat:newChatMaskSignal'
+
 /** 从 localStorage 读取字符串数组,失败/缺失返回 fallback */
 function loadStringArray(key: string, fallback: string[] = []): string[] {
   if (typeof window === 'undefined') return fallback
@@ -45,8 +49,6 @@ interface ChatState {
   setSettingsSection: (section: string | null) => void
   previewCode: string | null
   setPreviewCode: (code: string | null) => void
-  isPreviewFullscreen: boolean
-  setIsPreviewFullscreen: (fullscreen: boolean) => void
   /** 会话列表刷新信号：新会话创建时 +1，侧边栏监听此值重新拉取列表 */
   conversationVersion: number
   bumpConversationVersion: () => void
@@ -158,8 +160,6 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   setSettingsSection: (section) => set({ settingsSection: section }),
   previewCode: null,
   setPreviewCode: (code) => set({ previewCode: code }),
-  isPreviewFullscreen: false,
-  setIsPreviewFullscreen: (fullscreen) => set({ isPreviewFullscreen: fullscreen }),
   conversationVersion: 0,
   bumpConversationVersion: () =>
     set((state) => ({ conversationVersion: state.conversationVersion + 1 })),

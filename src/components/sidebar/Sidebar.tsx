@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
-import { useChatStore } from '@/store/chat-store'
+import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
 import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
 import { resolveMaskBadge, type MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
@@ -214,16 +214,17 @@ export function Sidebar() {
     startNewChat()
   }, [setSidebarOpen, startNewChat])
 
-  // 选面具开新对话:写入 store + localStorage,复用单飞导航。
-  // ChatPanel 挂载后会从 localStorage 恢复,首条消息发送时服务端将 maskId 写入会话。
+  // 选面具开新对话:写入 store + 一次性信号,复用单飞导航。
+  // 新对话默认不带面具,只有这里显式选择才通过信号带入;
+  // ChatPanel 挂载后消费信号恢复,首条消息发送时服务端将 maskId 写入会话。
   const handleSelectMask = useCallback(
     (maskId: string | null) => {
-      setConversationMaskId(maskId)
       if (maskId) {
-        localStorage.setItem('chat:maskId', maskId)
+        localStorage.setItem(NEW_CHAT_MASK_SIGNAL_KEY, maskId)
       } else {
-        localStorage.removeItem('chat:maskId')
+        localStorage.removeItem(NEW_CHAT_MASK_SIGNAL_KEY)
       }
+      setConversationMaskId(maskId)
       setMaskMenuOpen(false)
       handleNewConversation()
     },

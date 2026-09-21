@@ -24,7 +24,7 @@ export async function GET() {
       select: {
         id: true, subject: true, topic: true, title: true,
         content: true, analysis: true, mastery: true,
-        reps: true, lapses: true, dueAt: true,
+        reps: true, lapses: true, dueAt: true, sourceQuestionId: true,
       },
     })
     return NextResponse.json(rows)

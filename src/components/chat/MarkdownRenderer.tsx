@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import rehypeHighlight from 'rehype-highlight'
 import type { Components } from 'react-markdown'
 import type { PluggableList } from 'unified'
 import { cn } from '@/lib/utils'
@@ -123,10 +124,11 @@ function extractCodeInfo(children: React.ReactNode): { language: string; code: s
 }
 
 /**
- * 代码块:在原 pre 样式上接右键菜单(复制 / 交给 AI 处理 / 全屏预览)。
- * 性能红线:本组件随每条消息渲染 —— memo + 无常驻隐藏 DOM,菜单状态全在
+ * 代码块:常驻工具行(语言 badge / 复制 / 预览)+ 右键菜单(复制 / 交给 AI / 预览)。
+ * 性能红线:本组件随每条消息渲染 —— memo + 轻量常驻 DOM,菜单状态全在
  * 全局 contextMenuStore,不在本组件持有;流式纯文本分支不经过这里。
- * 「交给 AI」走 input-bridge 事件注入输入框,不新增 props 链。
+ * 「交给 AI」走 input-bridge 事件注入输入框,不新增 props 链;
+ * 「预览」写 chat-store 的 previewCode,由 ChatPreviewPanel 滑出渲染。
  */
 const CodeBlock = memo(function CodeBlock({ children }: { children?: React.ReactNode }) {
   const { language, code } = useMemo(() => extractCodeInfo(children), [children])
@@ -146,6 +148,12 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
         console.error('[CodeBlock] copy failed:', err)
         toast.error('复制失败', { title: '复制' })
       })
+  }, [code])
+
+  // HTML/SVG 代码块 → 滑出预览面板(移动端全宽覆盖,桌面端侧栏)
+  const canPreview = language === 'html' || language === 'svg'
+  const handlePreview = useCallback(() => {
+    useChatStore.getState().setPreviewCode(code)
   }, [code])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -179,29 +187,55 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
         icon: <StickyNote className="w-3.5 h-3.5" />,
         onSelect: () => insertTextToInput(`请为以下${langLabel}代码添加逐段注释:\n\n${mdSource}`),
       },
-      inChat && (language === 'html' || language === 'svg') && {
+      inChat && canPreview && {
         id: 'preview',
-        label: '全屏预览',
+        label: '预览',
         icon: <Eye className="w-3.5 h-3.5" />,
         dividerBefore: true,
-        onSelect: () => {
-          // 复用 ChatPanel 的预览通道(store 驱动),直接进全屏 iframe
-          const { setPreviewCode, setIsPreviewFullscreen } = useChatStore.getState()
-          setPreviewCode(code)
-          setIsPreviewFullscreen(true)
-        },
+        onSelect: handlePreview,
       },
     ]
     const items = candidates.filter((it): it is ContextMenuItem => !!it)
     if (!items.length) return
     const { openContextMenu } = useContextMenuStore.getState()
     openContextMenu({ x: e.clientX, y: e.clientY }, items, language ? language.toUpperCase() : undefined)
-  }, [code, language, handleCopy, inChat])
+  }, [code, language, handleCopy, handlePreview, canPreview, inChat])
 
   return (
-    <pre onContextMenu={handleContextMenu} className="my-3 overflow-x-auto rounded-lg border border-line bg-code-bg p-3 text-[13px] leading-relaxed">
-      {children}
-    </pre>
+    <div className="my-3 rounded-lg overflow-hidden border border-line bg-code-bg">
+      {language && (
+        <div className="flex items-center justify-between gap-2 pl-3 pr-1.5 py-1 bg-code-header border-b border-line">
+          <span className="text-[10px] text-content-muted font-mono uppercase tracking-wider truncate select-none">
+            {language}
+          </span>
+          <div className="flex items-center gap-0.5 shrink-0">
+            {canPreview && (
+              <button
+                type="button"
+                onClick={handlePreview}
+                title="预览"
+                aria-label="预览"
+                className="p-1.5 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleCopy}
+              title="复制代码"
+              aria-label="复制代码"
+              className="p-1.5 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+      <pre onContextMenu={handleContextMenu} className="p-3 overflow-x-auto text-[13px] leading-relaxed">
+        {children}
+      </pre>
+    </div>
   )
 })
 
@@ -333,7 +367,14 @@ function normalizeMathDelimiters(md: string): string {
 function RichSegment({ content, promote = true }: { content: string; promote?: boolean }) {
   // 插件数组引用固定(memo),避免父组件重渲染导致 ReactMarkdown 反复重新解析
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], [])
-  const rehypePlugins = useMemo<PluggableList>(() => [[rehypeKatex, { throwOnError: false, strict: false }]], [])
+  // rehype-highlight 只认 language-* 标注(detect:false 防误染普通文本),未注册语言静默跳过
+  const rehypePlugins = useMemo<PluggableList>(
+    () => [
+      [rehypeKatex, { throwOnError: false, strict: false }],
+      [rehypeHighlight, { detect: false, ignoreMissing: true }],
+    ],
+    [],
+  )
   // 内容稳定后才进富渲染,预处理只跑一次;先归一化定界符再决定是否块级升级
   // promote=false 用于选择题选项/诗行等短文本行——单行纯公式升级成块级卡片(math-card/katex-display)
   // 在正文里是美化,在选项里每个选项一张大卡是灾难;定界符归一化对选项同样需要,不受 promote 开关影响

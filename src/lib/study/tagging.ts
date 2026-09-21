@@ -23,6 +23,9 @@ export const NOTE_SUBJECTS = [
   'physics',
   'chemistry',
   'biology',
+  'history',
+  'geography',
+  'politics',
   'other',
 ] as const
 export type NoteSubject = (typeof NOTE_SUBJECTS)[number]
@@ -35,7 +38,7 @@ export interface NoteTags {
 
 const TAG_SYSTEM =
   '你是错题本打标助手。根据题目(和可选的 AI 讲解)输出严格的 JSON,格式:' +
-  '{"subject":"math|english|chinese|physics|chemistry|biology|other",' +
+  '{"subject":"math|english|chinese|physics|chemistry|biology|history|geography|politics|other",' +
   '"topic":"一个具体考点短语(不超过12字,如:十字相乘/定语从句/受力分析),无法判断则 null",' +
   '"title":"题干摘要(不超过30字)"}。只输出 JSON,不要任何其他文字或代码围栏。'
 

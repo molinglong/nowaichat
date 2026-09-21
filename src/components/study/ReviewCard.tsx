@@ -18,6 +18,7 @@ interface QueueItem {
   reps: number
   lapses: number
   dueAt: string | null
+  sourceQuestionId: string | null
 }
 
 export function ReviewCard() {
@@ -148,6 +149,9 @@ export function ReviewCard() {
           <span className="px-1.5 py-0.5 rounded bg-surface-subtle text-[10px] text-content-secondary">{subjectLabel}</span>
           {current.topic && (
             <span className="px-1.5 py-0.5 rounded bg-accent/10 text-[10px] text-accent">{current.topic}</span>
+          )}
+          {current.sourceQuestionId && (
+            <span className="px-1.5 py-0.5 rounded border border-line/60 text-[10px] text-content-muted" title="来自题库练习">题库</span>
           )}
           <span className="ml-auto text-[10px] text-content-muted">
             掌握 {Math.round(current.mastery * 100)}% · 第 {current.reps + 1} 次

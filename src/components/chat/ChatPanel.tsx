@@ -5,15 +5,16 @@ import { useChat } from '@ai-sdk/react'
 import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus, Play } from 'lucide-react'
+import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon, X, Play } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
 import { WriteDocPanel } from '@/components/write/WriteDocPanel'
+import { ChatPreviewPanel } from './ChatPreviewPanel'
 import { OutlineSidebar } from './OutlineSidebar'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { ContextMeter } from './ContextMeter'
-import { useChatStore } from '@/store/chat-store'
+import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import { buildSettingsSnapshot, executeSettingsOps } from '@/lib/settings/executor'
 import { toast } from '@/lib/toast'
@@ -87,7 +88,7 @@ export function ChatPanel({
   autoSendText,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
-  // 写作画布面板打开时桌面端压缩聊天区让位(与 WriteDocPanel 同宽并排,豆包式)
+  // 写作画布/预览面板打开时桌面端压缩聊天区让位(与面板同宽并排,豆包式)
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
   const [conversationId, setConversationId] = useState(initialConversationId)
 
@@ -128,15 +129,20 @@ export function ChatPanel({
     setConversationStylePreset(stored || 'balanced')
   }, [initialConversationId, initialStylePreset, setConversationStylePreset])
 
-  // 面具恢复:已有会话用 DB 值;新对话从 localStorage 恢复上次选择
+  // 面具恢复:已有会话用 DB 值;新对话不再"记忆"上次的面具(总忘记关),
+  // 默认回到无面具;仅侧边栏「选面具开新对话」的一次性信号才带入
   useEffect(() => {
     if (initialConversationId) {
       setConversationMaskId(initialMaskId ?? null)
       return
     }
-    const stored = localStorage.getItem('chat:maskId')
+    const signal = localStorage.getItem(NEW_CHAT_MASK_SIGNAL_KEY)
+    // 一次性消费:信号只对紧随其后的这次新对话生效,不延续到下一个
+    localStorage.removeItem(NEW_CHAT_MASK_SIGNAL_KEY)
+    // 旧版"面具记忆"key,清理遗留
+    localStorage.removeItem('chat:maskId')
     // 内置裸 id 直接认;user: 前缀的合法性由服务端 getMaskById 兑底
-    setConversationMaskId(stored && (getBuiltinMask(stored) || stored.startsWith('user:')) ? stored : null)
+    setConversationMaskId(signal && (getBuiltinMask(signal) || signal.startsWith('user:')) ? signal : null)
   }, [initialConversationId, initialMaskId, setConversationMaskId])
 
   // 面具选择面板开关
@@ -160,22 +166,8 @@ export function ChatPanel({
     return undefined
   }, [conversationMaskId, userMasks])
 
-  // Preview panel state
-  const previewCode = useChatStore(state => state.previewCode)
-  const setPreviewCode = useChatStore(state => state.setPreviewCode)
-  const isPreviewFullscreen = useChatStore(state => state.isPreviewFullscreen)
-  const setIsPreviewFullscreen = useChatStore(state => state.setIsPreviewFullscreen)
-  
-  useEffect(() => {
-    if (isPreviewFullscreen) {
-      document.body.style.overflow = 'hidden'
-    } else {
-      document.body.style.overflow = ''
-    }
-    return () => {
-      document.body.style.overflow = ''
-    }
-  }, [isPreviewFullscreen])
+  // 预览面板打开状态(ChatPreviewPanel 滑出驱动):桌面端聊天区同步压缩让位
+  const previewOpen = useChatStore((s) => s.previewCode !== null)
   
   // Auto-enable deepThink for reasoning models (like DeepSeek-R1), but allow user to toggle off
   const shouldAutoEnableDeepThink = initialModel && allModels.find(m => m.id === initialModel)?.supportsReasoning
@@ -333,6 +325,11 @@ export function ChatPanel({
       const savedDeepThink = localStorage.getItem(DEEP_THINK_STORAGE_KEY)
       if (savedDeepThink === 'true') {
         setDeepThink(true)
+        userToggledDeepThink.current = true
+      } else if (savedDeepThink === 'false') {
+        // 用户显式关闭过: 恢复关闭状态,并阻止推理模型 auto-enable 重新打开
+        setDeepThink(false)
+        userToggledDeepThink.current = true
       }
       // 恢复对比模式预设 (移动端不实现对比，跳过)
       if (
@@ -888,15 +885,11 @@ export function ChatPanel({
     regenerate()
   }, [clearError, regenerate])
 
-  // 切换/清除面具:同步 store + localStorage;已有会话时持久化到 DB
+  // 切换/清除面具:同步 store;已有会话时持久化到 DB。
+  // 不写 localStorage —— 新对话默认不带面具,避免上次的面具被"记忆"延续
   const handleMaskChange = useCallback(
     (maskId: string | null) => {
       setConversationMaskId(maskId)
-      if (maskId) {
-        localStorage.setItem('chat:maskId', maskId)
-      } else {
-        localStorage.removeItem('chat:maskId')
-      }
       setMaskPickerOpen(false)
       const convId = conversationIdRef.current
       if (convId) {
@@ -1018,7 +1011,7 @@ export function ChatPanel({
   }
 
   return (
-    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
+    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${writePanelOpen || previewOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
 
       {/* Error banner */}
       {error && errorInfo && (
@@ -1247,124 +1240,8 @@ export function ChatPanel({
         </>
       )}
 
-      {/* Right preview panel (desktop) */}
-      {previewCode && !isPreviewFullscreen && (
-        <div className="hidden md:flex flex-col border-l border-line bg-code-bg min-w-[400px]">
-          <MacHeaderForPreview code={previewCode} onClose={() => setPreviewCode(null)} />
-        </div>
-      )}
-      
-      {/* Fullscreen previews - absolute positioned overlays */}
-      {(previewCode && isPreviewFullscreen) && (
-        <>
-          <div className="fixed inset-0 z-50 flex flex-col bg-code-bg md:hidden pointer-events-none">
-            <div className="flex items-center justify-between px-4 py-2 bg-code-header border-b border-line shrink-0 pointer-events-auto">
-              <button
-                onClick={() => setIsPreviewFullscreen(false)}
-                className="flex items-center justify-center w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e] hover:brightness-90 transition-all pointer-events-auto"
-                aria-label="关闭"
-              >
-                <X className="w-2 h-2 text-[#820000] opacity-0 hover:opacity-100 transition-opacity" />
-              </button>
-              <span className="text-[11px] text-content-muted font-mono select-none pointer-events-auto">preview</span>
-              <div className="w-3" />
-            </div>
-            <iframe
-              src={`data:text/html;charset=utf-8,${encodeURIComponent(previewCode)}`}
-              className="flex-1 w-full bg-white border-0 pointer-events-auto"
-              style={{ height: 'calc(100dvh - 50px)' }}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          </div>
-          
-          <div className="hidden md:flex fixed inset-0 z-50 flex flex-col bg-code-bg pointer-events-none">
-            <div className="flex items-center justify-between px-4 py-2 bg-code-header border-b border-line shrink-0 pointer-events-auto">
-              <button
-                onClick={() => setIsPreviewFullscreen(false)}
-                className="flex items-center justify-center w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e] hover:brightness-90 transition-all pointer-events-auto"
-                aria-label="关闭"
-              >
-                <X className="w-2 h-2 text-[#820000] opacity-0 hover:opacity-100 transition-opacity" />
-              </button>
-              <span className="text-[11px] text-content-muted font-mono select-none pointer-events-auto">preview</span>
-              <div className="w-3" />
-            </div>
-            <iframe
-              src={`data:text/html;charset=utf-8,${encodeURIComponent(previewCode)}`}
-              className="flex-1 w-full bg-white border-0 pointer-events-auto"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          </div>
-        </>
-      )}
       <WriteDocPanel />
+      <ChatPreviewPanel />
     </div>
-  )
-}
-
-// ── Mac-style header component for preview ───────────────────────────
-function MacHeaderForPreview({ 
-  code, 
-  onClose 
-}: { 
-  code: string
-  onClose: () => void
-}) {
-  const [zoom, setZoom] = useState(1)
-  const zoomMin = 0.5
-  const zoomMax = 2
-  const zoomStep = 0.25
-
-  return (
-    <>
-      <div className="flex items-center justify-between px-4 py-2 bg-code-header border-b border-line">
-        <div className="flex items-center gap-1.5">
-          <Eye className="w-3 h-3 text-content-secondary" />
-          <span className="text-[11px] text-content-muted font-mono">HTML Preview</span>
-        </div>
-        <button
-          onClick={onClose}
-          className="shrink-0 p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-surface-subtle transition-colors"
-          aria-label="关闭预览"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      <div className="flex-1 overflow-hidden bg-white">
-        <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }} className="origin-top-left">
-          <iframe
-            src={`data:text/html;charset=utf-8,${encodeURIComponent(code)}`}
-            className="w-full origin-top-left"
-            style={{ width: '100%', minHeight: '600px' }}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-          />
-        </div>
-      </div>
-      {/* Zoom controls */}
-      <div className="flex items-center justify-center gap-3 py-3 bg-code-header border-t border-line shrink-0">
-        <button
-          onClick={() => setZoom((z) => Math.max(zoomMin, z - zoomStep))}
-          disabled={zoom <= zoomMin}
-          className="flex items-center justify-center w-7 h-7 rounded-full bg-surface border border-line-strong text-content-secondary hover:bg-surface-subtle disabled:opacity-30 disabled:cursor-default transition-colors"
-          aria-label="缩小"
-        >
-          <Minus className="w-3 h-3" />
-        </button>
-        <button
-          onClick={() => setZoom(1)}
-          className="text-[11px] text-content-secondary font-mono min-w-[3rem] text-center hover:text-content-primary transition-colors"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-        <button
-          onClick={() => setZoom((z) => Math.min(zoomMax, z + zoomStep))}
-          disabled={zoom >= zoomMax}
-          className="flex items-center justify-center w-7 h-7 rounded-full bg-surface border border-line-strong text-content-secondary hover:bg-surface-subtle disabled:opacity-30 disabled:cursor-default transition-colors"
-          aria-label="放大"
-        >
-          <Plus className="w-3 h-3" />
-        </button>
-      </div>
-    </>
   )
 }

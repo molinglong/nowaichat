@@ -56,6 +56,11 @@ import {
 } from "@/lib/ai/write-doc-tool"
 import { createWriteDocTool } from "@/lib/ai/write-doc-tool.server"
 import {
+  TRIP_TOOL_NAME,
+  TRIP_TOOL_PROMPT,
+} from "@/lib/ai/trip-tool"
+import { createTripTool } from "@/lib/ai/trip-tool.server"
+import {
   URL_READER_TOOL_NAME,
   URL_READER_TOOL_PROMPT,
   URL_READER_DISABLED_PROMPT,
@@ -584,6 +589,12 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     systemParts.push(WRITE_DOC_TOOL_PROMPT + currentDocHint)
   }
 
+  // 行程规划:非对比模式注入(纯只读不落库,临时模式安全;模型仅在用户提出
+  // 旅游/出行规划意图时调用,坐标经服务端高德 POI 校准后由前端渲染地图卡片)
+  if (!groupId) {
+    systemParts.push(TRIP_TOOL_PROMPT)
+  }
+
   // 待办管理:非临时非对比模式注入 manage_todo 工具+规则段;
   // 临时模式不注入(待办属长期数据,防污染),注入降级提示防虚构。
   // 与 REST API(/api/todos,新标签页插件)共用 Todo 表,变更互通。
@@ -671,6 +682,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
   const writeDocTool = !isEphemeral && !groupId ? createWriteDocTool(userId) : null
+  const tripTool = !groupId ? createTripTool(userId) : null
 
   // 课本知识库检索(半绑定):用户名下有知识切块才注入(物理级闸门,无课本则工具不存在);
   // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
@@ -931,7 +943,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           },
         }
       : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || mcpToolCount > 0)
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || tripTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
@@ -944,6 +956,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
             ...(writeDocTool ? { [WRITE_DOC_TOOL_NAME]: writeDocTool } : {}),
+            ...(tripTool ? { [TRIP_TOOL_NAME]: tripTool } : {}),
           },
         }
       : {}),

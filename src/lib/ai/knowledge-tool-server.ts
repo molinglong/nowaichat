@@ -33,7 +33,11 @@ export function createKnowledgeTool(userId: string, preferredSubject?: string) {
     inputSchema: knowledgeInputSchema,
     execute: async ({ query, subject }): Promise<KnowledgeToolOutput> => {
       try {
-        const results = await searchKnowledgeChunks(userId, query, subject)
+        let results = await searchKnowledgeChunks(userId, query, subject)
+        // 学科过滤空结果时回退查全部:模型可能把问题学科归错(如政治→other),服务端自愈重查
+        if (!results.length && subject) {
+          results = await searchKnowledgeChunks(userId, query)
+        }
 
         return {
           query,

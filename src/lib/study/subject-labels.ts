@@ -6,6 +6,9 @@ export const SUBJECT_LABELS = {
   physics: '物理',
   chemistry: '化学',
   biology: '生物',
+  history: '历史',
+  geography: '地理',
+  politics: '政治',
   other: '其他',
 } as const
 

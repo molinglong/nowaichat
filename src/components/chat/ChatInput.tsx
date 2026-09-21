@@ -183,9 +183,11 @@ export function ChatInput({
     adjustHeight()
   }, [input, adjustHeight])
 
-  // 发送结束后归还焦点
+  // 发送结束后归还焦点(仅鼠标设备):本 effect 挂载时也会跑一次(isLoading 初始 false),
+  // 触屏设备程序性 focus 会立刻弹出软键盘 —— 进主页/AI 回答完都被打断,故 pointer:coarse 一律不抢焦点
   useEffect(() => {
     if (isLoading) return
+    if (window.matchMedia('(pointer: coarse)').matches) return
     textareaRef.current?.focus()
   }, [isLoading])
 
@@ -542,11 +544,6 @@ export function ChatInput({
               selectedModel={modelId}
               onModelChange={(id) => handleCompareModelChange(index, id)}
               compact
-              deepThink={deepThink}
-              onDeepThinkChange={onDeepThinkChange}
-              webSearch={webSearch}
-              onWebSearchChange={onWebSearchChange}
-              webSearchAvailable={webSearchAvailable}
             />
             {compareModels.length > 2 && (
               <button
@@ -709,11 +706,6 @@ export function ChatInput({
                     selectedModel={selectedModel}
                     onModelChange={onModelChange}
                     compact
-                    deepThink={deepThink}
-                    onDeepThinkChange={onDeepThinkChange}
-                    webSearch={webSearch}
-                    onWebSearchChange={onWebSearchChange}
-                    webSearchAvailable={webSearchAvailable}
                   />
                 )}
                 <button
@@ -945,11 +937,6 @@ export function ChatInput({
                   selectedModel={selectedModel}
                   onModelChange={onModelChange}
                   compact
-                  deepThink={deepThink}
-                  onDeepThinkChange={onDeepThinkChange}
-                  webSearch={webSearch}
-                  onWebSearchChange={onWebSearchChange}
-                  webSearchAvailable={webSearchAvailable}
                 />
               )}
               {isLoading ? (
