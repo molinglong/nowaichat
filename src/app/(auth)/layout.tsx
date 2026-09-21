@@ -1,13 +1,17 @@
 /* ── 认证页（登录/注册）共享布局：品牌分栏 ──────────────────
    左栏：品牌叙事区（点阵背景 + 极细大标语 + 药丸 + 缩影卡片），移动端隐藏
    右栏：白底表单区，由 login/register 页面填充 children ── */
+import { AuthTrafficBar } from '@/components/AuthTrafficBar'
+
 export default function AuthLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-screen">
+    <div className="relative flex min-h-screen">
+      {/* Tauri 桌面：红绿灯 + 窗口拖动区（Web 端由 .tauri-only 门控隐藏，零渲染） */}
+      <AuthTrafficBar />
       {/* ── 左栏：品牌区（移动端隐藏） ── */}
       <div className="relative hidden w-[55%] flex-col justify-between overflow-hidden bg-gradient-to-br from-[#f0f0f3] to-[#e2e2e7] px-[52px] py-11 dark:from-[#1a1a1d] dark:to-[#232327] lg:flex">
         {/* 点阵背景（纯装饰，整面均匀铺满） */}

@@ -314,6 +314,13 @@ body {
   }
 }
 
+/* Tauri 专属元素门控：带 .tauri-only 的元素只在桌面壳渲染显示。
+   data-tauri 属性由 layout.tsx 的 head 内联脚本在首帧前同步注入，
+   桌面端零闪烁、Web 端零渲染差异（登录页红绿灯/拖动区用） */
+html:not([data-tauri]) .tauri-only {
+  display: none !important;
+}
+
 /* ── Tauri 桌面客户端专属样式 ─────────────────────────────
    [data-tauri] 属性由 Tauri WebView 自动注入到 <html>，
    浏览器开发时（npm run dev）永远不存在。

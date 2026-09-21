@@ -4,10 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.aichatt.desktop",
   "build": {
-    "frontendDist": "../out",
-    "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run desktop:build:web"
+    "frontendDist": "./splash",
+    "devUrl": "http://localhost:3456",
+    "beforeDevCommand": "npm run dev"
   },
   "app": {
     "windows": [
@@ -40,6 +39,21 @@
         "visible": false,
         "focus": false,
         "url": "/buddy/"
+      },
+      {
+        "label": "settings",
+        "title": "设置",
+        "width": 780,
+        "height": 640,
+        "minWidth": 560,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "center": true,
+        "visible": false,
+        "url": "/settings-window/"
       }
     ],
     "security": {
@@ -48,7 +62,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

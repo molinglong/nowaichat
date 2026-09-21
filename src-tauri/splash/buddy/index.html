@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>aichatt · 搭子</title>
+<style>
+  /* 搭子窗口为透明无边框小窗(120x120),兜底页只放一枚状态圆点 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #98989d;
+    animation: pulse 1s ease-in-out infinite;
+    cursor: pointer;
+  }
+  .dot.error {
+    animation: none;
+    background: #e5636a;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+  }
+</style>
+</head>
+<body>
+  <div class="dot" id="dot" title="正在连接服务器"></div>
+  <script src="../config.js"></script>
+  <script>
+    // 与 main 兜底页同一探测逻辑:no-cors 只在网络层失败时 reject
+    var ORIGIN = window.AICHATT_ORIGIN
+    var dot = document.getElementById('dot')
+    var probing = false
+
+    function probe() {
+      return fetch(ORIGIN + '/', {
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      }).then(function () { return true }).catch(function () { return false })
+    }
+
+    function run() {
+      probing = true
+      dot.classList.remove('error')
+      dot.title = '正在连接服务器'
+      probe().then(function (ok) {
+        if (ok) {
+          location.replace(ORIGIN + '/buddy/')
+        } else {
+          probing = false
+          dot.classList.add('error')
+          dot.title = '无法连接服务器,点击重试'
+        }
+      })
+    }
+
+    // 小窗没有按钮空间:失败态点击圆点重试
+    dot.addEventListener('click', function () {
+      if (!probing) run()
+    })
+
+    run()
+  </script>
+</body>
+</html>

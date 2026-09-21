@@ -1,8 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认权限:仅允许自定义窗口控制命令",
-  "windows": ["main", "buddy"],
+  "description": "默认权限:窗口控制命令;本地与远程(chat.yuban.icu)页面均生效",
+  "windows": ["main", "buddy", "settings"],
+  "remote": { "urls": ["https://chat.yuban.icu"] },
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -14,6 +15,7 @@
     "core:window:allow-unmaximize",
     "core:window:allow-show",
     "core:window:allow-hide",
+    "core:window:allow-unminimize",
     "core:window:allow-set-focus",
     "core:window:allow-set-position",
     "core:window:allow-outer-position",

@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tauri::{Manager, WebviewWindow, WebviewUrl, PhysicalPosition};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::io::Cursor;
 
 /// 当前窗口是否为最大化(全屏)状态,前端用于红绿灯"绿色按钮"图标切换。

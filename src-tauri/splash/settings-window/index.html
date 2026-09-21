@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>aichatt · 设置</title>
+<style>
+  /* 设置子窗口(780x640)兜底页:与主 splash 同款点阵背景 + 居中状态卡,
+     探测成功后整窗跳转远程域名的 /settings-window/ 路由 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(circle at 1px 1px, rgba(0,0,0,0.10) 1px, transparent 0) 0 0 / 22px 22px,
+      #f5f5f7;
+    color: #3a3a3c;
+  }
+  @media (prefers-color-scheme: dark) {
+    body {
+      background:
+        radial-gradient(circle at 1px 1px, rgba(255,255,255,0.10) 1px, transparent 0) 0 0 / 22px 22px,
+        #1a1a1c;
+      color: #d1d1d6;
+    }
+  }
+  .card { text-align: center; }
+  .mark {
+    width: 44px;
+    height: 44px;
+    margin: 0 auto 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid rgba(128,128,134,0.4);
+    font-size: 18px;
+  }
+  .msg { font-size: 13px; letter-spacing: 0.05em; opacity: 0.75; }
+  .retry {
+    display: none;
+    margin-top: 14px;
+    padding: 6px 18px;
+    font-size: 13px;
+    border-radius: 999px;
+    border: 1px solid rgba(128,128,134,0.45);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  .error .retry { display: inline-block; }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; opacity: 0.55;
+    display: inline-block; margin-right: 8px;
+    vertical-align: 1px;
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  .error .dot { animation: none; background: #e5636a; opacity: 1; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.8; }
+  }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="mark">a</div>
+    <div class="msg"><span class="dot"></span><span id="text">正在连接服务器</span></div>
+    <button class="retry" id="retry">重试</button>
+  </div>
+  <script src="../config.js"></script>
+  <script>
+    var ORIGIN = window.AICHATT_ORIGIN
+    var card = document.getElementById('card')
+    var text = document.getElementById('text')
+
+    function probe() {
+      return fetch(ORIGIN + '/', {
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      }).then(function () { return true }).catch(function () { return false })
+    }
+
+    function run() {
+      card.classList.remove('error')
+      text.textContent = '正在连接服务器'
+      probe().then(function (ok) {
+        if (ok) {
+          location.replace(ORIGIN + '/settings-window/')
+        } else {
+          text.textContent = '无法连接服务器'
+          card.classList.add('error')
+        }
+      })
+    }
+
+    document.getElementById('retry').addEventListener('click', run)
+    run()
+  </script>
+</body>
+</html>

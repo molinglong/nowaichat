@@ -548,9 +548,22 @@ function NavButton({
   )
 }
 
-export function SettingsModal() {
-  const settingsOpen = useChatStore((s) => s.settingsOpen)
-  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
+export function SettingsModal({
+  forceOpen = false,
+  onRequestClose,
+}: {
+  /** 独立子窗口模式：忽略 store 开关恒渲染；所有“关闭”请求转交宿主(如隐藏子窗口) */
+  forceOpen?: boolean
+  onRequestClose?: () => void
+} = {}) {
+  const storeSettingsOpen = useChatStore((s) => s.settingsOpen)
+  const storeSetSettingsOpen = useChatStore((s) => s.setSettingsOpen)
+  // 独立子窗口模式下遮蔽 store action：组件内全部 setSettingsOpen(false) 调用点
+  // (红点按钮/ESC/移动端关闭)自动转交宿主，无需逐处修改
+  const setSettingsOpen = forceOpen
+    ? (open: boolean) => { if (!open) onRequestClose?.() }
+    : storeSetSettingsOpen
+  const settingsOpen = forceOpen || storeSettingsOpen
   const settingsSection = useChatStore((s) => s.settingsSection)
   const setSettingsSection = useChatStore((s) => s.setSettingsSection)
   const currentConversationId = useChatStore((s) => s.currentConversationId)
@@ -1142,7 +1155,8 @@ export function SettingsModal() {
   }, [settingsOpen, requestClose])
   const { onCardPointerDown, onCardPointerMove, onCardPointerUp, onCardPointerCancel, recenter } = useWindowDrag({
     cardRef,
-    enabled: isDesktop,
+    // 独立子窗口模式禁用卡片内拖拽：拖动改由标题条 data-tauri-drag-region 走原生窗口层
+    enabled: isDesktop && !forceOpen,
     active: settingsOpen,
     storageKey: 'chat:settingsWindowPos',
   })
@@ -1971,12 +1985,14 @@ export function SettingsModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center md:justify-center md:pointer-events-none">
-      {/* Backdrop — 纯色压暗：日间 35% 黑、夜间 65% 黑，去掉模糊与饱和度提升，兼顾模态感与性能；移动端随抽屉滑入/滑出同步淡入淡出 */}
+    <div className={forceOpen ? 'relative flex h-dvh w-full' : 'fixed inset-0 z-[100] flex items-end md:items-center justify-center md:justify-center md:pointer-events-none'}>
+      {/* Backdrop — 纯色压暗：日间 35% 黑、夜间 65% 黑，去掉模糊与饱和度提升，兼顾模态感与性能；移动端随抽屉滑入/滑出同步淡入淡出。独立子窗口无遮罩(窗口即卡片) */}
+      {!forceOpen && (
       <div
         className={`absolute inset-0 bg-black/35 dark:bg-black/65 md:hidden transition-opacity duration-300 ease-out ${visible ? 'opacity-50' : 'opacity-0'}`}
         onClick={requestClose}
       />
+      )}
 
       {/* Modal card —— 移动端是底部抽屉 (贴底、上方圆角、上限 90vh,左右占满),平板是居中模态 (宽度 90%),桌面端固定宽度;
           滑入/滑出由 visible 切 translate-y 类驱动,桌面端被 md: 变体固定、transform 留给 useWindowDrag 拖拽 */}
@@ -1986,7 +2002,9 @@ export function SettingsModal() {
         onPointerMove={onCardPointerMove}
         onPointerUp={onCardPointerUp}
         onPointerCancel={onCardPointerCancel}
-        className={`relative w-full md:w-[90%] lg:w-[750px] max-w-none md:max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto transition-[transform,opacity,background-color,border-color] duration-300 ease-out ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 md:translate-y-0 md:opacity-100'}`}
+        className={`relative flex flex-col overflow-hidden transition-[transform,opacity,background-color,border-color] duration-300 ease-out ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 md:translate-y-0 md:opacity-100'} ${forceOpen
+          ? 'h-full w-full rounded-none border-0 shadow-none'
+          : 'w-full md:w-[90%] lg:w-[750px] max-w-none md:max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto'}`}
       >
         {/* Header with macOS red dot */}
         <div className="relative flex items-center px-4 pt-3 pb-2.5 border-b border-line/60 shrink-0 bg-surface md:hidden">
@@ -2028,8 +2046,15 @@ export function SettingsModal() {
             <div
               data-drag-handle
               onDoubleClick={recenter}
-              className="hidden md:flex items-center gap-2.5 px-1 pt-0.5 pb-1.5 shrink-0 cursor-grab active:cursor-grabbing select-none touch-none"
+              {...(forceOpen ? { 'data-tauri-drag-region': '' } : {})}
+              className={`hidden md:flex items-center gap-2.5 px-1 pt-0.5 pb-1.5 shrink-0 select-none touch-none ${forceOpen ? 'pl-3.5' : 'cursor-grab active:cursor-grabbing'}`}
             >
+              {/* 独立子窗口：标题条即原生窗口拖动区(卡片内拖拽已禁用)，与 Sidebar 头部同构(灯在左标题在右) */}
+              {forceOpen && (
+                <span className="ml-1.5 text-[13px] font-semibold tracking-[0.02em] text-content-primary">
+                  设置
+                </span>
+              )}
               <button
                 onClick={() => setSettingsOpen(false)}
                 className="flex w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors group items-center justify-center shrink-0"

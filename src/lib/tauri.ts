@@ -60,6 +60,53 @@ async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>):
 export const tauri = {
   isTauri: false, // safe fallback; use getIsTauri() for runtime checks
 
+  /**
+   * 打开设置独立子窗口(可拖出主窗口外)。
+   * 窗口在 tauri.conf.json 预声明(visible:false),这里 show+focus;
+   * 被用户关过时兜底重建。主窗口所有设置入口经 chat-store 拦截统一走到这里。
+   */
+  async openSettings() {
+    if (!getIsTauri()) return
+    try {
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+      const existing = await WebviewWindow.getByLabel('settings')
+      if (existing) {
+        await existing.show()
+        await existing.unminimize().catch(() => {})
+        await existing.setFocus().catch(() => {})
+        return
+      }
+      const win = new WebviewWindow('settings', {
+        url: '/settings-window/',
+        title: '设置',
+        width: 780,
+        height: 640,
+        minWidth: 560,
+        minHeight: 480,
+        center: true,
+        decorations: false,
+        shadow: true,
+        resizable: true,
+      })
+      win.once('tauri://error', (e) => {
+        console.error('[tauri] settings window create failed:', e)
+      })
+    } catch (err) {
+      console.error('[tauri] openSettings failed:', err)
+    }
+  },
+
+  /** 隐藏当前窗口(设置子窗口的“关闭”= 隐藏保活,下次打开瞬时) */
+  async hideCurrentWindow() {
+    if (!getIsTauri()) return
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      await getCurrentWindow().hide()
+    } catch (err) {
+      console.error('[tauri] hideCurrentWindow failed:', err)
+    }
+  },
+
   close: () => invoke('close_window'),
   minimize: () => invoke('minimize_window'),
   toggleFullscreen: () => invoke('toggle_fullscreen'),

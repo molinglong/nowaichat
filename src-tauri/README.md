@@ -6,10 +6,15 @@
 
 | 模式 | 命令 | 状态 | 说明 |
 |---|---|---|---|
-| 开发 | `npm run tauri:dev` | ✅ 可用 | 加载 Next.js dev server (`http://localhost:3000`),所有页面正常工作 |
-| 构建 | `npm run tauri:build` | ✅ 可用 | 自动跑 `next build --config next.config.desktop.mjs` 导出到 `out/`,然后 Tauri 打包 |
+| 开发 | `npm run tauri:dev` | ✅ 可用 | 加载 Next.js dev server (`http://localhost:3456`),所有页面正常工作 |
+| 构建 | `npm run tauri:build` | ✅ 可用 | 远程壳模式:打包本地 `splash/` 兕底页,启动后探测并跳转 `https://chat.yuban.icu` |
 
-## 静态导出改造 (已完成)
+## 静态导出改造 (已退役,留作本地化路线参考)
+
+> 2026-09 起生产构建改为「远程壳」模式:不再静态导出,窗口经 `src-tauri/splash/`
+> 兑底页探测 `https://chat.yuban.icu` 可达后整窗跳转。零后端/认证/前端改动。
+> `next.config.desktop.mjs`、`src/lib/desktop-build.ts`、`desktop-placeholder/`
+> 保留未删,将来做本地数据/离线模式(B 路线)时可复活。以下改造记录原文保留:
 
 `/chat/c/[id]` 已从 Server Component 改造为 Client Component:
 
@@ -22,30 +27,28 @@ API 现在通过相对路径 `/api/...` 调用。前端 `fetch` 在 WebView 内�
 
 ## 首次跑生产构建的注意事项
 
-`npm run tauri:build` 会:
-
-1. 自动跑 `next build --config next.config.desktop.mjs` → 产出 `out/`
-2. 调 `tauri build` → 产出 `.exe` 到 `src-tauri/target/release/bundle/`
+`npm run tauri:build` 会直接调 `tauri build`,打包本地 `splash/` 兑底页,产出 `.exe` 到 `src-tauri/target/release/bundle/`(不再静态导出 Next.js,无需 `next build`)。
 
 需要先确认的:
 - ✅ Rust toolchain 已装
-- ✅ 数据库可以连(`prisma generate` + 跑过迁移)
-- ✅ Prisma Client 已生成(`npm run db:generate`)
-- ⚠️ 静态导出**不**包含 `/api/*` 路由 —— API 路由仍由现有部署(nginx / standalone server)提供。WebView 通过相对路径访问它们。如果你的 Web 是部署在域名 `chat.example.com` 上,Tauri 也吃这个域名 + 路径。
+- 远程域名 `https://chat.yuban.icu` 可从用户网络访问(壳启动后探测该地址,不可达显示兑底页+重试)
 
-## 桌面端运行架构 (当前)
+## 桌面端运行架构 (远程壳模式)
 
 ```
 ┌─ Tauri WebView (Rust) ──────────────────────┐
 │                                              │
-│  localhost:3000 (dev)  OR  out/*.html (prod) │
-│       │                       │              │
-│       └────── fetch /api/... ─┘              │
+│ dev : localhost:3456 (Next dev server, HMR)  │
+│ prod: splash/ 兑底页                         │
+│        └─ 探测可达 → 整窗跳转远程             │
+│             https://chat.yuban.icu           │
+│             (与 Web 同源:cookie/CORS 无感,   │
+│              API 走同一域名,前端零改动)       │
 │                                              │
 └──────────────────────┬───────────────────────┘
                        │
                        ▼
-        现有 Next.js Server (含 API + DB)
+        VPS Next.js Server (含 API + DB)
 ```
 
 ## macOS 风格红绿灯
@@ -67,7 +70,12 @@ src-tauri/
 ├── tauri.conf.json     Tauri 应用配置(窗口、图标、打包)
 ├── build.rs            Cargo 构建脚本
 ├── capabilities/
-│   └── default.json    权限白名单(仅允许自定义窗口控制命令)
+│   └── default.json    权限白名单(窗口控制命令;remote 覆盖 chat.yuban.icu)
+├── splash/             本地兑底页(探测可达后跳转远程域名)
+│   ├── config.js       远程域名唯一出处(AICHATT_ORIGIN)
+│   ├── index.html      main 窗口兑底页
+│   └── buddy/
+│       └── index.html  搭子窗口兑底页
 ├── icons/              应用图标(目前是占位 PNG/ICO)
 └── src/
     ├── main.rs         入口(Windows release 隐藏控制台)
@@ -112,8 +120,12 @@ npm run tauri:build
 ```
 
 产物:
-- `src-tauri/target/release/bundle/nsis/*.exe` - NSIS 安装包
-- `src-tauri/target/release/bundle/msi/*.msi` - MSI 安装包
+- `src-tauri/target/release/bundle/nsis/*.exe` - NSIS 安装包(主分发格式;远程壳模式下体积仅 ~2MB)
+
+> MSI 已从 bundle.targets 移除:WiX 工具(wix311-binaries.zip ~34MB)在直连 GitHub 超时/
+> 镜像频繁断流的网络下难以完整下载,导致默认 build 被 MSI 拖死。需要 MSI 时把
+> tauri.conf.json 的 targets 加回 "msi",并确保 %LOCALAPPDATA%\tauri\WixTools 就位
+> (或网络通畅时 CLI 自动下载)。
 
 ## 下一步:可选优化
 

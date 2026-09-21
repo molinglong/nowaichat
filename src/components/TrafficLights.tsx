@@ -12,8 +12,9 @@ import { tauri } from '@/lib/tauri'
  * - 绿 = 进入/退出全屏(macOS 行为,不是 Windows 的"最大化")
  *
  * Web 端开发时按钮渲染但事件是 no-op,样式可预览。
+ * onClose:自定义红点行为(如设置子窗口的"关闭=隐藏"),缺省关窗当前窗口。
  */
-export function TrafficLights() {
+export function TrafficLights({ onClose }: { onClose?: () => void } = {}) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [hovered, setHovered] = useState<'close' | 'min' | 'max' | null>(null)
 
@@ -28,7 +29,7 @@ export function TrafficLights() {
     })
   }, [])
 
-  const handleClose = () => tauri.close()
+  const handleClose = onClose ?? (() => tauri.close())
   const handleMinimize = () => tauri.minimize()
   const handleFullscreen = () => {
     setIsFullscreen((v) => !v)

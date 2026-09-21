@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>aichatt</title>
+<style>
+  /* 中性灰极简 + 点阵背景,与欢迎页规范一致;无玻璃拟态 */
+  :root {
+    --bg: #f5f5f7;
+    --dot: #d8d8dc;
+    --ink: #1d1d1f;
+    --ink-secondary: #6e6e73;
+    --line: #d2d2d7;
+    --btn-bg: #ffffff;
+    --btn-hover: #f0f0f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1c;
+      --dot: #303034;
+      --ink: #f5f5f7;
+      --ink-secondary: #98989d;
+      --line: #3a3a3c;
+      --btn-bg: #2c2c2e;
+      --btn-hover: #3a3a3c;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--bg);
+    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+    background-size: 24px 24px;
+    font-family: -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    color: var(--ink);
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
+    padding: 0 32px;
+  }
+  .logo {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  .status {
+    font-size: 13px;
+    color: var(--ink-secondary);
+    min-height: 18px;
+  }
+  .status::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0% { content: ''; }
+    25% { content: '·'; }
+    50% { content: '··'; }
+    75% { content: '···'; }
+  }
+  .status.error { color: var(--ink-secondary); }
+  .status.error::after { content: ''; animation: none; }
+  button {
+    display: none;
+    padding: 8px 28px;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--btn-bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: var(--btn-hover); }
+  button:focus-visible { outline: 2px solid var(--ink-secondary); outline-offset: 2px; }
+  .hint {
+    font-size: 11px;
+    color: var(--ink-secondary);
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="logo">aichatt</div>
+    <div class="status" id="status">正在连接服务器</div>
+    <button id="retry" type="button">重试</button>
+    <div class="hint" id="hint"></div>
+  </div>
+  <script src="./config.js"></script>
+  <script>
+    // 探测原理:no-cors 模式下 fetch 只在网络层失败时 reject(DNS/连接不通),
+    // 服务器返回任何状态码(含 503)都会 resolve opaque 响应 —— 足以判断"能不能连上"。
+    var ORIGIN = window.AICHATT_ORIGIN
+    var statusEl = document.getElementById('status')
+    var retryBtn = document.getElementById('retry')
+    var hintEl = document.getElementById('hint')
+    var probing = false
+
+    function probe() {
+      return fetch(ORIGIN + '/', {
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      }).then(function () { return true }).catch(function () { return false })
+    }
+
+    function showWaiting(text) {
+      probing = true
+      retryBtn.style.display = 'none'
+      hintEl.textContent = ''
+      statusEl.classList.remove('error')
+      statusEl.textContent = text || '正在连接服务器'
+    }
+
+    function showError() {
+      probing = false
+      statusEl.classList.add('error')
+      statusEl.textContent = '无法连接服务器'
+      retryBtn.style.display = 'block'
+      hintEl.textContent = '请检查网络后重试'
+    }
+
+    function run() {
+      showWaiting('正在连接服务器')
+      probe().then(function (ok) {
+        if (ok) {
+          // 整窗跳转到远程站点(与 Web 完全同源,cookie/CORS 无感)
+          location.replace(ORIGIN + '/')
+        } else {
+          showError()
+        }
+      })
+    }
+
+    retryBtn.addEventListener('click', function () {
+      if (!probing) run()
+    })
+
+    run()
+  </script>
+</body>
+</html>
