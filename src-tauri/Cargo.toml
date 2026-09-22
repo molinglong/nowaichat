@@ -1,6 +1,6 @@
 [package]
 name = "aichatt"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI 多模型对话助手 - 桌面客户端"
 authors = ["you"]
 edition = "2021"
