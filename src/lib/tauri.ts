@@ -71,9 +71,10 @@ export const tauri = {
       const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
       const existing = await WebviewWindow.getByLabel('settings')
       if (existing) {
-        await existing.show()
-        await existing.unminimize().catch(() => {})
-        await existing.setFocus().catch(() => {})
+        // 防导航漂移:窗口常驻保活,WebView 可能被留在别的页面(如服务异常时的
+        // 404 页上点了“返回主页”→ 停在 /)。JS 侧无跨 WebView 读 URL/导航的
+        // API(2.11 权限表也不提供),show+校验+拉回统一收口到 Rust 命令。
+        await invoke('show_settings_window')
         return
       }
       const win = new WebviewWindow('settings', {
@@ -107,10 +108,35 @@ export const tauri = {
     }
   },
 
-  close: () => invoke('close_window'),
+  /**
+   * 关闭窗口:先播「缩小淡出」退场动画(globals.css 的 tauri-app-out,
+   * html 上 data-closing 门控),180ms 后再真正关窗。
+   * 关闭失败(极少见)时回滚动画,窗口恢复可用。
+   */
+  close: () => {
+    if (!getIsTauri()) return invoke('close_window')
+    const html = document.documentElement
+    if (html.hasAttribute('data-closing')) return Promise.resolve(null) // 防重复触发
+    html.setAttribute('data-closing', '')
+    return new Promise((resolve) => {
+      window.setTimeout(() => {
+        invoke('close_window')
+          .catch(() => html.removeAttribute('data-closing'))
+          .finally(() => resolve(null))
+      }, 180)
+    })
+  },
   minimize: () => invoke('minimize_window'),
   toggleFullscreen: () => invoke('toggle_fullscreen'),
   toggleMaximize: () => invoke('toggle_maximize'),
+
+  /**
+   * 系统毛玻璃材质开关(Mica/Acrylic,对应 Rust set_glass_effect)。
+   * dark: 应用当前深浅色(同步给系统材质着色),缺省跟随系统。
+   * Web 端 no-op。
+   */
+  setGlass: (enabled: boolean, dark?: boolean | null) =>
+    invoke('set_glass_effect', { enabled, dark: dark ?? null }),
 
   /**
    * 监听窗口状态变化(全屏/最大化进入退出),
@@ -123,6 +149,24 @@ export const tauri = {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const win = getCurrentWindow()
       const unlisten = await win.onResized(handler)
+      cleanup = unlisten
+    })()
+    return () => {
+      cleanup?.()
+    }
+  },
+
+  /**
+   * 监听窗口焦点变化(失焦降饱和 / 红绿灯变灰,macOS 行为)。
+   * handler 收到 true=获得焦点, false=失焦。Web 端为 no-op。
+   */
+  onFocusChange(handler: (focused: boolean) => void): () => void {
+    if (!getIsTauri()) return () => {}
+    let cleanup: (() => void) | null = null
+    ;(async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const win = getCurrentWindow()
+      const unlisten = await win.onFocusChanged(({ payload }) => handler(payload))
       cleanup = unlisten
     })()
     return () => {

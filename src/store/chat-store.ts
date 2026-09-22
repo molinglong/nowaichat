@@ -155,16 +155,11 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   conversationTitle: null,
   setConversationTitle: (title) => set({ conversationTitle: title }),
   settingsOpen: false,
-  setSettingsOpen: (open) => {
-    // 桌面壳：设置走独立原生子窗口(可拖出主窗口外)，主窗口模态不再打开。
-    // 收口在此，TopBar/Sidebar/ChatPanel/CompareLane/AI 工具(update_settings)等
-    // 所有入口统一生效；Web 端行为不变。
-    if (open && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-      void import('@/lib/tauri').then((m) => m.tauri.openSettings())
-      return
-    }
-    set({ settingsOpen: open })
-  },
+  // 设置 = 主窗口内模态(TopBar/Sidebar/ChatPanel/CompareLane/AI 工具 update_settings
+  // 等所有入口统一走这里)。曾短暂改为 Tauri 独立子窗口,因断点/样式连锁问题按用户
+  // 要求回退;子窗口基础设施(tauri.openSettings/show_settings_window/settings-window
+  // 路由)保留未拆,后续需要时可再启用。
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
   settingsSection: null,
   setSettingsSection: (section) => set({ settingsSection: section }),
   previewCode: null,

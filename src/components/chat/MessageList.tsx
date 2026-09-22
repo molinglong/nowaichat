@@ -15,6 +15,13 @@ interface MessageListProps {
   onEditMessage?: (messageId: string, newText: string) => void
   /** 澄清问答:提交回答文本(通常接 ChatPanel 的 handleSend,复用排队/发送全链路) */
   onClarifySubmit?: (answersText: string) => void
+  /** local_file:决策(批准/拒绝),透传给 ToolCallCard 内的 LocalFileCard */
+  onLocalFileDecision?: (
+    toolCallId: string,
+    path: string,
+    approved: boolean,
+    decision: import('@/lib/ai/local-file-tool').LocalFileDecision
+  ) => void
   /** 请求已提交但模型首 token 未到(useChat submitted 阶段)——列表末尾渲染"生成中"占位 */
   isPending?: boolean
 }
@@ -27,6 +34,7 @@ export function MessageList({
   onRegenerate,
   onEditMessage,
   onClarifySubmit,
+  onLocalFileDecision,
 }: MessageListProps) {
   // 键盘导航:收集每个消息的 ref,按 id 索引
   const messageRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -161,6 +169,7 @@ export function MessageList({
               canEdit={canEditAll}
               onEdit={onEditMessage}
               onClarifySubmit={onClarifySubmit}
+              onLocalFileDecision={onLocalFileDecision}
               clarifyAnswered={answeredAssistantIds.has(message.id)}
               isFocused={isFocused}
               wrapperRef={(el) => {

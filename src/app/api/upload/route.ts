@@ -8,7 +8,7 @@ import {
   sanitizeUploadName,
   deleteUploadFile,
   collectReferencedUploadNames,
-  sweepOrphanUploads,
+  sweepOrphanUploadsThrottled,
 } from "@/lib/uploads"
 import { prisma } from "@/lib/db"
 import { parsePdf, parseTextFile } from "@/lib/file-parser"
@@ -42,8 +42,7 @@ function resolveKind(mimeType: string, fileName: string): "image" | "text" | "pd
   }
   return null
 }
-// 孤儿文件保留时长:超过 24 小时且未被任何消息引用则清理
-const ORPHAN_MAX_AGE_MS = 24 * 60 * 60 * 1000
+// 孤儿文件保留时长与节流清扫入口见 @/lib/uploads(ORPHAN_MAX_AGE_MS / sweepOrphanUploadsThrottled)
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -138,10 +137,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Failed to register upload" }, { status: 500 })
   }
 
-  // 顺手清理孤儿文件(上传了但从未发送、超过 24 小时未被引用的文件)
-  sweepOrphanUploads(ORPHAN_MAX_AGE_MS).catch((err) => {
-    console.error("[upload] Orphan sweep failed:", err)
-  })
+  // 顺手清理孤儿文件(上传了但从未发送、超过 24 小时未被引用的文件;1 小时节流)
+  sweepOrphanUploadsThrottled()
 
   return NextResponse.json({
     url: `/uploads/${uniqueName}`,
@@ -175,6 +172,16 @@ export async function DELETE(req: NextRequest) {
   const name = sanitizeUploadName(fileParam)
   if (!name) {
     return NextResponse.json({ error: "Invalid file name" }, { status: 400 })
+  }
+
+  // 归属校验:记录存在但不属于当前用户一律 404(不泄露他人文件的存在性);
+  // 记录不存在视为已被孤儿清扫或迁移前遗留文件,继续走删除以兼容前端重试
+  const record = await prisma.uploadFile.findUnique({
+    where: { fileName: name },
+    select: { userId: true },
+  })
+  if (record && record.userId !== session.user.id) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
 
   // 已被消息引用的文件不允许单独删除(避免破坏历史消息展示)

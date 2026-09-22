@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Providers } from "@/components/Providers";
+import { TauriVisualFX } from "@/components/TauriVisualFX";
 import "./globals.css";
 // katex 样式已并入 globals.css 顶部 @import(见该文件),
 // 单独在此 import 会让 root layout 挂两个 css chunk —— 触发 Next 14.2 的
@@ -105,6 +106,8 @@ export default function RootLayout({
           <div className="flex h-screen flex-col overflow-hidden">
             <div className="flex-1 overflow-hidden">{children}</div>
           </div>
+          {/* 客户端专属视觉增强(失焦降饱和灰罩 + 毛玻璃同步);Web 端渲染 null */}
+          <TauriVisualFX />
         </Providers>
       </body>
     </html>

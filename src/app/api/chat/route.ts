@@ -6,7 +6,6 @@ import {
   toUIMessageStream,
   createUIMessageStreamResponse,
   APICallError,
-  stepCountIs,
   type ModelMessage,
   type UIMessageChunk,
 } from "ai"
@@ -26,6 +25,11 @@ import { createWebSearchTool } from "@/lib/ai/search"
 import { KNOWLEDGE_TOOL_NAME, KNOWLEDGE_SUBJECT_LABELS } from "@/lib/ai/knowledge-tool"
 import { createKnowledgeTool, hasKnowledgeChunks } from "@/lib/ai/knowledge-tool-server"
 import { CLARIFY_TOOL_NAME, CLARIFY_TOOL_PROMPT, createClarifyTool } from "@/lib/ai/clarify"
+import {
+  LOCAL_FILE_TOOL_NAME,
+  LOCAL_FILE_TOOL_PROMPT,
+  createLocalFileTool,
+} from "@/lib/ai/local-file-tool"
 import {
   SETTINGS_TOOL_NAME,
   SETTINGS_TOOL_PROMPT,
@@ -75,12 +79,12 @@ import {
 import { loadCompressionState, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
-import { sanitizeUploadName, readUploadAsDataUrl } from "@/lib/uploads"
+import { sanitizeUploadName, readUploadAsDataUrl, sweepOrphanUploadsThrottled } from "@/lib/uploads"
 import { SCANNED_PDF_MIN_CHARS } from "@/lib/file-parser"
 import type { ModelDefinition } from "@/lib/ai/types"
 import { isEphemeralSession } from "@/lib/ephemeral"
 
-export const maxDuration = 120 // seconds – 深度思考耗时较长,Vercel Pro 允许到 300
+export const maxDuration = 120 // seconds。深度思考耗时较长,Vercel Pro 允许到 300
 
 interface ChatRequestBody {
   model: string
@@ -96,13 +100,20 @@ interface ChatRequestBody {
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
   mcpEnabled?: boolean // 客户端是否注入 MCP 外部工具(默认 true,仅显式 false 时跳过加载)
   settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
-  currentWriteDocId?: string // 写作画布面板当前打开的文档 id（注入提示词供 append 续写）
+  currentWriteDocId?: string // 写作画布面板当前打开的文档 id（注入提示词与 append 续写）
+  localFilesEnabled?: boolean // 客户端(Tauri)本地文件能力:仅桌面端且用户开关开启时上报 true,服务端据此注入 local_file 工具
 }
 
-/** 客户端传入的消息（UIMessage 格式的结构化子集） */
+/** 客户端传入的消息（UIMessage 格式的结构化子集）*/
 interface IncomingPart {
   type: string
   text?: string
+  /** tool-* part 专有字段（state=input-available/output-available/output-error）*/
+  toolCallId?: string
+  state?: string
+  input?: unknown
+  output?: unknown
+  errorText?: string
 }
 
 interface IncomingMessage {
@@ -119,35 +130,84 @@ interface IncomingMessage {
 /**
  * Convert incoming UIMessage format (from @ai-sdk/react useChat) to ModelMessage format
  * that streamText expects. UIMessages use `parts` array; ModelMessages use `content`.
+ *
+ * 客户端工具(local_file)多步续跑: tool-* part 与 assistant 消息走结构化转换——
+ * 保留 reasoning(DeepSeek thinking 模式强制要求回传 reasoning_content,缺失直接 400)
+ * 发出 tool-call,工具结果以独立 tool 消息紧随其后。普通纯文本历史维持原拼接行为,零回归。
  */
 function convertToModelMessages(messages: IncomingMessage[]): ModelMessage[] {
-  return messages
-    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-    .map((m) => {
-      let textContent = ""
+  const out: ModelMessage[] = []
+  for (const m of messages) {
+    if (m.role !== "user" && m.role !== "assistant" && m.role !== "system") continue
+    let modelMessage: ModelMessage | null = null
+    let toolMessage: ModelMessage | null = null
+    if (typeof m.content === "string" && m.content) {
       // If message already has string content, use it directly
-      if (typeof m.content === "string" && m.content) {
-        textContent = m.content
-      } else if (Array.isArray(m.content) && m.content.length > 0) {
-        // content is already structured parts — pass through
-        const result = { role: m.role, content: m.content } as unknown as ModelMessage
-        if (m.metadata) (result as { metadata?: unknown }).metadata = m.metadata
-        return result
-      } else if (Array.isArray(m.parts)) {
-        textContent = m.parts
+      modelMessage = { role: m.role, content: m.content } as ModelMessage
+    } else if (Array.isArray(m.content) && m.content.length > 0) {
+      // content is already structured parts → pass through
+      modelMessage = { role: m.role, content: m.content } as unknown as ModelMessage
+    } else if (Array.isArray(m.parts)) {
+      const hasToolPart = m.parts.some(
+        (p: IncomingPart) => typeof p.type === "string" && p.type.startsWith("tool-")
+      )
+      if (m.role === "assistant" && hasToolPart) {
+        const content: Array<Record<string, unknown>> = []
+        const toolResults: Array<Record<string, unknown>> = []
+        for (const p of m.parts) {
+          if (p.type === "text" && p.text) {
+            content.push({ type: "text", text: p.text })
+          } else if (p.type === "reasoning" && p.text) {
+            content.push({ type: "reasoning", text: p.text })
+          } else if (p.type.startsWith("tool-")) {
+            const toolName = p.type.slice(5)
+            // 只转换已完结的调用(input-streaming 等中间态跳过,避免悬空 tool-call)
+            if (p.toolCallId && (p.state === "output-available" || p.state === "output-error")) {
+              content.push({
+                type: "tool-call",
+                toolCallId: p.toolCallId,
+                toolName,
+                input: p.input ?? {},
+              })
+              toolResults.push({
+                type: "tool-result",
+                toolCallId: p.toolCallId,
+                toolName,
+                // v5 协议:output 必须是带 type 标签的包裹(json/error-text/text/...),
+                // 裸对象会被 streamText 的 zod 校验拒绝(AI_InvalidPromptError)
+                output:
+                  p.state === "output-error"
+                    ? { type: "error-text", value: p.errorText ?? "工具执行失败" }
+                    : { type: "json", value: p.output ?? { ok: true } },
+              })
+            }
+          }
+          // step-start 等其他 part 不进入模型消息
+        }
+        if (content.length > 0) {
+          modelMessage = { role: "assistant", content } as unknown as ModelMessage
+        }
+        if (toolResults.length > 0) {
+          toolMessage = { role: "tool", content: toolResults } as unknown as ModelMessage
+        }
+      } else {
+        const textContent = m.parts
           .filter((p: IncomingPart) => p.type === "text")
           .map((p: IncomingPart) => p.text ?? "")
           .join("")
-      } else {
-        textContent = String(m.content ?? m.text ?? "")
+        if (textContent) modelMessage = { role: m.role, content: textContent } as ModelMessage
       }
-      const result = { role: m.role, content: textContent } as ModelMessage
-      // Preserve metadata so downstream code can identify special message kinds
-      // (e.g. branch_summary system messages that must be moved into the `system` param).
-      if (m.metadata) (result as { metadata?: unknown }).metadata = m.metadata
-      return result
-    })
-    .filter((m) => m.content !== "")
+    } else {
+      const fallback = String(m.content ?? m.text ?? "")
+      if (fallback) modelMessage = { role: m.role, content: fallback } as ModelMessage
+    }
+    // Preserve metadata so downstream code can identify special message kinds
+    // (e.g. branch_summary system messages that must be moved into the `system` param).
+    if (modelMessage && m.metadata) (modelMessage as { metadata?: unknown }).metadata = m.metadata
+    if (modelMessage) out.push(modelMessage)
+    if (toolMessage) out.push(toolMessage)
+  }
+  return out
 }
 
 const IMG_PREFIX = "[IMG:"
@@ -238,11 +298,11 @@ export async function POST(req: NextRequest) {
     }
 
     const userId = session.user.id
-    // 临时聊天模式(访客密码登录):对话打隔离标记进隔离区,
-    // 记忆写入/设置类工具全部物理级关闭,长期记忆注入由用户开关控制
+    // 临时聊天模式(访客密码登录):对话打隔离标记进隔离区。
+    // 记忆写入/设置类工具全部物理级关闭,长期记忆注入由用户开关控制。
     const isEphemeral = isEphemeralSession(session)
 
-    // 提前声明:长上下文摘要注入分支及多处 system 提示都需要读写 systemParts,
+    // 提前声明:长上下文摘要注入分支及多个 system 提示都需要读取 systemParts,
     // 在函数顶部集中声明一次,避免下游块式作用域里的 TDZ / use-before-define。
     const systemParts: string[] = []
 
@@ -253,17 +313,17 @@ export async function POST(req: NextRequest) {
 
     console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}, mcpEnabled: ${mcpEnabled}`)
 
-    // 新版 preset 优先:body 显式传 stylePreset 时用之;否则从 DB 读 preset;
-    // preset 缺失/null 时,回退到旧的 styleOffset(老会话);offset 也无则默认 balanced。
+    // 新版 preset 优先:body 显式传 stylePreset 时用之,否则查 DB 的 preset;
+    // preset 缺失/null 时回退到旧的 styleOffset(老会话);offset 也无则默认 balanced。
     const requestedStylePreset = STYLE_PRESETS.find((p) => p.id === body.stylePreset)?.id
     const requestedStyleOffset =
       typeof body.styleOffset === 'number' && Number.isFinite(body.styleOffset)
         ? Math.max(0, Math.min(100, Math.round(body.styleOffset)))
         : undefined
 
-    // 解析面具:body 显式传 maskId 时用之;否则从 DB 读;未知 id 视为无面具。
+    // 解析面具:body 显式传 maskId 时用之,否则查 DB;未知 id 视为无面具。
     // user: 前缀为自定义面具(getMaskById 内部校验归属)
-    // 写作画布面板当前打开的文档(前端随请求附带):注入上下文让 AI 可用 append 续写这篇
+    // 写作画布面板当前打开的文档,前端随请求附带:注入上下文让 AI 可用 append 续写这篇
 const currentWriteDocId = typeof body.currentWriteDocId === "string" ? body.currentWriteDocId : null
 const requestedMask = await getMaskById(body.maskId ?? null, userId)
     const requestedMaskRef = requestedMask?.ref
@@ -271,8 +331,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     let conversationStylePreset: string | null = null
     let conversationStyleOffset = 50
     let conversationMaskId: string | null = null
-    // 归属标记:conversationId 确实属于当前用户且区隔匹配(临时↔正常)才允许复用/读取其数据,
-    // 否则一律按"无会话"处理并新建,杜绝向他人会话写入(跨用户越权)与跨区写入
+    // 归属标记:conversationId 确实属于当前用户且区隔匹配(临时↔正式)才允许复用,读取其数据。
+    // 否则一律按"无会话"处理并新建,杜绝向他人会话写入(跨用户越权与跨区写入)。
     let conversationOwned = false
     if (conversationId) {
       try {
@@ -289,14 +349,14 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
     }
 
-    // 解析最终生效的面具:body > DB conv;未知 id 视为无面具
+    // 解析最终生效的面具:body > DB conv;未知 id 视为无面具。
     const effectiveMask = await getMaskById(requestedMaskRef ?? conversationMaskId, userId)
     const effectiveMaskId = effectiveMask?.ref ?? null
     if (effectiveMask) {
       console.log(`[chat] Mask: ${effectiveMask.ref} (body: ${requestedMaskRef ?? '-'}, conv: ${conversationMaskId ?? '-'})`)
     }
 
-    // 解析最终生效的 preset:body > DB preset > 面具默认风格 > 由 offset 推导 > balanced
+    // 解析最终生效的 preset:body > DB preset > 面具默认风格 > 旧 offset 推导 > balanced
     const effectiveStylePreset: string =
       requestedStylePreset ??
       conversationStylePreset ??
@@ -379,7 +439,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     }
 
     try {
-      // 用户添加的模型（非 custom: 前缀）使用 modelDef.provider 查找 provider
+      // 用户添加的模型（带 custom: 前缀）使用 modelDef.provider 查找 provider
       provider = createProviderInstanceForEffectiveModel(modelDef, apiKey)
     } catch (err) {
       console.error(`[chat] Failed to create provider instance for ${modelId}:`, err)
@@ -391,8 +451,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }
 
   // 长上下文压缩(剔除): 该会话已有远期摘要时,把被摘要覆盖的早期原文从本次请求中
-  // 摘除 —— 只发"摘要 + 未覆盖的近期原文",压缩才真正省下 token。
-  // 消息缺 id 或 id 不在覆盖集合(本地临时消息等)一律保留,宁可多发不可漏发。
+  // 摘除——只发"摘要 + 未覆盖的近期原文",压缩才真正省 token。
+  // 消息 id:若 id 不在覆盖集合(本地临时消息),一律保留,宁可多发不可漏发。
   const compressionState =
     conversationId && conversationOwned
       ? await loadCompressionState(conversationId)
@@ -404,7 +464,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     : rawMessages
 
   // Convert incoming messages to ModelMessage format for streamText
-  let messages = convertToModelMessages(effectiveRawMessages)
+  const messages = convertToModelMessages(effectiveRawMessages)
 
   // 附件内容注入:图片转多模态 image part(仅视觉模型),文本文件读入正文
   if (attachments.length > 0) {
@@ -442,15 +502,15 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             const text = rec.parseText.slice(0, 20000)
             contentParts.push({
               type: "text",
-              text: `【附件 ${att.name}】\n${text}${
+              text: `【附件·${att.name}】\n${text}${
                 truncated ? "\n（内容过长，已截断前 20000 字符）" : ""
               }`
             })
           } else if (rec?.parseStatus === "done") {
-            // done 但提取不到有效文本:扫描件/图片型 PDF
+            // done 但提取不到有效文本(扫描件/图片型 PDF)
             contentParts.push({
               type: "text",
-              text: `（用户上传的 PDF「${att.name}」是扫描版/图片型，未能提取到文本。请告诉用户：扫描版 PDF 暂无法阅读，建议提供文字版，或在设置中切换到支持视觉的模型。）`,
+              text: `（用户上传的 PDF「${att.name}」是扫描件/图片型，未能提取到文本。请告诉用户：扫描版 PDF 暂无法阅读，建议提供文字版，或在设置中切换到支持视觉的模型。）`,
             })
           } else if (rec) {
             // failed 等异常状态
@@ -483,7 +543,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 模型无需原文也能接续早期上下文。仅本人会话才读取(信息泄露防护)。
   if (compressionState?.content) {
     const SUMMARY_HEADER =
-      "## 早期对话摘要（系统自动压缩,可能不完整,不要引用其中未确认的具体数字/代码细节）"
+      "## 早期对话摘要（系统自动压缩，可能不完整，不要引用其中未确认的具体数字/代码细节）"
     systemParts.unshift(`${SUMMARY_HEADER}\n${compressionState.content}`)
     console.log(
       `[chat] injected summary (${compressionState.content.length} chars, ` +
@@ -502,6 +562,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       memoryEnabled: true,
       clarifyEnabled: true,
       aiSettingsControl: true,
+      localFilesEnabled: true,
       imageModel: true,
       imageSize: true,
       ephemeralMemoryInjection: true,
@@ -509,8 +570,11 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   })
   const memoryEnabled = memorySettings?.memoryEnabled ?? true
   const clarifyEnabled = memorySettings?.clarifyEnabled ?? true
+  // 本地文件能力:DB 总开关(默认关)。与客户端上报的 body.localFilesEnabled 双重校验:
+  // 二者皆真且非临时非对比才注入 local_file 工具(见下方工具定义区)。
+  const localFilesEnabledDb = memorySettings?.localFilesEnabled ?? false
 
-  // 临时模式默认不注入长期记忆(防借号场景被"你还记得我什么"套出隐私),
+  // 临时模式默认不注入长期记忆(防借号场景:"你还记得我什么"套出隐私),
   // 用户可在正常模式 设置→账号信息 中打开"临时模式允许读取我的记忆"
   const injectMemory =
     memoryEnabled &&
@@ -529,7 +593,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }
 
   // 澄清提问:告诉模型何时调用 ask_clarification 工具(工具本体随下方 tools 注入)。
-  // 升级自旧版"自助反问"纯文本反问:现在以结构化卡片呈现,用户点选回答。
+  // 升级自旧版自助反问"纯文本反问",现在以结构化卡片呈现,用户点选回答。
   const clarifySystemPrompt = CLARIFY_TOOL_PROMPT
 
   // Deep thinking: for non-reasoning models, add a system prompt and extract thinking via middleware
@@ -538,7 +602,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   if (memorySystemPrompt) systemParts.push(memorySystemPrompt)
   if (clarifyEnabled) systemParts.push(clarifySystemPrompt)
 
-  // AI 设置控制:总开关开启且非对比模式时,注入快照段+规则段+update_settings 工具;
+  // AI 设置控制:总开关开启且非对比模式时,注入快照、规则与 update_settings 工具;
   // 关闭时物理级不注入工具(总开关判定在服务端,模型无法影响),改注入降级提示。
   // 对比模式(groupId)两条泳道各自请求,不注入避免重复消耗与多泳道重复执行。
   const aiControlEnabled = memorySettings?.aiSettingsControl ?? true
@@ -556,8 +620,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     systemParts.push(SETTINGS_DISABLED_PROMPT)
   }
 
-  // 显式记忆添加:记忆功能开启且非对比模式时注入 add_memory 工具+规则段;
-  // 关闭时物理级不注入,改注入降级提示(避免模型虚构已保存)。
+  // 显式记忆添加:记忆功能开启且非对比模式时注入 add_memory 工具+规则。
+  // 关闭时物理级不注入,改注入降级提示,避免模型虚构"已保存"。
   // 与 onFinish 的自动记忆提取互补:自动靠模型判断"值得记",本工具响应显式指令。
   if (memoryEnabled && !isEphemeral && !groupId) {
     systemParts.push(MEMORY_TOOL_PROMPT)
@@ -565,15 +629,15 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     systemParts.push(MEMORY_DISABLED_PROMPT)
   }
 
-  // 面具工坊:非对比模式全量注入(无用户开关;草稿需用户在卡片上确认才入库,
-  // 模型仅在用户明确要求生成面具时调用,与 update_settings 的 mask 项互斥分工)。
-  // 临时模式不注入:生成的面具会写入用户面具库(写入类,隔离)
+  // 面具工坊:非对比模式全量注入,无用户开关;草稿需用户在卡片上确认才入库。
+  // 模型仅在用户明确要求生成面具时调用(与 update_settings 的 mask 项互斥分发)。
+  // 临时模式不注入(生成的面具会写入用户面具库,写入不受隔离)
   if (!isEphemeral && !groupId) {
     systemParts.push(MASK_TOOL_PROMPT)
   }
 
-  // 写作文档:非临时非对比模式注入(正文写库,写入类临时隔离;同 mask 无用户开关,
-  // 模型仅在用户要求成篇幅正文时调用,产出落 WriteDoc 表与 /write 互通)
+  // 写作文档:非临时非对比模式注入(正文写库,写入受临时隔离);mask 无用户开关,
+  // 模型仅在用户要求成篇幅正文时调用,产出进 WriteDoc 表与 /write 互通。
   if (!isEphemeral && !groupId) {
     // 面板打开时附带当前文档(校验属主),AI 可用 append 动作续写这篇
     let currentDocHint = ""
@@ -583,19 +647,19 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         select: { title: true },
       })
       if (curDoc) {
-        currentDocHint = `\n- 用户当前在写作画布打开的文档:《${curDoc.title}》(id=${currentWriteDocId})。用户说续写/接着写/往这篇补充/修改这篇时，这是对该文档的编辑请求，必须调用 write_document 且 action=append 传该 id，content 只写新增正文(与原文自然衔接，不要重复原文)，不要把正文直接回复在聊天里；创作全新内容仍用 create`
+        currentDocHint = `\n- 用户当前在写作画布打开的文档「${curDoc.title}」(id=${currentWriteDocId})。用户说续写/接着写,往这篇补充/修改这篇时，这是对该文档的编辑请求，必须调用 write_document 的 action=append 传该 id，content 只写新增正文(与原文自然衔接，不要重复原文)，不要把正文直接回复在聊天里；创作全新内容仍用 create`
       }
     }
     systemParts.push(WRITE_DOC_TOOL_PROMPT + currentDocHint)
   }
 
-  // 行程规划:非对比模式注入(纯只读不落库,临时模式安全;模型仅在用户提出
-  // 旅游/出行规划意图时调用,坐标经服务端高德 POI 校准后由前端渲染地图卡片)
+  // 行程规划:非对比模式注入(纯只读不落库,临时模式安全);模型仅在用户提出
+  // 旅游/出行规划意图时调用(坐标经服务端高德 POI 校准后由前端渲染地图卡片)。
   if (!groupId) {
     systemParts.push(TRIP_TOOL_PROMPT)
   }
 
-  // 待办管理:非临时非对比模式注入 manage_todo 工具+规则段;
+  // 待办管理:非临时非对比模式注入 manage_todo 工具+规则。
   // 临时模式不注入(待办属长期数据,防污染),注入降级提示防虚构。
   // 与 REST API(/api/todos,新标签页插件)共用 Todo 表,变更互通。
   if (!isEphemeral && !groupId) {
@@ -604,20 +668,20 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     systemParts.push(TODO_DISABLED_PROMPT)
   }
 
-  // Style prompt - 用 preset 渲染(新版)
+  // Style prompt - 按 preset 渲染(新版)
   systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
 
   // Image generation — tell the model how to request images
-  // 非视觉模型收到图片附件时移除生图能力提示,避免模型被"图片"字眼诱导误触发生图
+  // 非视觉模型收到图片附件时移除生图能力提示,避免模型被"图片"字眼诱导误触发生成。
   if (!(hasImageAttachments && !modelDef.supportsVision)) {
     systemParts.push([
       '## 生图能力',
-      '用户想要生成图片时，在图片应出现的位置输出 [IMG:详细描述]（用用户语言描述主体、风格、构图、光线），每条回复最多 2 张。',
+      '用户想要生成图片时，在图片应出现的位置输出[IMG:详细描述]（用用户语言描述主体、风格、构图、光线），每条回复最多 2 张。',
     ].join('\n'))
   }
 
   // 联网搜索能力(仅在用户配置了联网搜索 Key 且本次请求主动开启了 webSearch 时才挂上工具)
-  // - webSearchEnabled: 客户端本次是否主动开启(默认 false,避免模型无脑触发搜索消耗额度)
+  // - webSearchEnabled: 客户端本次是否主动开启,默认 false,避免模型无脑触发搜索消耗额度。
   // - 引擎: 客户端通过 searchEngine 指定(qianfan | tavily)，由 Settings 滑块控制
   const webSearchEnabled = webSearch === true
   const engine: SearchEngineId = searchEngine ?? "qianfan"
@@ -645,7 +709,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }
 
   // 全文阅读工具(read_url):与联网搜索共用开关(同一“联网”意图),无需 Key。
-  // 只读工具,临时模式安全(与 knowledge 同理)。与 web_search 分工:
+  // 只读工具,临时模式安全(课本 knowledge 同理)。与 web_search 分工:
   // 搜索回摘要,本工具读链接全文(HTML 正文/PDF 文字层,unpdf 已有依赖)。
   // 关闭时物理不注入,改注入降级提示防虚构。
   const urlReaderTool = webSearchEnabled ? createUrlReaderTool() : null
@@ -656,7 +720,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }
 
   // MCP 外部工具:非临时非对比模式加载用户启用的 server(配置即全局生效)。
-  // 连接失败只记入 failures 随能力段注入降级提示,不阻塞主流程;
+  // 连接失败只记入 failures,随能力段注入降级提示,不阻塞主流程;
   // 连接在 onFinish 统一 close(临时模式/对比模式根本不加载)。
   let mcp: McpLoadResult | null = null
   if (!isEphemeral && !groupId && mcpEnabled !== false) {
@@ -674,8 +738,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }
   const mcpToolCount = mcp ? Object.keys(mcp.tools).length : 0
 
-  // 澄清提问工具(无 execute:输出 tool call 后本轮流结束,等用户在前端卡片上回答)。
-  // 对比模式不注入:多泳道各自触发澄清卡片会互相踩踏,v1 仅单聊启用。
+  // 澄清提问工具(无 execute:输出 tool call 后本轮即结束,等用户在前端卡片上回答)。
+  // 对比模式不注入(多泳道各自触发澄清卡片会互相踩踏),v1 仅单聊启用。
   const clarifyTool = clarifyEnabled && !groupId ? createClarifyTool() : null
   const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
@@ -684,7 +748,20 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   const writeDocTool = !isEphemeral && !groupId ? createWriteDocTool(userId) : null
   const tripTool = !groupId ? createTripTool(userId) : null
 
-  // 课本知识库检索(半绑定):用户名下有知识切块才注入(物理级闸门,无课本则工具不存在);
+  // 本地文件工具(无 execute:文件操作在用户本地机器执行,远程服务器碰不到磁盘)。
+  // 注入三重闸门:①客户端上报 localFilesEnabled(仅 Tauri+用户开关会为 true)
+  // ②DB 开关 localFilesEnabledDb ③非临时非对比模式。tool call 输出后本轮即结束,
+  // 前端 onToolCall 经 Tauri 在工作区沙箱内执行(删除需卡片确认),经 addToolOutput 回填续跑。
+  const localFileTool =
+    body.localFilesEnabled === true && localFilesEnabledDb && !isEphemeral && !groupId
+      ? createLocalFileTool()
+      : null
+  if (localFileTool) {
+    systemParts.push(LOCAL_FILE_TOOL_PROMPT)
+    console.log(`[chat] local_file tool attached (desktop client, user ${userId})`)
+  }
+
+  // 课本知识库检索:半绑定(用户名下有知识切块才注入,物理级闸门,无课本则工具不存在);
   // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
   // 只读工具,临时模式/对比模式均可安全使用。
   let knowledgeTool: ReturnType<typeof createKnowledgeTool> | null = null
@@ -706,25 +783,25 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
       '## 联网搜索能力',
-      `你拥有 web_search 工具(基于 ${engineDisplayName} 搜索 API)。当用户问题涉及以下场景时,**主动调用 web_search** 一次或多次获取实时信息再作答:`,
-      '- 询问新闻、事件、近期发生的事("今天/最新/最近"+时间词)',
-      '- 需要事实性数据(股价、天气、比赛结果、排行榜、版本号等)',
-      '- 引用具体来源、查证知识、用户要求"查一下"',
+      `你拥有 web_search 工具(基于 ${engineDisplayName} 搜索 API)。当用户问题涉及以下场景时,**主动调用 web_search** 一次或多次获取实时信息再作答。`,
+      '- 询问新闻、事件、近期发生的事("今天/最近/最新"+时间)',
+      '- 需要事实性数据(股价、天气、比赛结果、排行榜、版本号)',
+      '- 引用具体来源、查证知识、用户要求查一查',
       '- 你对某个事实没有把握、训练数据可能已过时',
-      '普通闲聊、通用知识问答、代码/翻译/数学等不需要联网。回答时请自然引用来源，不要编造链接。',
+      '普通闲聊、通用知识问答、代码翻译/数学等不需要联网。回答时请自然引用来源，不要编造链接。',
     ].join('\n'))
   }
 
-  // 课本知识库能力段:与 web_search 能力段同构,触发清单写在这里(模型自主决策依据)
+  // 课本知识库能力段:与 web_search 能力段同理,触发清单写在这里(模型自主决策依据)
   if (knowledgeTool) {
     systemParts.push([
       '## 课本知识库检索能力',
-      '你拥有 search_knowledge 工具(检索用户上传的课本/教材)。当用户问题涉及以下场景时,**主动调用 search_knowledge** 获取课本原文后再作答:',
-      '- 解释课本上的概念、定义、公式、法则(如「什么是相反数」「乘法分配律怎么说的」)',
-      '- 用户明确要求翻书/查课本/按教材回答',
-      '- 讲评习题时需要引用教材原文佐证',
+      '你拥有 search_knowledge 工具(检索用户上传的课本/教材)。当用户问题涉及以下场景时，**主动调用 search_knowledge** 获取课本原文后再作答:',
+      '- 解释课本上的概念、定义、公式、法则(如「什么是相反数」「乘法分配律怎么说」)',
+      '- 用户明确要求翻书/查课本时，按教材回答。',
+      '- 讲评习题时需要引用教材原文佐证。',
       '- 你对某知识点的标准表述没有把握,需要以教材为准',
-      '- 给用户出题(练习/变式/测验)时输出试卷块协议(:::choice/:::question 题块+紧跟 :::answer 答案块,答案块「**答案：X**」开头),渲染时答案默认折叠,用户先做后看;出题前若知识库覆盖该学科,先检索相关章节的【例题】【练习】举一反三,题块首行写检索到的真实出处「参考 §x.x 例N·学科」;知识库没有该学科课本时(如语文),出处改标课文篇目「参考 篇目名·学科」(用你确知的教材篇目,不得编造章节号或篇目)',
+      '- 给用户出题(练习/变式/测验)时输出试卷块协议(:::choice/:::question 题块+紧跟 :::answer 答案块,答案块以**答案：X**」开头,渲染时答案默认折叠,用户先做后看;出题前若知识库覆盖该学科,先检索相关章节的【例题】【练习】举一反三,题块首行写检索到的真实出处「参考教材 §x.x 例N·学科」;知识库没有该学科课本(如语文),出处改标课文篇目「参考篇目名·学科」,用你确知的教材篇目,不得编造章节号或篇名',
       `闲聊、翻译、写代码、通用常识不需要调用。${knowledgeSubjectHint}回答时优先引用课本原文并标注来源(书名+章节);课本原文与你的知识冲突时,以课本为准。`,
     ].join('\n'))
   }
@@ -817,7 +894,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // Persist the last user message before streaming
   if (userContent) {
     if (groupId) {
-      // 对比模式: N 个泳道并发到达,事务内查重防止同一条用户消息入库多次
+      // 对比模式: N 个泳道并发执行,事务内查重防止同一条用户消息入库多次。
       await prisma.$transaction(async (tx) => {
         const existing = await tx.message.findFirst({
           where: { conversationId: convId, groupId, role: "user" },
@@ -838,7 +915,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         }
       })
     } else {
-      // C 分支轻量版: 编辑产生的新 user 消息带 editedFrom 指向被编辑消息,
+      // C 分支轻量标记: 编辑产生的新 user 消息带 editedFrom 指向被编辑消息,
       // 供前端"查看历史版本"回看入口使用(仅写入该字段,不透传任意 metadata)
       const editedFrom = (
         lastRawUserMsg?.metadata as { editedFrom?: unknown } | undefined
@@ -858,6 +935,10 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       })
     }
   }
+
+  // 附件孤儿的兜底清理:用户消息已落库即引用生效,此处顺带清掉
+  // "上传了但从未发送"的历史孤儿(1 小时节流,fire-and-forget 不阻塞流)。
+  sweepOrphanUploadsThrottled()
 
   // A 流式恢复: 单聊时生成开始前先落草稿行(失败不阻塞对话)。
   // 放在用户消息落库之后,保证列表时序:用户消息在前,草稿行在后。
@@ -895,7 +976,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       typeof m.content === "string" &&
       m.content.trim()
     ) {
-      // 分支 API 写入的内容已包含 "## 来自上文的上下文摘要(系统自动生成)" 头,
+      // 分支 API 写入的内容已包含 "## 来自上文的上下文摘要(系统自动生成)" 头
       // 这里直接 unshift,避免重复标题
       systemParts.unshift(m.content)
       branchSummaryInjected++
@@ -908,7 +989,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     console.log(`[chat] injected ${branchSummaryInjected} branch_summary into system prompt`)
   }
   // Mask persona:面具人格放最前(人格层优先于摘要/记忆/风格/能力说明)。
-  // 末尾统一追加逃生舱暗号(见 MASK_ESCAPE_HATCH),内置与自定义面具都适用
+  // 末尾统一追加逃生舱暗语(MASK_ESCAPE_HATCH),内置与自定义面具都适用
   if (effectiveMask) {
     systemParts.unshift(`${effectiveMask.systemPrompt}\n\n${MASK_ESCAPE_HATCH}`)
     console.log(`[chat] Mask persona injected: ${effectiveMask.ref}`)
@@ -918,7 +999,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   const finalSystem = systemParts.length > 0 ? systemParts.join('\n\n') : undefined
 
   // Mask few-shot:预设对话示例插在真实消息之前。
-  // 拼装发生在上下文压缩之后,不会被压缩统计/吞掉。
+  // 拼装发生在上下文压缩之后,不会被压缩统一吞掉。
   const maskFewShotMessages: ModelMessage[] = (effectiveMask?.fewShot ?? []).map((turn) => ({
     role: turn.role,
     content: turn.content,
@@ -931,7 +1012,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     ...(finalSystem ? { system: finalSystem } : {}),
     // DeepSeek V4.1 起“思考”由请求参数控制(默认 enabled):deepThink 开 → enabled,
     // 关 → disabled,保证日常快答不被强制思考。reasoning_content 仍走原生解析,
-    // 不经过 <think> middleware(见上方 isDeepSeekNativeReasoning 分支)。
+    // 不经过 <think> middleware(见上面的 isDeepSeekNativeReasoning 分支)。
     // 其他 provider 不读 deepseek 命名空间,该选项对它们无副作用。
     ...(modelDef.provider === "deepseek"
       ? {
@@ -943,7 +1024,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           },
         }
       : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || tripTool || mcpToolCount > 0)
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || tripTool || localFileTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
@@ -957,15 +1038,28 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
             ...(writeDocTool ? { [WRITE_DOC_TOOL_NAME]: writeDocTool } : {}),
             ...(tripTool ? { [TRIP_TOOL_NAME]: tripTool } : {}),
+            ...(localFileTool ? { [LOCAL_FILE_TOOL_NAME]: localFileTool } : {}),
           },
         }
       : {}),
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
-    stopWhen: stepCountIs(5),
+    // local_file 无服务端 execute(文件操作在用户本地机器):本步一旦发出 local_file 调用
+    // 立即停步,等前端(Tauri)执行回填后经 sendAutomaticallyWhen 续跑;否则多步循环会带着
+    // "悬空 tool-call"继续步进——与 MCP 等有 execute 工具混跑时,模型拿不到文件结果就给出
+    // 半截正文,前端回填后续跑判据又被正文挡住,流程死停(实测 hono 分析中途停)。
+    stopWhen: ({ steps }) => {
+      if (steps.length >= 5) return true
+      const last = steps[steps.length - 1]
+      return !!last?.content?.some(
+        (p) =>
+          (p as { type?: string; toolName?: string }).type === "tool-call" &&
+          (p as { toolName?: string }).toolName === LOCAL_FILE_TOOL_NAME
+      )
+    },
     // A 流式恢复: 累积快照文本并节流(600ms)写库。
     // 注意: onChunk 返回 Promise 会暂停流处理,这里保持同步 + fire-and-forget。
-    // AI SDK v7 中 text-delta / reasoning-delta 的文本字段为 `text`。
+    // AI SDK v7 的 text-delta / reasoning-delta 的文本字段为 `text`。
     onChunk: ({ chunk }) => {
       const c = chunk as { type?: string; text?: unknown }
       if (c.type === "text-delta" && typeof c.text === "string") {
@@ -994,12 +1088,12 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {
-      // MCP 连接收尾:提前到最前,后续任何 early return 都不会泄漏连接
+      // MCP 连接收尾:提前到最前,后续任何 early return 都不会泄漏连接。
       if (mcp && mcp.clients.length > 0) {
         await closeMcpClients(mcp.clients)
         mcp = null
       }
-      // 诊断日志:记录流异常结束,便于排查偶发"模型没思考"问题
+      // 诊断日志:记录流异常结果,便于排查偶发"模型没思考"问题
       if (finishReason === 'length' || finishReason === 'error') {
         console.warn(
           `[chat] ABNORMAL_FINISH: reason=${finishReason}, model=${modelId}, hasText=${!!text}, hasReasoning=${!!reasoningText}, textLen=${text?.length ?? 0}, reasoningLen=${reasoningText?.length ?? 0}`
@@ -1007,8 +1101,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
 
       // 流出错且无任何内容时不落库,避免历史中出现空白助手消息。
-      // A 流式恢复: 先等在途快照落地,草稿行已有快照内容则定格保留,
-      // 完全为空则删除,不留空白消息或永久 streaming 的残留行。
+      // A 流式恢复: 先等在途快照落地;草稿行已有快照内容则定格保留,
+      // 完全为空则删除,不留空白消息或永远 streaming 的残留行。
       if (finishReason === 'error' && !text && !reasoningText) {
         snapStopped = true
         await snapChain
@@ -1030,10 +1124,10 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
       // 截断提示:输出被 token 上限截断时,告知用户可换模型或缩短上下文
       if (finishReason === 'length' && content) {
-        content = content + '\n\n…(输出被 token 上限截断,可考虑换模型或缩短上下文)…'
+        content = content + '\n\n（提示：输出已达 token 上限被截断，可考虑换模型或缩短上下文）'
       }
 
-      // 诊断:深度思考模式下,若两者都为空,说明模型真的没输出思考
+      // 诊断:深度思考模式下,若两者都为空,说明模型真的没输出思考。
       if (deepThink && !content.trim() && !savedReasoning?.trim()) {
         console.warn(`[chat] DEEP_THINK_EMPTY: model=${modelId}, deepThink=true but both text and reasoning are empty`)
       }
@@ -1052,7 +1146,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         }
       }
 
-      // 检测 [IMG:...] 标记并调用生图(自动根据用户选择的模型分发)
+      // 检出 [IMG:...] 标记并调用生图(自动根据用户选择的模型分发)
       const imagePrompts = extractImagePrompts(content)
       if (imagePrompts.length > 0) {
         const userRecord = await prisma.user.findUnique({
@@ -1067,7 +1161,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           try {
             const result = await generateImage(userId, modelId, prompt, size)
             replacements.push(`![${prompt}](${result.url})`)
-            // 归档到生图历史库(source=chat),失败不阻塞对话保存
+            // 归档到生图历史库(source=chat),失败不阻塞对话保存。
             prisma.generatedImage
               .create({
                 data: {
@@ -1095,12 +1189,12 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       // 移除模型输出被截断时残留的未闭合标记(避免原始标记入库)
       content = content.replace(/\[IMG:[^\]]*$/g, "")
 
-      // A 流式恢复: 停止新快照并等在途快照完成,避免旧快照覆盖最终内容
+      // A 流式恢复: 停止新快照并等在途快照完成,避免旧快照覆盖最终内容。
       snapStopped = true
       await snapChain
 
       try {
-        // 工具调用明细随消息入库:前端历史回显工具卡片;极端大结果(>32KB)放弃入库防膨胀
+        // 工具调用明细随消息入库(前端历史回显工具卡片);极端大结果(>32KB)放弃入库防膨胀
         let toolCallsMetadata: string | undefined
         if (collectedToolCalls.length > 0) {
           const json = JSON.stringify({ kind: 'tool_calls', version: 1, toolCalls: collectedToolCalls })
@@ -1147,7 +1241,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           where: { id: convId! },
           data: { updatedAt: new Date(), ...titleUpdate },
         })
-        // 新会话: 异步用 AI 生成更精准的标题(不阻塞 onFinish)
+        // 新会话: 异步让 AI 生成更精准的标题(不阻塞 onFinish)
         if (isNewConversation && userContent) {
           const convIdCapture = convId!
           generateConversationTitle(userContent, baseModel).then(async (aiTitle) => {
@@ -1173,7 +1267,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         }
 
         // 长上下文压缩: 当累计消息接近模型 contextWindow × 60% 时,
-        // 异步把较早的消息压缩成摘要存到 ConversationSummary,
+        // 异步把较早的消息压缩成摘要存入 ConversationSummary,
         // 下次请求会自动注入摘要代替被压缩的原文。
         // 不在对比模式下触发(多泳道并发写入易产生状态竞争)。
         if (!groupId && convId) {
@@ -1210,25 +1304,25 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     sendReasoning: true,
     sendStart: true,
     sendFinish: true,
-    // 默认只给客户端 "An error occurred.",这里把上游真实错误转成可读消息
+    // 默认只给客户端 "An error occurred.",这里把上游真实错误转成可读消息。
     onError: (error) => {
       console.error('[chat] Stream error:', error)
       if (error instanceof APICallError) {
         const status: number | undefined = error.statusCode ?? undefined
         if (status === 401) {
-          return '服务商鉴权失败 (401),请检查该模型的 API Key 是否有效'
+          return '服务商鉴权失败(401),请检查该模型的 API Key 是否有效'
         }
         if (status === 403) {
-          return '服务商拒绝请求 (403):额度不足或无权限，请检查账户余额'
+          return '服务商拒绝请求(403)：额度不足或无权限，请检查账户余额'
         }
         if (status === 429) {
-          return '请求过于频繁或超出限额 (429),请稍后重试'
+          return '请求过于频繁或超出限额(429)，请稍后重试'
         }
         if (typeof status === 'number' && status >= 500) {
           return `服务商服务器错误 (${status}),请稍后重试`
         }
         return typeof status === 'number'
-          ? `服务商请求失败 (HTTP ${status}),请稍后重试`
+          ? `服务商请求失败(HTTP ${status})，请稍后重试`
           : '服务商请求失败，请稍后重试'
       }
       return '生成过程中出错，请重试'

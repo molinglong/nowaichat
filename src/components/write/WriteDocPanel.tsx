@@ -9,9 +9,12 @@
  */
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ExternalLink, PenLine, X } from 'lucide-react'
+import { ExternalLink, FolderDown, Loader2, PenLine, X } from 'lucide-react'
 import { useChatStore } from '@/store/chat-store'
 import { WriteEditor } from './WriteEditor'
+import { getIsTauri } from '@/lib/tauri'
+import { getWorkspaceDir, pickWorkspaceDir, writeFile, sanitizeFileName } from '@/lib/tauri-files'
+import { toast } from '@/lib/toast'
 
 /** 与 transition-duration 保持一致;关闭后延迟此时长再卸载编辑器 */
 const CLOSE_ANIM_MS = 300
@@ -50,6 +53,47 @@ export function WriteDocPanel() {
     router.push(id ? `/write?doc=${id}` : '/write')
   }
 
+  // 一键导出到本地工作区(桌面端):拉 DB 最新内容 → 授权工作区(未设置则先弹目录选择)
+  // → 写入 <标题>.md。编辑器内容自动保存有秒级 debounce,此处取 DB 真源,滞后可忽略
+  const [exporting, setExporting] = useState(false)
+  async function exportToWorkspace() {
+    const docId = renderDocId
+    if (!docId || exporting) return
+    if (!getIsTauri()) {
+      toast.error('导出到本地文件仅桌面客户端可用')
+      return
+    }
+    setExporting(true)
+    try {
+      let base = await getWorkspaceDir()
+      if (!base) {
+        // 未授权引导流:直接弹目录选择,选完即授权并继续导出
+        const pick = await pickWorkspaceDir()
+        if (pick.cancelled) return
+        if (!pick.ok || !pick.base) {
+          toast.error(pick.error || '选择工作区失败')
+          return
+        }
+        base = pick.base
+      }
+      const res = await fetch(`/api/write/docs/${docId}`)
+      if (!res.ok) {
+        toast.error('读取文档失败，请重试')
+        return
+      }
+      const doc = (await res.json()) as { title?: string; content?: string }
+      const fileName = `${sanitizeFileName(doc.title || '')}.md`
+      const w = await writeFile(fileName, doc.content ?? '')
+      if (w.ok) {
+        toast.success(`已导出到工作区: ${fileName}`, { title: '本地文件' })
+      } else {
+        toast.error(w.error || '导出失败')
+      }
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <aside
       aria-hidden={!open}
@@ -65,6 +109,24 @@ export function WriteDocPanel() {
         </div>
         <span className="text-xs font-medium text-content-primary">写作画布</span>
         <div className="flex-1" />
+        {open && (
+          <button
+            type="button"
+            onClick={() => void exportToWorkspace()}
+            disabled={exporting}
+            title="把当前文档导出到本地工作区文件夹(.md)"
+            className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-content-secondary
+              hover:text-content-primary hover:bg-surface-subtle transition-colors
+              disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {exporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FolderDown className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden sm:inline">存到工作区</span>
+          </button>
+        )}
         <button
           type="button"
           onClick={openFullCanvas}

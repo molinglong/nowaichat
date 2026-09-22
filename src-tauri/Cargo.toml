@@ -19,6 +19,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# 本地文件能力:系统目录选择对话框(用户授权工作区根)
+tauri-plugin-dialog = "2"
+# 系统窗口材质:Win11 Mica(云母) / Win10 Acrylic(亚克力),客户端专属毛玻璃
+window-vibrancy = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -27,6 +31,8 @@ enigo = "0.3"
 screenshots = "0.8"
 base64 = "0.22"
 image = "0.25"
+# 本地文件能力:删除文件走系统回收站(可还原),而非物理删除
+trash = "5"
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem

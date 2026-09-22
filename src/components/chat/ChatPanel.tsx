@@ -5,7 +5,7 @@ import { useChat } from '@ai-sdk/react'
 import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon, X, Play } from 'lucide-react'
+import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
@@ -25,6 +25,26 @@ import type { ModelDefinition } from '@/lib/ai/types'
 import { getBuiltinMask } from '@/lib/ai/builtin-masks'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import type { Attachment } from './FileUpload'
+import { getIsTauri } from '@/lib/tauri'
+import {
+  writeFile as lfWriteFile,
+  deleteFile as lfDeleteFile,
+  readFile as lfReadFile,
+  listDir as lfListDir,
+  editFile as lfEditFile,
+  moveFile as lfMoveFile,
+  fileExists as lfFileExists,
+  execCommand as lfExecCommand,
+  overviewDir as lfOverviewDir,
+  searchContent as lfSearchContent,
+  LOCAL_FILES_SYNC_KEY,
+} from '@/lib/tauri-files'
+import {
+  LOCAL_FILE_TOOL_NAME,
+  isExecAutoAllowed,
+  type LocalFileToolInput,
+  type LocalFileToolOutput,
+} from '@/lib/ai/local-file-tool'
 
 const MODEL_STORAGE_KEY = 'chat:selectedModel'
 const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
@@ -48,6 +68,37 @@ function getGreeting(): string {
 function getDateLine(): string {
   const now = new Date()
   return `${now.getMonth() + 1}月${now.getDate()}日 周${'日一二三四五六'[now.getDay()]}`
+}
+
+/**
+ * sendAutomaticallyWhen 判据:仅当最后一条 assistant 消息里存在“已回填结果”的 local_file 工具、
+ * 全部 tool part 都已有 output、且最后一个 tool part 之后没有实质文本/推理(模型尚未据结果续答)
+ * 时,才自动再发一次请求让模型收尾。模型续答产生文本后判据转 false,杜绝无限重发。
+ * 不含 local_file 的普通对话恒 false,对既有流程零影响。
+ */
+function shouldContinueAfterLocalFile(messages: UIMessage[]): boolean {
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== 'assistant') return false
+  const parts = last.parts as Array<{ type?: string; state?: string; text?: string }>
+  let sawLocalFile = false
+  let lastToolIdx = -1
+  let allResolved = true
+  for (let i = 0; i < parts.length; i++) {
+    const t = parts[i].type ?? ''
+    if (!t.startsWith('tool-')) continue
+    lastToolIdx = i
+    if (t === `tool-${LOCAL_FILE_TOOL_NAME}`) sawLocalFile = true
+    const st = parts[i].state
+    if (st !== 'output-available' && st !== 'output-error') allResolved = false
+  }
+  if (!sawLocalFile || lastToolIdx < 0 || !allResolved) return false
+  // 最后一个 tool part 之后若已有正文/推理,说明模型已据结果续答,不再重发
+  for (let i = lastToolIdx + 1; i < parts.length; i++) {
+    const p = parts[i]
+    if (p.type === 'reasoning') return false
+    if (p.type === 'text' && p.text && p.text.trim()) return false
+  }
+  return true
 }
 
 interface ChatPanelProps {
@@ -216,6 +267,41 @@ export function ChatPanel({
     staleTime: STALE.providers,
   })
   const mcpAvailable = (mcpServersQuery.data?.servers ?? []).some((s) => s.enabled)
+
+  // AI 本地文件能力(仅桌面端):DB 总开关经 /api/settings/local-files 查得,存 ref 供 transport
+  // body getter 读取。网页端 getIsTauri()=false → query 不启用 → 恒 false,服务端不注入 local_file
+  // 工具;refetchOnWindowFocus:用户在独立设置窗口切换开关后,回到主窗口即刷新。
+  const localFilesQuery = useQuery<{ localFilesEnabled: boolean; localFilesExecAutoRun?: boolean }>({
+    queryKey: ['settings', 'local-files'],
+    queryFn: () => fetchJson('/api/settings/local-files'),
+    enabled: getIsTauri(),
+    retry: false,
+    refetchOnWindowFocus: true,
+    staleTime: STALE.providers,
+  })
+  const localFilesEnabled = localFilesQuery.data?.localFilesEnabled ?? false
+  // exec 命令"始终运行":开启后白名单外的命令也直接执行,不再弹确认卡(设置里切换)
+  const localFilesExecAutoRun = localFilesQuery.data?.localFilesExecAutoRun ?? false
+  const localFilesToggleRef = useRef(false)
+  useEffect(() => {
+    localFilesToggleRef.current = localFilesEnabled
+  }, [localFilesEnabled])
+  const execAutoRunRef = useRef(false)
+  useEffect(() => {
+    execAutoRunRef.current = localFilesExecAutoRun
+  }, [localFilesExecAutoRun])
+  // 设置窗口是独立 WebView,在那里切换开关后本窗口缓存无从得知;refetchOnWindowFocus
+  // 又会被 staleTime 拦下(数据还“新鲜”就跳过)。经 storage 事件(跨窗口广播)感知并
+  // 立即 refetch(不受 staleTime 限制),让开关秒级生效——否则下一条消息仍不注入
+  // local_file 工具,模型会声称“没有文件能力”。
+  useEffect(() => {
+    if (!getIsTauri()) return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOCAL_FILES_SYNC_KEY) void localFilesQuery.refetch()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [localFilesQuery.refetch])
 
   // 从 localStorage 恢复 webSearch 偏好
   useEffect(() => {
@@ -432,6 +518,10 @@ export function ChatPanel({
           get currentWriteDocId() {
             return useChatStore.getState().writePanelDocId
           },
+          // 本地文件能力(仅桌面端且用户开关开启):服务端据此注入无 execute 的 local_file 工具
+          get localFilesEnabled() {
+            return getIsTauri() && localFilesToggleRef.current
+          },
           // Attachments are read from ref at send time
           get attachments() {
             return attachmentsRef.current
@@ -464,7 +554,10 @@ export function ChatPanel({
   // Ref to setMessages,避免在 useChat 初始化器内部自引用导致循环依赖
   const setMessagesRef = useRef<((updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void) | null>(null)
 
-  const { messages, sendMessage, setMessages, stop, status, error, clearError, regenerate } = useChat<UIMessage>({
+  // local_file 工具调用去重:防 StrictMode/重渲导致同一 call 被重复执行(尤其 delete)
+  const executedLocalFileCallsRef = useRef<Set<string>>(new Set())
+
+  const { messages, sendMessage, setMessages, stop, status, error, clearError, regenerate, addToolOutput } = useChat<UIMessage>({
     // 流式 UI 更新节流(AI SDK 官方机制): 不节流时每个 chunk 都触发强制同步重渲染,
     // 快速流式下会累积 React nestedUpdateCount 至 50 抛 "Maximum update depth exceeded",
     // 传 throttle 后通知频率与渲染耗时脱钩,配合打字机视觉平滑度不受影响。
@@ -472,10 +565,154 @@ export function ChatPanel({
     ...(initialConversationId ? { id: initialConversationId } : {}), // 用会话 ID 作为 useChat 实例 id(仅已有会话),避免不同会话复用同一组件时状态错乱
     transport,
     messages: initialMessages,
+    // local_file 是“无 execute 客户端工具”:模型发出 tool-call 后本轮流即结束,这里拦截
+    // 并在本地(Tauri)执行——create 自动写入、delete 交卡片确认——再 addToolOutput 回填,
+    // 配合 sendAutomaticallyWhen 在同一轮内让模型据结果续跑收尾。
+    onToolCall: async ({ toolCall }) => {
+      if (toolCall.toolName !== LOCAL_FILE_TOOL_NAME) return
+      const callId = toolCall.toolCallId
+      if (executedLocalFileCallsRef.current.has(callId)) return
+      const input = (toolCall.input ?? {}) as LocalFileToolInput
+      // 只读动作(read/list/overview/search/exec 白名单档)后台并发执行:多个互不依赖的调用
+      // 同时跑(总耗时≈最慢的一个,而非串行累加),完成后各自乱序回填;
+      // sendAutomaticallyWhen 的判据(所有 tool part 均已回填)天然支持乱序,无需顺序保证。
+      // 写类动作(create/edit/move)保持串行,避免同时改盘互相踩。
+      const runLocalFileAsync = (
+        id: string,
+        action: LocalFileToolOutput['action'],
+        run: () => Promise<LocalFileToolOutput>
+      ) => {
+        // 超时兜底:invoke 若因异常场景永不返回,tool part 将永远停在 input-available,
+        // 自动续跑判据(allResolved)永假,流程静默死停;race 一个超时结果保证必然回填,
+        // 模型会收到明确的失败原因而不是无限等待(迟到的真实结果会覆盖超时结果,幂等无害)
+        const timeout = new Promise<LocalFileToolOutput>((resolve) =>
+          setTimeout(
+            () => resolve({ ok: false, action, error: '执行超时(25 秒),本次调用被中止' }),
+            25_000
+          )
+        )
+        void Promise.race([run(), timeout]).then(
+          (output) => addToolOutput({ tool: LOCAL_FILE_TOOL_NAME, toolCallId: id, output }),
+          (err) =>
+            addToolOutput({
+              tool: LOCAL_FILE_TOOL_NAME,
+              toolCallId: id,
+              output: { ok: false, action, error: String(err) } satisfies LocalFileToolOutput,
+            })
+        )
+      }
+      // 网页端(非 Tauri)碰不到本地磁盘:回填错误,让模型如实告知“仅桌面客户端可用”
+      if (!getIsTauri()) {
+        executedLocalFileCallsRef.current.add(callId)
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId: callId,
+          output: { ok: false, action: input.action, error: '仅桌面客户端可用' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      if (input.action === 'create') {
+        // 覆盖确认:目标已存在时不自动写入(与 edit 唯一匹配/move 拒覆盖对齐),也不标记
+        // 已执行——卡片停在待确认态,由 handleLocalFileDecision 执行写入并回填;目标不存在
+        // 则与原来一致直接写入(无覆盖风险)
+        const ex = await lfFileExists(input.path)
+        if (ex.ok && ex.exists) return
+        executedLocalFileCallsRef.current.add(callId)
+        const content = typeof input.content === 'string' ? input.content : ''
+        const res = await lfWriteFile(input.path, content)
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId: callId,
+          output: { ...res, action: 'create' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      // read/list/edit/move:低危或自带保护,自动执行后回填同轮续跑——
+      // read/list 不落盘;edit 由 Rust 强制唯一匹配(匹配不上不写盘);move 拒绝覆盖已存在目标。
+      if (input.action === 'read') {
+        executedLocalFileCallsRef.current.add(callId)
+        const offset = typeof input.offset === 'number' ? input.offset : undefined
+        const limit = typeof input.limit === 'number' ? input.limit : undefined
+        const mode = input.mode === 'outline' ? ('outline' as const) : undefined
+        runLocalFileAsync(callId, 'read', async () =>
+          ({ ...(await lfReadFile(input.path, offset, limit, mode)), action: 'read' }) satisfies LocalFileToolOutput
+        )
+        return
+      }
+      if (input.action === 'list') {
+        executedLocalFileCallsRef.current.add(callId)
+        runLocalFileAsync(callId, 'list', async () =>
+          ({ ...(await lfListDir(input.path)), action: 'list' }) satisfies LocalFileToolOutput
+        )
+        return
+      }
+      if (input.action === 'overview') {
+        executedLocalFileCallsRef.current.add(callId)
+        runLocalFileAsync(callId, 'overview', async () =>
+          ({ ...(await lfOverviewDir(input.path)), action: 'overview' }) satisfies LocalFileToolOutput
+        )
+        return
+      }
+      if (input.action === 'search') {
+        const pattern = typeof input.pattern === 'string' ? input.pattern.trim() : ''
+        if (!pattern) return
+        const glob = typeof input.glob === 'string' && input.glob.trim() ? input.glob.trim() : undefined
+        executedLocalFileCallsRef.current.add(callId)
+        runLocalFileAsync(callId, 'search', async () =>
+          ({ ...(await lfSearchContent(input.path, pattern, glob)), action: 'search' }) satisfies LocalFileToolOutput
+        )
+        return
+      }
+      if (input.action === 'edit') {
+        executedLocalFileCallsRef.current.add(callId)
+        const res = await lfEditFile(input.path, input.old_text ?? '', input.new_text ?? '')
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId: callId,
+          output: { ...res, action: 'edit' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      if (input.action === 'move') {
+        executedLocalFileCallsRef.current.add(callId)
+        const res = await lfMoveFile(input.path, input.to_path ?? '')
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId: callId,
+          output: { ...res, action: 'move' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      if (input.action === 'exec') {
+        // 命令执行:白名单或"始终运行"开启时后台执行(不阻塞其他并发调用);其余(含空命令)
+        // 停等确认卡,由 handleLocalFileDecision 执行并回填——与 delete/create 确认流同层
+        const cmd = typeof input.command === 'string' ? input.command.trim() : ''
+        if (!cmd) return
+        if (!execAutoRunRef.current && !isExecAutoAllowed(cmd)) return
+        executedLocalFileCallsRef.current.add(callId)
+        runLocalFileAsync(callId, 'exec', async () =>
+          ({ ...(await lfExecCommand(cmd)), action: 'exec' }) satisfies LocalFileToolOutput
+        )
+        return
+      }
+      // delete: 不自动执行。卡片停在待确认态,用户批准后由 handleLocalFileDecision 执行并回填。
+    },
+    // 仅当 local_file 结果刚回填、模型尚未据此续答时,自动再发一次请求收尾(判据见 helper,杜绝死循环)
+    sendAutomaticallyWhen: ({ messages }) => shouldContinueAfterLocalFile(messages),
     onFinish: async ({ message, isError, isAbort }) => {
       if (isError || isAbort) return
       const convId = conversationIdRef.current
       if (!convId) return
+      // local_file 客户端工具轮:tool part 生命周期由前端管理(create 回填结果、delete 等用户
+      // 异步确认)。若在此用 DB 内容替换 parts,会丢掉待确认/已回填的 tool part,导致确认卡片
+      // 无法交互、addToolOutput 找不到目标、同轮续跑失效。故本轮含 local_file 调用时跳过内容同步。
+      if (
+        message.parts.some(
+          (p) => (p as { type?: string }).type === `tool-${LOCAL_FILE_TOOL_NAME}`
+        )
+      ) {
+        return
+      }
       try {
         // 服务端在 finish 事件之前已完成生图与入库(onFinish 先于 finish part 发送),
         // 这里拉取最新的助手消息,把含图片的最终内容同步到界面。
@@ -678,6 +915,64 @@ export function ChatPanel({
       // regenerate 时 getter 仍返回本次附件,服务端注入到最后一条 user 消息,行为正确。
     },
     [sendMessage]
+  )
+
+  // local_file 决策:卡片上用户点「批准」→ 按动作执行(delete=移入回收站;
+  // create=覆盖写入)并回填;「拒绝」→ 回填 denied。回填后由 sendAutomaticallyWhen
+  // 触发同轮续跑,让模型基于结果向用户收尾。
+  const handleLocalFileDecision = useCallback(
+    async (
+      toolCallId: string,
+      path: string,
+      approved: boolean,
+      decision: { action: 'delete' | 'create' | 'exec'; content?: string; command?: string }
+    ) => {
+      if (executedLocalFileCallsRef.current.has(toolCallId)) return
+      executedLocalFileCallsRef.current.add(toolCallId)
+      if (!approved) {
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId,
+          output: {
+            ok: false,
+            action: decision.action,
+            denied: true,
+            error:
+              decision.action === 'create'
+                ? '用户拒绝了覆盖写入,原文件保持不变'
+                : decision.action === 'exec'
+                  ? '用户拒绝执行该命令'
+                  : '用户拒绝了删除操作',
+          } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      if (decision.action === 'create') {
+        const res = await lfWriteFile(path, decision.content ?? '')
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId,
+          output: { ...res, action: 'create' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      if (decision.action === 'exec') {
+        const res = await lfExecCommand(decision.command ?? '')
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId,
+          output: { ...res, action: 'exec' } satisfies LocalFileToolOutput,
+        })
+        return
+      }
+      const res = await lfDeleteFile(path)
+      addToolOutput({
+        tool: LOCAL_FILE_TOOL_NAME,
+        toolCallId,
+        output: { ...res, action: 'delete' } satisfies LocalFileToolOutput,
+      })
+    },
+    [addToolOutput]
   )
 
   // AI 设置控制: 监听 update_settings 工具调用并执行设置变更。
@@ -1164,6 +1459,7 @@ export function ChatPanel({
                   onRegenerate={handleRegenerate}
                   onEditMessage={handleEditMessage}
                   onClarifySubmit={handleSend}
+                  onLocalFileDecision={handleLocalFileDecision}
                 />
                 <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
               </div>

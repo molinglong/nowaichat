@@ -230,15 +230,6 @@ function SummaryCardInner({ content, meta }: SummaryCardProps) {
 
 const SummaryCard = memo(SummaryCardInner)
 
-/** 格式化时间:几月几日几时 */
-function formatMessageTime(date: Date): string {
-  const m = date.getMonth() + 1
-  const d = date.getDate()
-  const h = date.getHours().toString().padStart(2, '0')
-  const min = date.getMinutes().toString().padStart(2, '0')
-  return `${m}月${d}日 ${h}:${min}`
-}
-
 /** 格式化完整日期时间:YYYY-MM-DD HH:MM */
 function formatFullDateTime(date: Date): string {
   const y = date.getFullYear()
@@ -285,6 +276,13 @@ interface MessageBubbleProps {
   prevUserContent?: string | null
   /** 澄清问答:提交回答文本(透传给 ToolCallCard 内的 ClarifyCard) */
   onClarifySubmit?: (answersText: string) => void
+  /** local_file:决策(批准/拒绝),透传给 ToolCallCard 内的 LocalFileCard */
+  onLocalFileDecision?: (
+    toolCallId: string,
+    path: string,
+    approved: boolean,
+    decision: import('@/lib/ai/local-file-tool').LocalFileDecision
+  ) => void
   /** 澄清问答:该消息之后是否已有 user 消息(已答则卡片锁定为摘要行) */
   clarifyAnswered?: boolean
 }
@@ -301,6 +299,7 @@ function MessageBubbleInner({
   wrapperRef,
   prevUserContent,
   onClarifySubmit,
+  onLocalFileDecision,
   clarifyAnswered,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
@@ -621,7 +620,7 @@ function MessageBubbleInner({
   // 用 mousedown + click 双确认 + 跳过刚打开的当次事件(避免菜单闪烁)
   useEffect(() => {
     if (!copyMenuOpen) return
-    let openedAt = Date.now()
+    const openedAt = Date.now()
     function handleOutside(e: MouseEvent) {
       // 点的是同一个 microtask 内的自己 → 忽略(防止刚打开就被自己关掉)
       if (Date.now() - openedAt < 50) return
@@ -886,6 +885,7 @@ function MessageBubbleInner({
                     view={v}
                     clarifyAnswered={clarifyAnswered}
                     onClarifySubmit={onClarifySubmit}
+                    onLocalFileDecision={onLocalFileDecision}
                   />
                 ))}
               </div>

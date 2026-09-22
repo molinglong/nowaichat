@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
@@ -11,6 +11,9 @@ import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as mak
 import { useChatStore } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel } from '@/lib/ai/style'
+import { useIsTauri } from '@/lib/tauri'
+import { pickWorkspaceDir, getWorkspaceDir, LOCAL_FILES_SYNC_KEY } from '@/lib/tauri-files'
+import { TAURI_GLASS_KEY, TAURI_GLASS_EVENT, getGlassEnabled } from '@/components/TauriVisualFX'
 import { toast } from '@/lib/toast'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
@@ -427,7 +430,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -455,6 +458,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'image', label: '生图', icon: ImageIcon },
       { id: 'memory', label: '记忆', icon: Brain },
       { id: 'clarify', label: '澄清提问', icon: HelpCircle },
+      { id: 'localfiles', label: '本地文件', icon: FolderOpen },
       { id: 'masks', label: '面具管理', icon: VenetianMask },
       { id: 'mcp', label: 'MCP 工具', icon: Plug },
     ],
@@ -621,6 +625,97 @@ export function SettingsModal({
   const [refCopied, setRefCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system')
+    // 系统毛玻璃(Mica/Acrylic)开关:仅桌面端渲染,偏好存 localStorage(默认开)。
+    // 切换后派发 TAURI_GLASS_EVENT,TauriVisualFX 监听并同步 html[data-glass] + Rust 材质。
+    const inTauri = useIsTauri()
+    const [glassEnabled, setGlassEnabled] = useState(true)
+    useEffect(() => {
+      if (!inTauri) return
+      setGlassEnabled(getGlassEnabled())
+    }, [inTauri])
+    const handleToggleGlass = useCallback(() => {
+      setGlassEnabled((v) => {
+        const next = !v
+        try {
+          localStorage.setItem(TAURI_GLASS_KEY, next ? 'on' : 'off')
+        } catch {}
+        // 本窗口的 TauriVisualFX 立即生效;其他窗口经 storage 事件跟进
+        window.dispatchEvent(new Event(TAURI_GLASS_EVENT))
+        return next
+      })
+    }, [])
+
+    // ============ AI 本地文件能力(仅桌面端) ============
+    // 总开关存 DB(localFilesEnabled),经 /api/settings/local-files 读写;授权工作区根存
+    // 客户端 Rust 配置(不入库),这里读回仅用于展示。非 Tauri 环境整块置灰。
+    const [localFilesEnabled, setLocalFilesEnabled] = useState(false)
+    // exec 命令"始终运行":开启后 AI 执行 PowerShell 命令不再弹确认卡(高危,含写/联网)
+    const [localFilesExecAutoRun, setLocalFilesExecAutoRun] = useState(false)
+    const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
+    const [pickingDir, setPickingDir] = useState(false)
+    useEffect(() => {
+      if (!inTauri) return
+      let cancelled = false
+      getWorkspaceDir()
+        .then((dir) => { if (!cancelled) setWorkspaceDir(dir) })
+        .catch(() => {})
+      return () => { cancelled = true }
+    }, [inTauri])
+
+    async function handleToggleLocalFiles(enabled: boolean) {
+      setLocalFilesEnabled(enabled)
+      try {
+        const res = await fetch('/api/settings/local-files', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        })
+        if (!res.ok) throw new Error()
+        // 同步 ChatPanel 的开关缓存:主窗口内弹窗(默认形态)下 storage 事件不会发给
+        // 自己,直接 invalidate 立即 refetch(不受 staleTime 限制);独立子窗口形态下
+        // 本窗口无该 active query,invalidate 为空操作,由 storage 广播通知主窗口。
+        queryClient.invalidateQueries({ queryKey: ['settings', 'local-files'] })
+        try { localStorage.setItem(LOCAL_FILES_SYNC_KEY, String(Date.now())) } catch {}
+        toast.success(enabled ? '本地文件能力已开启' : '本地文件能力已关闭')
+      } catch {
+        setLocalFilesEnabled(!enabled)
+        toast.error('切换失败，请重试')
+      }
+    }
+
+    async function handleToggleExecAutoRun(enabled: boolean) {
+      setLocalFilesExecAutoRun(enabled)
+      try {
+        const res = await fetch('/api/settings/local-files', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ execAutoRun: enabled }),
+        })
+        if (!res.ok) throw new Error()
+        queryClient.invalidateQueries({ queryKey: ['settings', 'local-files'] })
+        try { localStorage.setItem(LOCAL_FILES_SYNC_KEY, String(Date.now())) } catch {}
+        toast.success(enabled ? '命令始终运行已开启' : '命令始终运行已关闭')
+      } catch {
+        setLocalFilesExecAutoRun(!enabled)
+        toast.error('切换失败，请重试')
+      }
+    }
+
+    async function handlePickWorkspace() {
+      if (pickingDir) return
+      setPickingDir(true)
+      try {
+        const res = await pickWorkspaceDir()
+        if (res.ok && res.base) {
+          setWorkspaceDir(res.base)
+          toast.success('工作区已授权')
+        } else if (!res.cancelled) {
+          toast.error(res.error || '设置工作区失败')
+        }
+      } finally {
+        setPickingDir(false)
+      }
+    }
 
   // 自定义模型：所有 state + handler 已抽离到 useCustomModels hook
   const {
@@ -1047,13 +1142,16 @@ export function SettingsModal({
       fetch('/api/settings/clarify').then((r) => r.json()).catch(() => null),
       fetch('/api/settings/ai-control').then((r) => r.json()).catch(() => null),
       fetch('/api/user/profile').then((r) => r.json()).catch(() => null),
+      fetch('/api/settings/local-files').then((r) => r.json()).catch(() => null),
     ])
-      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData, aiControlData, profileData]) => {
+      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData, aiControlData, profileData, localFilesData]) => {
         setProviders(provs)
         setKeys(keyList)
         setMemories(memoryData?.memories ?? [])
         setMemoryEnabled(memoryData?.memoryEnabled ?? true)
         setClarifyEnabled(clarifyData?.clarifyEnabled ?? true)
+        setLocalFilesEnabled(localFilesData?.localFilesEnabled ?? false)
+        setLocalFilesExecAutoRun(localFilesData?.localFilesExecAutoRun ?? false)
         setAiControlEnabled(aiControlData?.aiSettingsControl ?? true)
         // 账号资料:打开设置时拉取,并同步昵称草稿
         if (profileData && typeof profileData === 'object') {
@@ -1881,10 +1979,10 @@ export function SettingsModal({
             <div className="text-[11px] text-blue-700 dark:text-blue-300 space-y-1 leading-relaxed">
               <p className="font-medium">配置步骤：</p>
               <ol className="list-decimal list-inside space-y-0.5 text-blue-600/90 dark:text-blue-400/90">
-                <li>点击下方"获取 Key"前往官网</li>
+                <li>点击下方「获取 Key」前往官网</li>
                 <li>复制 API Key 并粘贴到输入框</li>
-                <li>点击"测试"验证连接（推荐）</li>
-                <li>测试成功后点击"保存"</li>
+                <li>点击「测试」验证连接（推荐）</li>
+                <li>测试成功后点击「保存」</li>
               </ol>
             </div>
           </div>
@@ -1985,7 +2083,7 @@ export function SettingsModal({
   }
 
   return (
-    <div className={forceOpen ? 'relative flex h-dvh w-full' : 'fixed inset-0 z-[100] flex items-end md:items-center justify-center md:justify-center md:pointer-events-none'}>
+    <div className={forceOpen ? 'relative flex h-full w-full' : 'fixed inset-0 z-[100] flex items-end md:items-center justify-center md:justify-center md:pointer-events-none'}>
       {/* Backdrop — 纯色压暗：日间 35% 黑、夜间 65% 黑，去掉模糊与饱和度提升，兼顾模态感与性能；移动端随抽屉滑入/滑出同步淡入淡出。独立子窗口无遮罩(窗口即卡片) */}
       {!forceOpen && (
       <div
@@ -2045,8 +2143,19 @@ export function SettingsModal({
             {/* 桌面端:固定标题栏——红点不随下方导航项滚动;标题栏语义手柄(立即拖动,双击复位居中) */}
             <div
               data-drag-handle
-              onDoubleClick={recenter}
-              {...(forceOpen ? { 'data-tauri-drag-region': '' } : {})}
+              {...(forceOpen
+                ? {
+                    // 独立子窗口:仅 data-tauri-drag-region 不够——该机制只认 e.target
+                    // 自身带属性,标题文字/红点一盖就失效;补 -webkit-app-region:drag
+                    // (子元素继承拖拽区,红点自身 no-drag),与主窗口 TopBar 双保险同构。
+                    // 双击:子窗口=最大化切换;卡片内拖拽模式(else 分支)=复位居中。
+                    'data-tauri-drag-region': '',
+                    style: { WebkitAppRegion: 'drag' } as React.CSSProperties,
+                    onDoubleClick: () => {
+                      import('@/lib/tauri').then(({ tauri }) => tauri.toggleMaximize())
+                    },
+                  }
+                : { onDoubleClick: recenter })}
               className={`hidden md:flex items-center gap-2.5 px-1 pt-0.5 pb-1.5 shrink-0 select-none touch-none ${forceOpen ? 'pl-3.5' : 'cursor-grab active:cursor-grabbing'}`}
             >
               {/* 独立子窗口：标题条即原生窗口拖动区(卡片内拖拽已禁用)，与 Sidebar 头部同构(灯在左标题在右) */}
@@ -2057,6 +2166,7 @@ export function SettingsModal({
               )}
               <button
                 onClick={() => setSettingsOpen(false)}
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 className="flex w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors group items-center justify-center shrink-0"
                 aria-label="关闭"
               >
@@ -4714,6 +4824,102 @@ export function SettingsModal({
                   </div>
                 )}
 
+                {/* 本地文件(仅桌面端) */}
+                {activeSection === 'localfiles' && (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">允许 AI 操作本地文件</p>
+                        <p className="text-[11px] text-content-muted">
+                          {inTauri
+                            ? '在你授权的工作区文件夹内，AI 可帮你生成/写入文件、删除文件（进回收站）'
+                            : '该能力仅在桌面客户端可用'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={localFilesEnabled}
+                        disabled={!inTauri}
+                        onClick={() => handleToggleLocalFiles(!localFilesEnabled)}
+                        className={cn(
+                          'relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed',
+                          localFilesEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                            localFilesEnabled && 'translate-x-4'
+                          )}
+                        />
+                      </button>
+                    </div>
+
+                    {inTauri ? (
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                        <div className="text-left">
+                          <p className="text-xs text-content-secondary">工作区文件夹</p>
+                          <p className="text-[11px] text-content-muted">AI 只能在此文件夹内操作；删除会移入回收站，且每次都需你确认。</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <code
+                            className="min-w-0 flex-1 truncate rounded-md border border-line/60 bg-surface-muted px-2 py-1 text-[11px] text-content-secondary"
+                            title={workspaceDir ?? ''}
+                          >
+                            {workspaceDir || '尚未选择'}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={handlePickWorkspace}
+                            disabled={pickingDir}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line/60 px-2.5 py-1 text-[11px] text-content-secondary hover:bg-surface-subtle hover:text-content-primary disabled:opacity-40 transition-colors"
+                          >
+                            {pickingDir ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
+                            选择文件夹
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
+                        当前在浏览器中打开，无法访问本地磁盘。请下载并使用桌面客户端后，在此开启并授权工作区文件夹。
+                      </p>
+                    )}
+
+                    {inTauri && localFilesEnabled && (
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-3">
+                        <div className="text-left min-w-0">
+                          <p className="text-xs text-content-secondary">命令始终运行</p>
+                          <p className="text-[11px] text-content-muted">
+                            AI 执行 PowerShell 命令不再弹确认卡，包括写入、删除、联网命令。仅在完全信任工作区用途时开启。
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={localFilesExecAutoRun}
+                          onClick={() => handleToggleExecAutoRun(!localFilesExecAutoRun)}
+                          className={cn(
+                            'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                            localFilesExecAutoRun ? 'bg-amber-500' : 'bg-surface-subtle'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                              localFilesExecAutoRun && 'translate-x-4'
+                            )}
+                          />
+                        </button>
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
+                      安全边界：AI 无法访问工作区以外的任何文件，系统目录一律拒绝；删除操作强制确认并走回收站（可还原）。
+                    </p>
+                  </div>
+                )}
+
                 {/* 通用 */}
                 {activeSection === 'general' && (
                   <div className="space-y-2.5">
@@ -4776,6 +4982,32 @@ export function SettingsModal({
                         </button>
                       ))}
                     </div>
+                    {/* 系统毛玻璃:仅桌面端(Win11 Mica / Win10 Acrylic),Web 端不渲染 */}
+                    {inTauri && (
+                      <div className="mt-2.5 pt-2.5 border-t border-line/60 flex items-center justify-between gap-3">
+                        <div className="text-left min-w-0">
+                          <p className="text-xs text-content-secondary">系统毛玻璃</p>
+                          <p className="text-[11px] text-content-muted">窗口底层透出桌面云母/亚克力材质</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={glassEnabled}
+                          onClick={handleToggleGlass}
+                          className={cn(
+                            'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                            glassEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                              glassEnabled && 'translate-x-4'
+                            )}
+                          />
+                        </button>
+                      </div>
+                    )}
                     </div>
 
                     {/* 聊天行为:开关组(卡内两行,行间细线分隔) */}

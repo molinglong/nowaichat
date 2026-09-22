@@ -33,6 +33,12 @@ model User {
   /// AI 设置控制总开关：关闭时 chat route 不注入 update_settings 工具（物理级关闭）；
   /// 刻意不在 AI 可控注册表内，仅能通过 设置→通用 手动修改
   aiSettingsControl Boolean @default(true)
+  /// AI 本地文件能力总开关：仅桌面客户端(Tauri)可执行；关闭时 chat route 不注入 local_file 工具。
+  /// 默认关闭——高危能力(写盘/删除)，需用户在 设置→本地文件 显式开启并选定工作区沙箱目录
+  localFilesEnabled Boolean @default(false)
+    /// 本地文件 exec 命令"始终运行":开启后 AI 执行 PowerShell 命令不再弹确认卡
+    /// (含写入/删除/联网命令);默认 false=只读白名单自动、其余弹确认卡。高危开关
+    localFilesExecAutoRun Boolean @default(false)
   /// 临时聊天:访客密码 hash(空=未启用)。访客密码登录进入临时模式(隔离区);
   /// 设置时须与主密码不同,长期有效可随时更改
   guestPasswordHash String?

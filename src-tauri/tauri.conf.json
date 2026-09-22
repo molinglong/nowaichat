@@ -24,36 +24,6 @@
         "fullscreen": false,
         "center": true,
         "visible": true
-      },
-      {
-        "label": "buddy",
-        "title": "搭子",
-        "width": 120,
-        "height": 120,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false,
-        "focus": false,
-        "url": "/buddy/"
-      },
-      {
-        "label": "settings",
-        "title": "设置",
-        "width": 780,
-        "height": 640,
-        "minWidth": 560,
-        "minHeight": 480,
-        "resizable": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": true,
-        "center": true,
-        "visible": false,
-        "url": "/settings-window/"
       }
     ],
     "security": {

@@ -5,10 +5,12 @@ import { BookOpen, Brain, Check, ChevronDown, Globe, Link2, ListTodo, Loader2, P
 import { cn } from '@/lib/utils'
 import type { UIMessage } from 'ai'
 import { ClarifyCard } from './ClarifyCard'
+import { LocalFileCard } from './LocalFileCard'
 import { GenerateMaskCard } from './GenerateMaskCard'
 import { WriteDocCard } from './WriteDocCard'
 import { TripMapCard } from './TripMapCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
+import { LOCAL_FILE_TOOL_NAME } from '@/lib/ai/local-file-tool'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
 import { WRITE_DOC_TOOL_NAME } from '@/lib/ai/write-doc-tool'
 import { TRIP_TOOL_NAME } from '@/lib/ai/trip-tool'
@@ -179,9 +181,16 @@ interface ToolCallCardProps {
   clarifyAnswered?: boolean
   /** ask_clarification:提交回答文本(走 sendMessage 全链路);缺省则卡片只读 */
   onClarifySubmit?: (answersText: string) => void
+  /** local_file:决策(批准/拒绝);缺省则待确认卡片只读 */
+  onLocalFileDecision?: (
+    toolCallId: string,
+    path: string,
+    approved: boolean,
+    decision: import('@/lib/ai/local-file-tool').LocalFileDecision
+  ) => void
 }
 
-function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallCardProps) {
+function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFileDecision }: ToolCallCardProps) {
   // hooks 置顶(web_search 的展开状态),避免条件 return 造成 hooks 顺序不稳定
   const [manual, setManual] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -189,6 +198,11 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit }: ToolCallC
   // 澄清提问:专用交互卡片(问题+选项点选),不进通用工具卡分支
   if (view.tool === CLARIFY_TOOL_NAME) {
     return <ClarifyCard view={view} answered={clarifyAnswered ?? false} onSubmit={onClarifySubmit} />
+  }
+
+  // 本地文件操作:专用卡片(create 自动执行展示结果;delete 待确认→批准后执行)
+  if (view.tool === LOCAL_FILE_TOOL_NAME) {
+    return <LocalFileCard view={view} onDecision={onLocalFileDecision} />
   }
 
   // 面具工坊:专用交互卡片(草稿预览+一键添加),不进通用工具卡分支

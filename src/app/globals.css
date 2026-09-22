@@ -404,6 +404,67 @@ html:not([data-tauri]) .tauri-only {
   -webkit-app-region: no-drag;
 }
 
+/* ── 客户端专属视觉增强(配套 TauriVisualFX.tsx,仅 Tauri 生效,Web 零影响) ── */
+
+/* 1) 系统毛玻璃(Mica/Acrylic):窗口底层换半透明,让系统材质透出。
+      弹窗等浮层保持纯色背景(弹窗纯色背景规范),这里只动根底色与主外壳两层:
+      body + (app)/layout.tsx 的外壳底 + 主卡片/内容列。 */
+[data-tauri][data-glass] body {
+  background: rgb(var(--background) / 0.72);
+}
+.dark[data-tauri][data-glass] body {
+  background: rgb(var(--background) / 0.6);
+}
+[data-tauri][data-glass] .h-screen.bg-surface-muted {
+  background: rgb(var(--surface-muted) / 0.55);
+}
+[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface,
+[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface > .bg-surface {
+  background: rgb(var(--surface) / 0.6);
+}
+.dark[data-tauri][data-glass] .h-screen.bg-surface-muted {
+  background: rgb(var(--surface-muted) / 0.5);
+}
+.dark[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface,
+.dark[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface > .bg-surface {
+  background: rgb(var(--surface) / 0.55);
+}
+
+/* 2) 启动淡入:掩盖远程壳 splash → 远程站跳转的闪白;
+      关闭时缩小淡出(tauri.close() 先挂 data-closing 播完再真正关窗)。 */
+@media (prefers-reduced-motion: no-preference) {
+  [data-tauri] body {
+    animation: tauri-app-in 320ms ease-out both;
+  }
+  [data-tauri][data-closing] body {
+    animation: tauri-app-out 180ms ease-in both;
+  }
+}
+@keyframes tauri-app-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes tauri-app-out {
+  from { opacity: 1; }
+  to { opacity: 0; transform: scale(0.98); }
+}
+
+/* 3) 失焦降饱和:独立 fixed 灰罩层(TauriVisualFX 渲染),
+      不用 html/body filter —— filter 会产生 containing block 破坏 fixed 弹窗定位。 */
+[data-tauri] .tauri-blur-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  -webkit-backdrop-filter: saturate(0.75);
+  backdrop-filter: saturate(0.75);
+  opacity: 0;
+  transition: opacity 240ms ease;
+}
+[data-tauri][data-tauri-blurred] .tauri-blur-overlay {
+  opacity: 1;
+}
+
 /* ── 富渲染(markdown+公式)局部覆盖 ───────────────────────── */
 /* 块级代码: 去掉行内 code 的背景/边框,由 pre 容器统一承担 */
 .rich-md pre code {

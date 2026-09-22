@@ -134,6 +134,29 @@ export async function sweepOrphanUploads(maxAgeMs: number): Promise<number> {
   return removed
 }
 
+/** 孤儿文件保留时长:超过 24 小时且未被任何消息引用则清理 */
+export const ORPHAN_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+/** 孤儿清扫节流窗口:1 小时内至多一次全库引用扫描 */
+const SWEEP_THROTTLE_MS = 60 * 60 * 1000
+let lastSweepAt = 0
+
+/**
+ * 带节流的孤儿清扫入口(触发点:上传 POST / 消息创建后,均为 fire-and-forget)。
+ * 失败时重置节流,允许下次调用立即重试。
+ */
+export function sweepOrphanUploadsThrottled(
+  maxAgeMs: number = ORPHAN_MAX_AGE_MS
+): void {
+  const now = Date.now()
+  if (now - lastSweepAt < SWEEP_THROTTLE_MS) return
+  lastSweepAt = now
+  sweepOrphanUploads(maxAgeMs).catch((err) => {
+    console.error("[uploads] Orphan sweep failed:", err)
+    lastSweepAt = 0
+  })
+}
+
 /** 读取上传文件的原始内容(先校验文件名) */
 export async function readUploadFile(name: string): Promise<Buffer | null> {
   const safe = sanitizeUploadName(name)
