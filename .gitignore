@@ -98,3 +98,5 @@ test-ephemeral-full.ps1
 login-redesign-preview.html
 # 设计预览稿(不入库)
 public/preview-*.html
+# Monaco Editor 静态资源(由 scripts/copy-monaco.cjs 从 node_modules 拷贝,不入库)
+public/monaco/
