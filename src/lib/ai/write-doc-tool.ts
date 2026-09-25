@@ -43,8 +43,21 @@ export const writeDocToolSchema = z.object({
     .trim()
     .min(1)
     .max(30000)
-    .describe("完整可直接使用的正文，段落之间用空行分隔；不要包含解释、标题记号或 Markdown 修饰"),
+    .describe("完整可直接使用的正文，段落之间用空行分隔；不要包含解释、标题记号或 Markdown 修饰；网页/HTML/代码等可执行产物不要用本工具（改走 write_code）"),
 })
+
+/**
+ * 网页/HTML 源码特征探测 —— write_document 误路由拦截（服务端 execute 兜底）。
+ * 只拦截"确凿的 HTML 网页源码"（开头 DOCTYPE/html 标签或整篇以 </html> 收尾），
+ * 避免误伤正常的记叙/说明文（讲编程的文章里出现个别标签词属合法）。
+ */
+export function looksLikeHtmlPage(text: string): boolean {
+  const head = text.slice(0, 600).toLowerCase()
+  if (/^\s*<!doctype\s+html/.test(head)) return true
+  if (/^\s*(<!--[\s\S]*?-->\s*)*<html[\s>]/.test(head)) return true
+  const tail = text.slice(-80).toLowerCase()
+  return head.includes("<body") && /<\/html>\s*$/.test(tail)
+}
 
 /** 工具输出（卡片据 ok 分支渲染成功/失败） */
 export type WriteDocToolOutput =
@@ -64,10 +77,11 @@ export function isWriteDocOutput(o: unknown): o is WriteDocToolOutput {
 /** 注入 system prompt 的使用规则段 */
 export const WRITE_DOC_TOOL_PROMPT: string = [
   "## 写作文档（write_document 工具）",
-  "- 用户想要一篇可拿去发布/保存/使用的文字成品时，调用本工具把完整正文创建为写作文档：小说章节/故事/作文/演讲稿/公众号文章/正式文稿要调用，微博体短文、朋友圈文案、小红书笔记、贺卡祝词等短小的成篇内容同样要调用，篇幅长短不限",
+  "- 用户想要一篇可拿去发布/保存/使用的「人读文字成品」时，调用本工具把完整正文创建为写作文档：小说章节/故事/作文/演讲稿/公众号文章/正式文稿要调用，微博体短文、朋友圈文案、小红书笔记、贺卡祝词等短小的成篇内容同样要调用，篇幅长短不限",
   "- 判断标准是「成品还是回答」：一篇拿去用的东西→调用；对话里看的一个回答→不调用",
+  "- 【高频误用警示】网页/HTML/CSS/JS、代码、脚本、配置文件等「可执行/机器可读」产物一律不要用本工具——用户说「写个主页/落地页/网站首页/网页」时默认是网页代码，必须改调 write_code 工具创建代码文档；本工具只收纯文字",
   "- 正文只写进工具参数，聊天回复里最多一句引入语（如「已写好，点卡片打开」），绝不要在聊天里重复正文",
   "- 上下文里给出「用户当前打开的写作文档」时，用户说续写/接着写/往这篇补充时，用 action=append 传那个文档 id，content 只写新增的正文（与原文自然衔接，不要重复原文）；未给出当前文档时不要编造 id，仍用 create 新建",
   "- 正文必须完整可直接使用：符合用户要求的题材、篇幅与文风，段落之间用空行分隔，不要出现解释或元话语",
-  "- 问答、概念解释、翻译、写代码、闲聊等对话式内容不要调用本工具",
+  "- 问答、概念解释、翻译、闲聊等对话式内容不要调用本工具",
 ].join("\n")

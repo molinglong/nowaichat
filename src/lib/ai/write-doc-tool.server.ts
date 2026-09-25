@@ -1,7 +1,7 @@
 import { tool } from "ai"
 import { prisma } from "@/lib/db"
 import { MAX_WRITE_CONTENT_CHARS, normalizeWriteTitle } from "@/lib/write/doc-input"
-import { writeDocToolSchema, type WriteDocToolOutput } from "@/lib/ai/write-doc-tool"
+import { writeDocToolSchema, looksLikeHtmlPage, type WriteDocToolOutput } from "@/lib/ai/write-doc-tool"
 
 /**
  * write_document 工具工厂（服务端专用，依赖 prisma；勿从客户端组件 import）。
@@ -13,14 +13,21 @@ import { writeDocToolSchema, type WriteDocToolOutput } from "@/lib/ai/write-doc-
 export function createWriteDocTool(userId: string) {
   return tool({
     description:
-      "把成篇幅的正文（小说/故事/作文/演讲稿/文案/文稿）创建为用户的写作文档，" +
+      "把成篇幅的「人读文字成品」（小说/故事/作文/演讲稿/公众号文章/文案）创建为用户的写作文档，" +
       "在写作画布(/write)中打开继续编辑。用户要求写这类内容时调用；" +
-      "短回答、问答、翻译、代码等不要调用。",
+      "网页/HTML/代码等可执行产物改用 write_code，短回答、问答、翻译不要调用。",
     inputSchema: writeDocToolSchema,
     execute: async ({ action, docId, title, content }): Promise<WriteDocToolOutput> => {
       const body = content.trim()
       if (!body) {
         return { ok: false, message: "正文内容为空" }
+      }
+      // 误路由兜底：HTML 网页源码不应进写作画布（高频误用，提示模型改道 write_code）
+      if (looksLikeHtmlPage(body)) {
+        return {
+          ok: false,
+          message: "检测到这是网页/HTML 源码，属于代码产物：请改用 write_code 工具创建代码文档，不要用 write_document",
+        }
       }
       try {
         if (action === "append") {
