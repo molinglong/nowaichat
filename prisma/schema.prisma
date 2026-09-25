@@ -54,6 +54,7 @@ model User {
   questions      Question[]
   todos         Todo[]
   writeDocs     WriteDoc[]
+  codeDocs      CodeDoc[]
   amapKey       AmapKey?
   apiTokens     ApiToken[]
 }
@@ -609,6 +610,30 @@ model WriteDoc {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, updatedAt])
+}
+
+// ===================== 代码编辑器(CodeDoc) =====================
+// 独立于写作画布的代码文档存储:正文为代码文本,language 标识语言(typescript/python/...).
+// CRUD 走 /api/code/docs;AI 改代码片段走 code_edit 工具 + Diff 审查(客户端拦截).
+// charCount 冗余存储:列表页免拉全文即可显示字数.
+// conversationId:产生该代码的对话(write_code 工具落库时写入)——代码列表按
+// 会话聚合展示;可空:迁移前存量/未知来源文档无归属,不出现在任何会话列表
+// (仍可被 code_edit 按 docId 修改,数据库层面不受影响)。
+model CodeDoc {
+  id             String   @id @default(cuid())
+  userId         String
+  title          String   @default("未命名")
+  content        String   @default("")
+  language       String   @default("typescript")
+  charCount      Int      @default(0)
+  conversationId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@index([conversationId, updatedAt])
 }
 
 // ===================== API 令牌(ApiToken) =====================
