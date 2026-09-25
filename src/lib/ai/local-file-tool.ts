@@ -264,10 +264,15 @@ export function toLocalFileView(input: unknown): LocalFileView {
 export function createLocalFileTool() {
   return tool({
     description:
-      "在用户授权的本地工作区文件夹内管理与分析文件(仅桌面客户端可用):生成/写入(create)、" +
-      "删除到回收站(delete,需用户确认)、读取文本内容(read,支持行范围)、列出目录(list)、" +
-      "精确替换文本(edit)、移动/重命名(move)、执行 PowerShell 命令(exec,只读白名单自动/其余需确认)、" +
-      "递归目录树概览(overview)、跨文件搜索关键词(search)。分析项目结构或定位代码时优先用 overview+search。",
+      "在用户授权的本地工作区文件夹内管理文件(仅桌面客户端可用)。" +
+      "【主场景】代码与机器可读文件:HTML/CSS/JS/TS/React/Vue/Svelte 等网页/前端、" +
+      "Python/Rust/Go/Java 等任意编程语言、配置文件(json/yaml/toml/ini/.env)、脚本(.sh/.ps1/.sql)、Markdown 报告等。" +
+      "动作:生成/写入(create)、删除到回收站(delete,需用户确认)、读取文本(read,支持行范围与 outline 骨架)、" +
+      "列出目录(list)、精确替换文本(edit)、移动/重命名(move)、执行 PowerShell 命令(exec,只读白名单自动/其余需确认)、" +
+      "递归目录树概览(overview)、跨文件搜索关键词(search)。" +
+      "【边界】纯文字成品（小说/故事/作文/公众号文章）走 write_document;" +
+      "代码/网页产物默认走 write_code（代码编辑器，可再导出到工作区），本工具的 create 留给" +
+      "用户明确要求写入本地工作区文件（或对已有文件增删改查）的场景。",
     inputSchema: localFileInputSchema,
   })
 }
@@ -278,8 +283,17 @@ export function createLocalFileTool() {
 export const LOCAL_FILE_TOOL_PROMPT: string = [
   "## 本地文件操作（local_file 工具，仅桌面客户端）",
   "- 你已获用户授权,可在其本地「工作区」文件夹内读写、整理文件——这是对用户机器上真实文件的操作,务必谨慎、如实。",
-  "- path 一律用相对工作区根目录的相对路径(如 notes/plan.md),不要用盘符或绝对路径,不要用 .. 越出工作区;越界或指向系统目录会被拒绝。",
-  "- create:把要写入的完整文本放进 content(UTF-8 纯文本),同名文件会被覆盖。适合导出对话、生成文档/代码/清单等。",
+  "- path 一律用相对工作区根目录的相对路径(如 notes/plan.md、index.html、src/App.tsx)," +
+    "不要用盘符或绝对路径,不要用 .. 越出工作区;越界或指向系统目录会被拒绝。",
+  "- create【场景】用户明确要求把内容写成本地工作区文件时:代码文件(HTML/CSS/JS/TS/Python 等任意编程语言)、" +
+    "配置文件(json/yaml/toml/ini/.env 等)、脚本文件(.sh/.ps1/.sql)、Markdown 报告/技术文档——" +
+    "把要写入的完整文本放进 content(UTF-8 纯文本),同名文件会被覆盖（弹确认卡,批准才写入）。",
+  "- 与 write_document / write_code 的明确边界(高频误路由,务必看清):" +
+    "本工具操作的是用户本地工作区的「真实文件」,用户只说「写个主页/网页/脚本/代码」" +
+    "而未提保存位置时,默认走 write_code(代码编辑器,可再导出到工作区),不要用本工具的 create;" +
+    "用户明确要求写入本地文件(如「保存到我的文件夹」「在工作区创建 xxx.html」" +
+    "「改一下工作区里的 a.py」)或需要对已有文件增删改查、分析项目时才用本工具;" +
+    "「人读的文字成品」(小说/故事/作文/演讲稿/公众号文章/朋友圈短文等)走写作画布的 write_document。",
   "- delete:界面会弹出确认卡片,用户点「批准」后才真正执行(移入回收站,可还原);若收到 denied 结果说明用户拒绝,不要重试删除,尊重用户决定。",
   "- read:读取文本文件内容(单次输出上限 64KB);二进制/非 UTF-8 文件会失败。大文件先用 mode:'outline' 拿结构骨架(结构行+行号,一次看清全文件),再按行号用 offset/limit(单页上限 800 行)精读目标段落;结果带 nextOffset 说明后面还有内容,需要时从该行继续读;不要盲目通读整个文件。",
   "- list:列出目录的单层内容(名称/类型/大小);path 传空字符串表示列工作区根目录。",

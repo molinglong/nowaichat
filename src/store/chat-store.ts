@@ -34,6 +34,12 @@ interface ChatState {
   sidebarOpen: boolean
   toggleSidebar: () => void
   setSidebarOpen: (open: boolean) => void
+  /** 编辑器面板(写作画布/代码)打开前侧边栏的展开状态,null=当前无面板占用。
+   *  面板打开时自动折叠侧边栏(否则中栏被两侧夹击),面板全关时恢复;
+   *  用户在面板打开期间手动切换侧边栏即接管控制权(清空,关闭面板不再自动恢复)。
+   *  纯内存不落 localStorage:面板状态本身不持久化,刷新后面板已关,
+   *  侧边栏由 getInitialSidebarOpen 回到用户偏好即可。 */
+  prePanelSidebarOpen: boolean | null
   /** 客户端是否已完成 hydrate. 只在第一次客户端渲染完成后翻为 true,
    *  跨 layout 跳转时 Sidebar 重新挂载但 hydrated 仍为 true, 避免 "先展开再收起" 闪烁. */
   hydrated: boolean
@@ -96,10 +102,30 @@ interface ChatState {
   markConversationRead: (conversationId: string) => void
   /** 删除会话时同步清理已读记录 */
   removeConversationRead: (conversationId: string) => void
-  /** 聊天内嵌写作画布面板:当前打开的文档 id,null=关闭(豆包式右侧滑出,不跳转页面) */
+  /** 聊天内嵌写作画布面板:当前打开的文档 id,null=关闭(豆包式右侧滑出,不跳转页面)。
+   *  与代码编辑器面板互斥(同位置滑出,同时只留一个)。 */
   writePanelDocId: string | null
   openWritePanel: (docId: string) => void
   closeWritePanel: () => void
+  /** 本地文件编辑器面板:当前打开的工作区相对路径,null=关闭(与写作画布同款右侧滑出)。
+   *  diff=true 时以「审查模式」打开:DiffEditor 左侧展示磁盘现状,右侧为编辑缓冲。 */
+  editorFile: { path: string; diff: boolean } | null
+  openEditor: (path: string, diff?: boolean) => void
+  closeEditor: () => void
+  /** 聊天内嵌代码编辑器面板:右侧滑出(与写作画布同款)。
+   *  codePanelOpen=面板开合;codePanelDocId=当前打开的 CodeDoc id(null=面板开着但无文档,
+   *  空态引导)。文档由聊天中的 write_code 工具产生,无手动新建入口。
+   *  独立于写作画布,专门写代码;AI 改代码片段时通过 codePendingDiff 进入 Diff 审查模式。
+   *  与写作画布面板互斥(打开时自动收起写作画布,但不清 codePendingDiff:审查建议保留)。 */
+  codePanelOpen: boolean
+  codePanelDocId: string | null
+  /** 打开代码面板;docId 缺省=打开空面板(当前会话无代码产物时顶栏入口用) */
+  openCodePanel: (docId?: string) => void
+  closeCodePanel: () => void
+  /** AI code_edit 工具产出的待审查 Diff:original=原文,modified=AI 版本。
+   *  docId 必须匹配当前打开文档,匹配则编辑器切 Diff 模式,用户采纳/放弃后清空。 */
+  codePendingDiff: { docId: string; original: string; modified: string } | null
+  setCodePendingDiff: (d: { docId: string; original: string; modified: string } | null) => void
   /** 键盘导航(j/k)选中的消息 ID,null 表示未选中任何消息 */
   focusedMessageId: string | null
   setFocusedMessageId: (id: string | null) => void
@@ -133,6 +159,9 @@ const getInitialSidebarOpen = (): boolean => {
 }
 
 const storeInitializer: StateCreator<ChatState> = (set) => ({
+  // 两个右侧编辑器面板互斥:同位置(z-[80] 右侧滑出)叠加会互相遮挡,只保留最近打开的一个。
+  // 打开面板时同步折叠侧边栏(记住原状态,面板全关时恢复),避免中栏被左右夹击
+  prePanelSidebarOpen: null,
   sidebarOpen: typeof window !== 'undefined' ? getInitialSidebarOpen() : true,
   hydrated: false,
   setHydrated: (v) => set({ hydrated: v }),
@@ -142,13 +171,15 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
       if (typeof window !== 'undefined') {
         localStorage.setItem('chat:sidebarOpen', String(next))
       }
-      return { sidebarOpen: next }
+      // 手动切换 = 接管控制权,清掉面板占用的恢复记忆
+      return { sidebarOpen: next, prePanelSidebarOpen: null }
     }),
   setSidebarOpen: (open) => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('chat:sidebarOpen', String(open))
     }
-    set({ sidebarOpen: open })
+    // 手动设置 = 接管控制权(同 toggleSidebar)
+    set({ sidebarOpen: open, prePanelSidebarOpen: null })
   },
   currentConversationId: null,
   setCurrentConversationId: (id) => set({ currentConversationId: id }),
@@ -235,9 +266,61 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
       return { lastReadAt: next }
     })
   },
+  // 两个右侧编辑器面板互斥:同位置(z-[80] 右侧滑出)叠加会互相遮挡,只保留最近打开的一个
   writePanelDocId: null,
-  openWritePanel: (docId) => set({ writePanelDocId: docId }),
-  closeWritePanel: () => set({ writePanelDocId: null }),
+  openWritePanel: (docId) =>
+    set((state) => {
+      const patch: Partial<ChatState> = { writePanelDocId: docId, codePanelDocId: null }
+      // 首个面板打开且侧边栏展开中:折叠并记住(手动接管过则 prePanelSidebarOpen 已非 null,不重复记)
+      if (state.prePanelSidebarOpen === null && state.sidebarOpen) {
+        patch.prePanelSidebarOpen = true
+        patch.sidebarOpen = false
+      }
+      return patch
+    }),
+  closeWritePanel: () =>
+    set((state) => {
+      const patch: Partial<ChatState> = { writePanelDocId: null }
+      // 面板全关:恢复打开前的侧边栏状态
+      if (state.prePanelSidebarOpen !== null) {
+        patch.sidebarOpen = state.prePanelSidebarOpen
+        patch.prePanelSidebarOpen = null
+      }
+      return patch
+    }),
+  editorFile: null,
+  openEditor: (path, diff = false) => set({ editorFile: { path, diff } }),
+  closeEditor: () => set({ editorFile: null }),
+  codePanelOpen: false,
+  codePanelDocId: null,
+  openCodePanel: (docId) =>
+    set((state) => {
+      const patch: Partial<ChatState> = {
+        codePanelOpen: true,
+        codePanelDocId: docId ?? null,
+        writePanelDocId: null,
+      }
+      if (state.prePanelSidebarOpen === null && state.sidebarOpen) {
+        patch.prePanelSidebarOpen = true
+        patch.sidebarOpen = false
+      }
+      return patch
+    }),
+  closeCodePanel: () =>
+    set((state) => {
+      const patch: Partial<ChatState> = {
+        codePanelOpen: false,
+        codePanelDocId: null,
+        codePendingDiff: null,
+      }
+      if (state.prePanelSidebarOpen !== null) {
+        patch.sidebarOpen = state.prePanelSidebarOpen
+        patch.prePanelSidebarOpen = null
+      }
+      return patch
+    }),
+  codePendingDiff: null,
+  setCodePendingDiff: (d) => set({ codePendingDiff: d }),
   focusedMessageId: null,
   setFocusedMessageId: (id) => set({ focusedMessageId: id }),
   replyingTo: null,

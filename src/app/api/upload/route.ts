@@ -11,28 +11,55 @@ import {
   sweepOrphanUploadsThrottled,
 } from "@/lib/uploads"
 import { prisma } from "@/lib/db"
-import { parsePdf, parseTextFile } from "@/lib/file-parser"
+import { monitor } from "@/lib/monitor"
+import {
+  parsePdf,
+  parseTextFile,
+  parseXlsx,
+  parseDocx,
+  parseHtmlText,
+} from "@/lib/file-parser"
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-// 支持图片、纯文本与 PDF;文本类扩展名兜底(Windows 下 .md/.json 可能被判为 octet-stream)
-const ALLOWED_TYPE_PREFIXES = ["image/", "text/"]
+// 支持图片、纯文本、PDF、Excel、Word、HTML;文本类扩展名兜底(Windows 下 .md/.json 可能被判为 octet-stream)
 const EXTRA_MIME_TYPES = ["application/pdf", "application/json"]
 const TEXT_EXT_FALLBACK = new Set([".txt", ".md", ".markdown", ".csv", ".log", ".json"])
 // 可在浏览器上下文执行的类型一律拒绝(存储型 XSS 防线之一;响应层另有 CSP sandbox 兜底)。
 // MIME 与扩展名双重校验:防改后缀绕过 MIME 检查,也防嗅探。
-const BLOCKED_MIME_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml"])
+// 注意:text/html 与 .html/.htm 不在此列——它们走解析型上传,但落盘时强制改写为 .txt,
+// 磁盘上永远不存在 .html 文件,/uploads 无从以 text/html 渲染(XSS 面为零)
+const BLOCKED_MIME_TYPES = new Set(["image/svg+xml", "application/xhtml+xml"])
 const BLOCKED_EXTENSIONS = new Set([
-  ".html", ".htm", ".xhtml", ".xht", ".svg", ".xml", ".xsl", ".xslt",
+  ".xhtml", ".xht", ".svg", ".xml", ".xsl", ".xslt",
   ".js", ".mjs", ".cjs", ".jse", ".hta", ".htc", ".swf",
 ])
 
-/** 归类上传文件:图片 / 文本 / PDF;不支持返回 null */
-function resolveKind(mimeType: string, fileName: string): "image" | "text" | "pdf" | null {
+/** 归类上传文件:图片 / 文本 / PDF / Excel / Word / HTML;不支持返回 null */
+function resolveKind(
+  mimeType: string,
+  fileName: string
+): "image" | "text" | "pdf" | "sheet" | "docx" | "html" | null {
   const ext = path.extname(fileName).toLowerCase()
   // 先拦可执行/标记类类型(黑名单优先于前缀放行)
   if (BLOCKED_MIME_TYPES.has(mimeType) || BLOCKED_EXTENSIONS.has(ext)) return null
   if (mimeType.startsWith("image/")) return "image"
   if (mimeType === "application/pdf") return "pdf"
+  if (
+    (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mimeType === "application/vnd.ms-excel" ||
+      (mimeType === "application/octet-stream" && (ext === ".xlsx" || ext === ".xls"))) &&
+    (ext === ".xlsx" || ext === ".xls")
+  ) {
+    return "sheet"
+  }
+  if (
+    (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      (mimeType === "application/octet-stream" && ext === ".docx")) &&
+    ext === ".docx"
+  ) {
+    return "docx"
+  }
+  if (mimeType === "text/html" || ext === ".html" || ext === ".htm") return "html"
   if (
     mimeType.startsWith("text/") ||
     EXTRA_MIME_TYPES.includes(mimeType) ||
@@ -64,6 +91,7 @@ export async function POST(req: NextRequest) {
 
   // Validate size
   if (file.size > MAX_FILE_SIZE) {
+    monitor("upload_too_large", { size: file.size, name: file.name })
     return NextResponse.json(
       { error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB` },
       { status: 413 }
@@ -73,6 +101,7 @@ export async function POST(req: NextRequest) {
   // Validate type
   const kind = resolveKind(file.type, file.name)
   if (!kind) {
+    monitor("upload_unsupported", { mime: file.type, name: file.name })
     return NextResponse.json(
       { error: `Unsupported file type: ${file.type}` },
       { status: 415 }
@@ -81,7 +110,10 @@ export async function POST(req: NextRequest) {
 
   // Generate unique filename(扩展名白名单化,保证后续清理/删除接口可识别)
   const rawExt = path.extname(file.name) || ""
-  const ext = /^\.[A-Za-z0-9]{1,10}$/.test(rawExt) ? rawExt : ""
+  let ext = /^\.[A-Za-z0-9]{1,10}$/.test(rawExt) ? rawExt : ""
+  // HTML 原文件一律以 .txt 落盘:浏览器无从以 text/html 渲染(存储型 XSS 防线);
+  // originalName/mimeType 保留原值供前端识别,解析文本入库走中转站
+  if (kind === "html") ext = ".txt"
   const uniqueName = `${nanoid(12)}${ext}`
 
   // Ensure uploads directory exists
@@ -107,6 +139,15 @@ export async function POST(req: NextRequest) {
       const parsed = await parsePdf(buffer)
       parseText = parsed.text
       pageCount = parsed.pageCount ?? null
+      parseStatus = "done"
+    } else if (kind === "sheet") {
+      parseText = parseXlsx(buffer).text
+      parseStatus = "done"
+    } else if (kind === "docx") {
+      parseText = (await parseDocx(buffer)).text
+      parseStatus = "done"
+    } else if (kind === "html") {
+      parseText = parseHtmlText(buffer.toString("utf-8")).text
       parseStatus = "done"
     }
   } catch (err) {
@@ -139,6 +180,8 @@ export async function POST(req: NextRequest) {
 
   // 顺手清理孤儿文件(上传了但从未发送、超过 24 小时未被引用的文件;1 小时节流)
   sweepOrphanUploadsThrottled()
+
+  monitor("upload_ok", { kind, size: file.size, parseStatus, charCount: parseText?.length ?? null })
 
   return NextResponse.json({
     url: `/uploads/${uniqueName}`,
@@ -187,6 +230,7 @@ export async function DELETE(req: NextRequest) {
   // 已被消息引用的文件不允许单独删除(避免破坏历史消息展示)
   const referenced = await collectReferencedUploadNames()
   if (referenced.has(name)) {
+    monitor("upload_delete_conflict", { file: name })
     return NextResponse.json(
       { error: "File is referenced by a message and cannot be deleted" },
       { status: 409 }

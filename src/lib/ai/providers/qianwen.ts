@@ -1,34 +1,27 @@
-import { createOpenAI } from "@ai-sdk/openai"
+﻿import { createOpenAI } from "@ai-sdk/openai"
 import { ProviderDefinition } from "../types"
+import { createReasoningAwareFetch } from "../openai-reasoning-adapter"
 
+// 模型规格依据百炼模型文档(2026-09 实测):
+// - qwen3.8 系列:多模态(Image/Text/Video 输入),1M 上下文,思考/非思考融合,默认开启思考
+// - qwen3.7-plus:纯文本,1M 上下文(账号免费额度耗尽时调用返回 403 FreeTierOnly)
 export const qianwenProvider: ProviderDefinition = {
   id: "qianwen",
   name: "通义千问",
   models: [
-    // 通义千问主力模型
-    { id: "qwen-max", name: "Qwen Max", provider: "qianwen", contextWindow: 32000, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen-plus", name: "Qwen Plus", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen-turbo", name: "Qwen Turbo", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen-long", name: "Qwen Long", provider: "qianwen", contextWindow: 10000000, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    // 视觉模型
-    { id: "qwen-vl-max", name: "Qwen VL Max", provider: "qianwen", contextWindow: 32000, supportsVision: true, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen-vl-plus", name: "Qwen VL Plus", provider: "qianwen", contextWindow: 32000, supportsVision: true, supportsFiles: false, supportsReasoning: false },
-    // Qwen 2.5 开源系列
-    { id: "qwen2.5-72b-instruct", name: "Qwen2.5-72B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen2.5-32b-instruct", name: "Qwen2.5-32B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen2.5-14b-instruct", name: "Qwen2.5-14B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen2.5-7b-instruct", name: "Qwen2.5-7B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    { id: "qwen2.5-coder-32b-instruct", name: "Qwen2.5 Coder-32B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: false },
-    // 推理模型
-    { id: "qwq-32b-preview", name: "QwQ-32B", provider: "qianwen", contextWindow: 131072, supportsVision: false, supportsFiles: false, supportsReasoning: true },
+    { id: "qwen3.8-flash", name: "Qwen3.8 Flash", provider: "qianwen", contextWindow: 1000000, supportsVision: true, supportsFiles: false, supportsReasoning: true },
+    { id: "qwen3.8-max", name: "Qwen3.8 Max", provider: "qianwen", contextWindow: 1000000, supportsVision: true, supportsFiles: false, supportsReasoning: true },
+    { id: "qwen3.7-plus", name: "Qwen3.7 Plus", provider: "qianwen", contextWindow: 1000000, supportsVision: false, supportsFiles: false, supportsReasoning: true },
   ],
   createProvider: (apiKey: string) => {
     const openai = createOpenAI({
       apiKey,
-      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      // DashScope 兼容模式的 /responses 端点对部分模型名支持不全(报
+      // "Unsupported model"),统一走 Chat Completions 端点。
+      // 思维链适配(reasoning_content 包装 + 思考开关)复用共享适配层
+      fetch: createReasoningAwareFetch(),
     })
-    // DashScope 兼容模式的 /responses 端点对部分模型名支持不全(如 qwen-max
-    // 报 "Unsupported model"),统一走 Chat Completions 端点
     return (modelId: string) => openai.chat(modelId)
   },
 }

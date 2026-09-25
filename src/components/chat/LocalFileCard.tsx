@@ -7,6 +7,7 @@ import {
   ArrowRightLeft,
   Check,
   ExternalLink,
+  FileCode2,
   FilePlus2,
   FileText,
   FolderOpen,
@@ -53,6 +54,8 @@ interface LocalFileCardProps {
     approved: boolean,
     decision: LocalFileDecision
   ) => void
+  /** 在编辑器中打开(Monaco 侧栏面板);缺省(网页端/历史回放)时不显示按钮 */
+  onOpenEditor?: (path: string) => void
 }
 
 const CONTAINER = 'rounded-lg border border-line/60 bg-surface-muted overflow-hidden text-xs'
@@ -70,7 +73,7 @@ const ACTION_META: Record<string, { verb: string; icon: typeof FilePlus2 }> = {
   search: { verb: '搜索', icon: Search },
 }
 
-function LocalFileCardInner({ view, onDecision }: LocalFileCardProps) {
+function LocalFileCardInner({ view, onDecision, onOpenEditor }: LocalFileCardProps) {
   const info = useMemo(() => toLocalFileView(view.input), [view.input])
   const [busy, setBusy] = useState(false)
 
@@ -275,6 +278,16 @@ function LocalFileCardInner({ view, onDecision }: LocalFileCardProps) {
             )}
             {!failed && !denied && !isDelete && (relPath || (info.action === 'move' && info.toPath)) && (
               <div className="mt-1.5 flex items-center gap-1.5">
+                {onOpenEditor && getIsTauri() && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenEditor(info.action === 'move' && info.toPath ? info.toPath : relPath)}
+                    className="inline-flex items-center gap-1 rounded-md border border-line/60 px-2 py-1 text-[11px] text-content-secondary hover:bg-surface-subtle hover:text-content-primary transition-colors"
+                  >
+                    <FileCode2 className="w-3 h-3" />
+                    在编辑器中打开
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleReveal}

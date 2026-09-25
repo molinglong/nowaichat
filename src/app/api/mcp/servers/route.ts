@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db'
 import { encrypt } from '@/lib/crypto'
 import { assertSafeUrl } from '@/lib/ssrf'
 import { slugifyServerName, MCP_MAX_SERVERS } from '@/lib/ai/mcp/mcp-constants'
+import { monitor } from '@/lib/monitor'
 
 /**
  * MCP server 管理接口（设置中心「MCP 工具」分区）。
@@ -86,6 +87,7 @@ export async function POST(request: Request) {
     }
     const blocked = assertSafeUrl(url)
     if (blocked) {
+      monitor('mcp_ssrf_blocked', { url: url.slice(0, 120) })
       return NextResponse.json({ error: blocked }, { status: 400 })
     }
 
@@ -97,6 +99,7 @@ export async function POST(request: Request) {
 
     const count = await prisma.mcpServer.count({ where: { userId } })
     if (count >= MCP_MAX_SERVERS) {
+      monitor('mcp_limit_hit', { count })
       return NextResponse.json(
         { error: `最多添加 ${MCP_MAX_SERVERS} 个 MCP 服务` },
         { status: 400 }
@@ -108,6 +111,7 @@ export async function POST(request: Request) {
       select: { id: true },
     })
     if (dup) {
+      monitor('mcp_dup_name', { name })
       return NextResponse.json({ error: '已存在同名服务' }, { status: 409 })
     }
 
@@ -127,6 +131,7 @@ export async function POST(request: Request) {
       },
       select: LIST_SELECT,
     })
+    monitor('mcp_created', { id: record.id, slug: record.slug })
     return NextResponse.json({ server: record })
   } catch (err) {
     console.error('[mcp/servers] POST failed:', err)
@@ -221,6 +226,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
     await prisma.mcpServer.delete({ where: { id: body.id } })
+    monitor('mcp_deleted', { id: body.id })
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[mcp/servers] DELETE failed:', err)

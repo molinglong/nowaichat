@@ -21,6 +21,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # 本地文件能力:系统目录选择对话框(用户授权工作区根)
 tauri-plugin-dialog = "2"
+# 系统通知:AI 回复完成后弹系统级通知(仅窗口失焦时触发)
+tauri-plugin-notification = "2"
 # 系统窗口材质:Win11 Mica(云母) / Win10 Acrylic(亚克力),客户端专属毛玻璃
 window-vibrancy = "0.5"
 serde = { version = "1", features = ["derive"] }

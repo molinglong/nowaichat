@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, capabilities })
   } catch (err) {
     const message = err instanceof Error ? err.message : "未知错误"
+    const stack = err instanceof Error && err.stack ? `\n${err.stack.split('\n').slice(1).join('\n')}` : ''
     const details = err && typeof err === "object" && "responseBody" in err
       ? String(err.responseBody)
       : undefined
@@ -89,7 +90,9 @@ export async function POST(req: NextRequest) {
       ? Number(err.statusCode)
       : undefined
     const error = details && !message.includes(details) ? `${message}: ${details}` : message
-    console.error("[custom-model] Test error:", err)
+    // modelId from body (always available before try block)
+    const testModelId = id ? `saved:${id}` : (body as any).modelId ?? 'unknown'
+    console.error(`[custom-model] Test error for modelId=${testModelId}:`, message, stack)
     return NextResponse.json(
       { ok: false, error },
       { status: statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502 }

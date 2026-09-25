@@ -15,9 +15,10 @@ export function toBigrams(text: string): Set<string> {
 
 /**
  * 选择注入系统提示词的记忆（控制每次请求的固定 token 开销）：
- * - 身份信息(user_info)与手动添加的记忆始终注入
+ * - 身份信息(user_info)、偏好(preference)与手动添加的记忆始终注入
+ *   ——这类信息在大多数对话中都可能用上，bigram 命中率太低会漏注入
  * - 其余记忆仅在内容与当前消息有实际相关度(bigram 命中)时注入
- * - 没有命中时用最近更新的少量记忆兜底,避免宽泛消息完全失去上下文
+ * - 没有命中时用最近更新的记忆兜底填满配额,避免宽泛消息完全失去上下文
  */
 export function getRelevantMemories(
   memories: Memory[],
@@ -26,7 +27,8 @@ export function getRelevantMemories(
 ): Memory[] {
   if (memories.length === 0) return []
 
-  const isAlways = (m: Memory) => m.source === "manual" || m.category === "user_info"
+  const isAlways = (m: Memory) =>
+    m.source === "manual" || m.category === "user_info" || m.category === "preference"
   const always = memories.filter(isAlways)
   const rest = memories.filter((m) => !isAlways(m))
 
@@ -52,14 +54,15 @@ export function getRelevantMemories(
     .slice(0, quota)
     .map((x) => x.m)
 
-  // 兜底：没有命中时保留最近更新的 3 条
+  // 兜底：命中不足配额时用最近更新的记忆填满，避免大量记忆因
+  // 字面 bigram 不命中（语义相关但措辞不同）而完全失去注入机会
   const fill = quota - matched.length
   const recent =
     fill > 0
       ? rest
           .filter((m) => !matched.includes(m))
           .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-          .slice(0, Math.min(3, fill))
+          .slice(0, fill)
       : []
 
   return [...always, ...matched, ...recent]

@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { deleteReferencedFiles } from '@/lib/uploads'
 import { denyIfEphemeral } from '@/lib/ephemeral'
+import { monitor } from '@/lib/monitor'
 
 /**
  * 临时聊天隔离区管理端点(仅正常模式可用,临时模式 403)。
@@ -107,6 +108,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'restore') {
+    monitor('ephemeral_action', { action, id })
     await prisma.conversation.update({
       where: { id },
       data: { isEphemeral: false },
@@ -115,6 +117,7 @@ export async function POST(req: NextRequest) {
   }
 
   // delete: 与 conversations/[id] DELETE 同一套附件清理逻辑
+  monitor('ephemeral_action', { action, id })
   const messages = await prisma.message.findMany({
     where: { conversationId: id, attachments: { not: null } },
     select: { attachments: true },

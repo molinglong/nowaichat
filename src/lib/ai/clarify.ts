@@ -30,6 +30,12 @@ export const clarifyInputSchema = z.object({
           .max(4)
           .describe("2-4 个预设选项，覆盖最常见情形；写具体事实而非抽象词"),
         allowCustom: z.boolean().describe("该问题是否允许用户自由填写补充答案"),
+        multiSelect: z
+          .boolean()
+          .optional()
+          .describe(
+            "选项是否可多选(各选项不互斥、可同时成立时 true,如并列偏好/多项需求);缺省为单选"
+          ),
       })
     )
     .min(1)
@@ -44,6 +50,8 @@ export interface ClarifyQuestionView {
   question: string
   options: string[]
   allowCustom: boolean
+  /** 该题选项是否可多选(历史消息缺该字段时回退 false 单选) */
+  multiSelect: boolean
 }
 
 /**
@@ -65,6 +73,7 @@ export function toClarifyQuestions(input: unknown): ClarifyQuestionView[] {
       question,
       options: options.filter((o): o is string => typeof o === "string" && !!o.trim()),
       allowCustom: (q as { allowCustom?: unknown }).allowCustom === true,
+      multiSelect: (q as { multiSelect?: unknown }).multiSelect === true,
     })
   }
   return out
@@ -84,7 +93,8 @@ export function createClarifyTool() {
   return tool({
     description:
       "向用户提出澄清问题。当用户的需求缺少关键信息、按现有信息回答会明显偏离预期时调用；" +
-      "一次提出全部问题（1-3 个），每个问题附带 2-4 个用户可直接点选的选项。",
+      "一次提出全部问题（1-3 个），每个问题附带 2-4 个用户可直接点选的选项；" +
+      "选项彼此不互斥、可同时成立的题目把 multiSelect 设为 true 支持多选。",
     inputSchema: clarifyInputSchema,
   })
 }
@@ -97,6 +107,7 @@ export const CLARIFY_TOOL_PROMPT: string = [
   "## 澄清提问（ask_clarification 工具）",
   "- 用户提出任务/决策/推荐/写作类请求，且缺少会实质影响结果的关键信息（如预算、对象、场景、偏好、格式）时，调用 ask_clarification 一次提出 1-3 个问题，等用户回答后再正式作答",
   "- 每题给 2-4 个具体可点的选项并覆盖常见情形；选项写具体事实（如\"发给直属领导\"），不写抽象词（如\"工作用途\"）",
+  "- 选项彼此不互斥、可同时成立时（并列偏好/多项需求，如\"想加强哪些模块\"），把该题 multiSelect 设为 true 允许用户多选；互斥的单选题保持默认",
   "- 调用工具时不要同时输出长篇正文，最多一句引入语；问题用用户提问所用的语言",
   "- 事实/知识/代码/翻译类问题、信息已足够、或任务可低成本返工时直接回答，不调用本工具",
   "- 收到用户的回答后直接基于答案执行任务，不再重复提问（除非答案本身引入新的关键歧义，此时最多再问一轮）",

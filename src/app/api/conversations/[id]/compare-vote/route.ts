@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { ephemeralScope } from '@/lib/ephemeral'
+import { monitor } from '@/lib/monitor'
 
 /**
  * POST /api/conversations/[id]/compare-vote
@@ -62,6 +63,7 @@ export async function POST(
     },
     update: { votedModel: modelId },
   })
+  monitor('compare_vote', { conversationId: id, groupId: vote.groupId, votedModel: vote.votedModel })
 
   return NextResponse.json({ ok: true, groupId: vote.groupId, votedModel: vote.votedModel })
 }

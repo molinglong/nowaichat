@@ -57,6 +57,15 @@ async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>):
   return tauriInvoke<T>(cmd, args)
 }
 
+/** 回复完成通知开关 localStorage key('0'=关,缺省开) */
+const NOTIFY_ON_REPLY_KEY = 'chat:notifyOnReply'
+
+/** 通知正文摘要:多行 Markdown 压平成一行,超出 80 字截断 */
+function squashForNotification(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat
+}
+
 export const tauri = {
   isTauri: false, // safe fallback; use getIsTauri() for runtime checks
 
@@ -173,4 +182,48 @@ export const tauri = {
       cleanup?.()
     }
   },
+
+  /**
+   * AI 回复完成的系统通知(仅 Tauri 客户端)。
+   * 触发条件:通知开关开启 + 窗口失焦(用户正看着窗口时不打扰)。
+   * Web 端 no-op;系统通知权限未授予时静默放弃,不阻塞聊天主流程。
+   */
+  async notifyReplyDone(title: string, body: string) {
+    if (!getIsTauri()) return
+    if (!getNotifyOnReply()) return
+    try {
+      // document.hasFocus():WebView 失焦(最小化/被其他窗口遮挡/切走应用)时为 false,
+      // 与 TauriVisualFX 的 focus 监听同语义,这里直接读文档焦点免维护全局状态
+      if (document.hasFocus()) return
+      const { isPermissionGranted, requestPermission, sendNotification } =
+        await import('@tauri-apps/plugin-notification')
+      let granted = await isPermissionGranted()
+      if (!granted) {
+        const permission = await requestPermission()
+        granted = permission === 'granted'
+      }
+      if (!granted) return
+      sendNotification({ title, body: squashForNotification(body) })
+    } catch (err) {
+      console.error('[tauri] notifyReplyDone failed:', err)
+    }
+  },
+}
+
+/** 回复完成通知是否开启(设置弹窗「聊天行为」开关,默认开) */
+export function getNotifyOnReply(): boolean {
+  try {
+    return localStorage.getItem(NOTIFY_ON_REPLY_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+/** 写入回复完成通知开关(设置弹窗切换) */
+export function setNotifyOnReply(enabled: boolean) {
+  try {
+    localStorage.setItem(NOTIFY_ON_REPLY_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
 }

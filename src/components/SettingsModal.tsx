@@ -8,10 +8,11 @@ import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MO
 import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
+import { detectModelCapabilities } from '@/lib/ai/model-capabilities'
 import { useChatStore } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel } from '@/lib/ai/style'
-import { useIsTauri } from '@/lib/tauri'
+import { useIsTauri, getNotifyOnReply, setNotifyOnReply } from '@/lib/tauri'
 import { pickWorkspaceDir, getWorkspaceDir, LOCAL_FILES_SYNC_KEY } from '@/lib/tauri-files'
 import { TAURI_GLASS_KEY, TAURI_GLASS_EVENT, getGlassEnabled } from '@/components/TauriVisualFX'
 import { toast } from '@/lib/toast'
@@ -95,6 +96,17 @@ interface ImageUsageStats {
   byDay: { date: string; count: number }[]
 }
 
+// 环中心数字紧凑格式：K/M/B 分级缩写（≥10 后省小数），控制字符数避免长数字撑出圆环
+function fmtCompactNum(n: number): string {
+  for (const [div, unit] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']] as const) {
+    if (n >= div) {
+      const v = n / div
+      return v >= 10 ? `${Math.round(v)}${unit}` : `${v.toFixed(1).replace(/\.0$/, '')}${unit}`
+    }
+  }
+  return n.toLocaleString()
+}
+
 // ── 用量「总览」tab ──────────────────────────────────────────────────────────
 // 升级为「图表主导」：聊天块 = Token 圆环（输入/输出）+ 模型消耗排行；生图块 = 模型饼图；活跃块 = 加大 sparkline。
 function OverviewTab({ usageStats }: { usageStats: UsageStats }) {
@@ -104,6 +116,8 @@ function OverviewTab({ usageStats }: { usageStats: UsageStats }) {
   const chatTotal = chatPrompt + chatCompletion
   const chatInputRatio = chatTotal > 0 ? chatPrompt / chatTotal : 0
   const chatOutputRatio = chatTotal > 0 ? chatCompletion / chatTotal : 0
+  // 环中心显示文案（紧凑缩写，按字符数自适应字号防溢出）
+  const chatTotalLabel = fmtCompactNum(chatTotal)
 
   // 聊天模型消耗排行（byModel 已按 totalTokens 排序，取 Top 5）
   const chatModelRanking = usageStats.chat.byModel.slice(0, 5)
@@ -112,6 +126,7 @@ function OverviewTab({ usageStats }: { usageStats: UsageStats }) {
   // 生图模型分布（byModel 已按 count 排序，取 Top 5）
   const imageModelRanking = usageStats.image.byModel.slice(0, 5)
   const imageTotal = usageStats.image.totals.count
+  const imageTotalLabel = fmtCompactNum(imageTotal)
   // 生图饼图配色（按排序固定色，与 sparkline 风格保持一致）
   const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#94a3b8']
 
@@ -189,12 +204,15 @@ function OverviewTab({ usageStats }: { usageStats: UsageStats }) {
                     strokeLinecap="butt"
                   />
                 </svg>
-                {/* 环中心数字 */}
+                {/* 环中心数字（紧凑缩写，5 字符以上缩字号防溢出） */}
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-sm font-mono font-semibold text-content-primary tabular-nums">
-                    {usageStats.chat.totals.totalTokens >= 10000
-                      ? `${(usageStats.chat.totals.totalTokens / 1000).toFixed(1)}K`
-                      : usageStats.chat.totals.totalTokens.toLocaleString()}
+                  <span
+                    className={cn(
+                      'font-mono font-semibold text-content-primary tabular-nums',
+                      chatTotalLabel.length >= 5 ? 'text-xs' : 'text-sm'
+                    )}
+                  >
+                    {chatTotalLabel}
                   </span>
                 </div>
               </>
@@ -297,10 +315,15 @@ function OverviewTab({ usageStats }: { usageStats: UsageStats }) {
                   })
                 })()}
               </svg>
-              {/* 环中心数字 */}
+              {/* 环中心数字（紧凑缩写，小环 4 字符以上即缩字号防溢出） */}
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-sm font-mono font-semibold text-content-primary tabular-nums">
-                  {imageTotal.toLocaleString()}
+                <span
+                  className={cn(
+                    'font-mono font-semibold text-content-primary tabular-nums',
+                    imageTotalLabel.length >= 4 ? 'text-xs' : 'text-sm'
+                  )}
+                >
+                  {imageTotalLabel}
                 </span>
               </div>
             </div>
@@ -641,6 +664,20 @@ export function SettingsModal({
         } catch {}
         // 本窗口的 TauriVisualFX 立即生效;其他窗口经 storage 事件跟进
         window.dispatchEvent(new Event(TAURI_GLASS_EVENT))
+        return next
+      })
+    }, [])
+
+    // 回复完成系统通知开关:仅桌面端有意义(依赖系统通知能力),偏好存 localStorage(默认开)
+    const [notifyOnReply, setNotifyOnReplyState] = useState(true)
+    useEffect(() => {
+      if (!inTauri) return
+      setNotifyOnReplyState(getNotifyOnReply())
+    }, [inTauri])
+    const handleToggleNotify = useCallback(() => {
+      setNotifyOnReplyState((v) => {
+        const next = !v
+        setNotifyOnReply(next)
         return next
       })
     }, [])
@@ -1132,6 +1169,9 @@ export function SettingsModal({
       return
     }
     setLoading(true)
+    // 预置模型覆盖记录：设置面板常驻挂载，useProviderModels 仅在挂载时拉一次，
+    // 每次打开设置时补拉，保证 AI 卡片（manage_provider_models）等外部入口的改动能同步进来
+    void fetchProviderOverrides()
     Promise.all([
       fetch('/api/providers').then((r) => r.json()),
       fetch('/api/keys').then((r) => r.json()),
@@ -1180,7 +1220,7 @@ export function SettingsModal({
         // 加载完成后再开启自动保存 effect（避免初次 setImage* 触发 PATCH）
         setTimeout(() => { imageSettingsLoadedRef.current = true }, 0)
       })
-  }, [settingsOpen, isEphemeral])
+  }, [settingsOpen, isEphemeral, fetchProviderOverrides])
 
   // 桌面端浮动窗口：isDesktop + 拖拽位置 (移动端抽屉不参与)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -5036,6 +5076,33 @@ export function SettingsModal({
                       </button>
                     </div>
 
+                    {/* 回复完成系统通知:仅桌面端;窗口失焦时 AI 回复完成弹系统通知 */}
+                    {inTauri && (
+                    <div className="flex items-center justify-between gap-3 py-2 border-t border-line/60">
+                      <div className="text-left min-w-0">
+                        <p className="text-xs text-content-secondary">回复完成通知</p>
+                        <p className="text-[11px] text-content-muted">窗口失焦时,AI 回复完成弹系统通知提醒</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={notifyOnReply}
+                        onClick={handleToggleNotify}
+                        className={cn(
+                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
+                          notifyOnReply ? 'bg-accent' : 'bg-surface-subtle'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
+                            notifyOnReply && 'translate-x-4'
+                          )}
+                        />
+                      </button>
+                    </div>
+                    )}
+
                     {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项;临时模式不渲染(依赖被 403 的 /api/settings/ai-control) */}
                     {!isEphemeral && (
                     <>
@@ -5429,16 +5496,15 @@ function PresetModelsManager({
                           value={form.modelId}
                           onChange={(e) => {
                             const newModelId = e.target.value
+                            // 智能选择：根据 modelId 关键词自动检测能力
+                            // （检测规则与 AI 确认卡片共用 model-capabilities，避免两处漂移）
+                            const detected = detectModelCapabilities(newModelId)
                             onFormChange({
                               ...form,
                               modelId: newModelId,
-                              // 智能选择：根据 modelId 关键词自动检测能力
-                              supportsVision: form.supportsVision ||
-                                /vision|vl|gpt-4o|claude.*3|qwen-vl|gemini|qwen2\.5|claude-sonnet|claude-opus|4o|vision-latest/i.test(newModelId),
-                              supportsReasoning: form.supportsReasoning ||
-                                /reasoning|r1|o1|o3|deepseek-r1|deepseek-reasoner|claude-3\.7|thinking|openai-o1|openai-o3/i.test(newModelId),
-                              supportsFiles: form.supportsFiles ||
-                                /file|code|coder/i.test(newModelId),
+                              supportsVision: form.supportsVision || detected.supportsVision,
+                              supportsReasoning: form.supportsReasoning || detected.supportsReasoning,
+                              supportsFiles: form.supportsFiles || detected.supportsFiles,
                             })
                           }}
                           placeholder="模型 ID（如 gpt-5）"

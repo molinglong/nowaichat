@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { createHash, randomBytes } from "crypto"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { monitor } from "@/lib/monitor"
 
 /**
  * API 令牌管理 —— 供设置页生成/撤销 Bearer Token（外部静态页调用 REST API 用）。
@@ -49,6 +50,7 @@ export async function POST(req: Request) {
     where: { userId: session.user.id, revokedAt: null },
   })
   if (activeCount >= 5) {
+    monitor("token_limit_hit", { activeCount })
     return NextResponse.json({ error: "有效令牌已达上限(5),请先撤销不用的令牌" }, { status: 400 })
   }
 
@@ -59,6 +61,7 @@ export async function POST(req: Request) {
     data: { userId: session.user.id, name, tokenHash },
     select: { id: true, name: true, createdAt: true },
   })
+  monitor("token_created", { id: token.id, nameLength: name.length })
 
   return NextResponse.json({ ...token, token: plaintext }, { status: 201 })
 }
@@ -80,9 +83,11 @@ export async function DELETE(req: Request) {
     select: { id: true },
   })
   if (!existing) {
+    monitor("token_revoke_denied", { id })
     return NextResponse.json({ error: "令牌不存在或已撤销" }, { status: 404 })
   }
 
   await prisma.apiToken.update({ where: { id }, data: { revokedAt: new Date() } })
+  monitor("token_revoked", { id })
   return NextResponse.json({ ok: true })
 }

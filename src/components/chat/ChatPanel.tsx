@@ -10,6 +10,8 @@ import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
 import { WriteDocPanel } from '@/components/write/WriteDocPanel'
+import { FileEditorPanel } from './FileEditorPanel'
+import { CodePanel } from '@/components/code/CodePanel'
 import { ChatPreviewPanel } from './ChatPreviewPanel'
 import { OutlineSidebar } from './OutlineSidebar'
 import { MaskPickerMenu } from './MaskPickerMenu'
@@ -25,7 +27,7 @@ import type { ModelDefinition } from '@/lib/ai/types'
 import { getBuiltinMask } from '@/lib/ai/builtin-masks'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import type { Attachment } from './FileUpload'
-import { getIsTauri } from '@/lib/tauri'
+import { getIsTauri, tauri } from '@/lib/tauri'
 import {
   writeFile as lfWriteFile,
   deleteFile as lfDeleteFile,
@@ -45,6 +47,10 @@ import {
   type LocalFileToolInput,
   type LocalFileToolOutput,
 } from '@/lib/ai/local-file-tool'
+import {
+  CODE_EDIT_TOOL_NAME,
+  type CodeEditToolOutput,
+} from '@/lib/ai/code-edit-tool'
 
 const MODEL_STORAGE_KEY = 'chat:selectedModel'
 const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
@@ -71,27 +77,28 @@ function getDateLine(): string {
 }
 
 /**
- * sendAutomaticallyWhen 判据:仅当最后一条 assistant 消息里存在“已回填结果”的 local_file 工具、
- * 全部 tool part 都已有 output、且最后一个 tool part 之后没有实质文本/推理(模型尚未据结果续答)
- * 时,才自动再发一次请求让模型收尾。模型续答产生文本后判据转 false,杜绝无限重发。
- * 不含 local_file 的普通对话恒 false,对既有流程零影响。
+ * sendAutomaticallyWhen 判据:仅当最后一条 assistant 消息里存在“已回填结果”的无 execute 客户端工具
+ * (local_file / code_edit)、全部 tool part 都已有 output、且最后一个 tool part 之后没有实质文本/推理
+ * (模型尚未据结果续答)时,才自动再发一次请求让模型收尾。模型续答产生文本后判据转 false,杜绝无限重发。
+ * 不含这两类工具的普通对话恒 false,对既有流程零影响。
  */
 function shouldContinueAfterLocalFile(messages: UIMessage[]): boolean {
   const last = messages[messages.length - 1]
   if (!last || last.role !== 'assistant') return false
   const parts = last.parts as Array<{ type?: string; state?: string; text?: string }>
-  let sawLocalFile = false
+  let sawClientTool = false
   let lastToolIdx = -1
   let allResolved = true
   for (let i = 0; i < parts.length; i++) {
     const t = parts[i].type ?? ''
     if (!t.startsWith('tool-')) continue
     lastToolIdx = i
-    if (t === `tool-${LOCAL_FILE_TOOL_NAME}`) sawLocalFile = true
+    if (t === `tool-${LOCAL_FILE_TOOL_NAME}` || t === `tool-${CODE_EDIT_TOOL_NAME}`)
+      sawClientTool = true
     const st = parts[i].state
     if (st !== 'output-available' && st !== 'output-error') allResolved = false
   }
-  if (!sawLocalFile || lastToolIdx < 0 || !allResolved) return false
+  if (!sawClientTool || lastToolIdx < 0 || !allResolved) return false
   // 最后一个 tool part 之后若已有正文/推理,说明模型已据结果续答,不再重发
   for (let i = lastToolIdx + 1; i < parts.length; i++) {
     const p = parts[i]
@@ -139,14 +146,18 @@ export function ChatPanel({
   autoSendText,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
-  // 写作画布/预览面板打开时桌面端压缩聊天区让位(与面板同宽并排,豆包式)
+  // 写作画布/预览面板/文件编辑器打开时桌面端压缩聊天区让位(与面板同宽并排,豆包式)
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
+  const editorOpen = useChatStore((s) => s.editorFile !== null)
+  const codePanelOpen = useChatStore((s) => s.codePanelOpen)
+  const openEditor = useChatStore((s) => s.openEditor)
   const [conversationId, setConversationId] = useState(initialConversationId)
 
   // 切换会话/新建对话时自动收起写作画布面板(含 remount 首跑):
   // 发送首条消息新建会话只更新内部 state,不改 props.initialConversationId,不会误关
   useEffect(() => {
     useChatStore.getState().closeWritePanel()
+    useChatStore.getState().closeCodePanel()
   }, [initialConversationId])
 
   // A 流式恢复: 页面加载时若历史里最后一条 assistant 消息带 streaming 标记,
@@ -303,16 +314,16 @@ export function ChatPanel({
     return () => window.removeEventListener('storage', onStorage)
   }, [localFilesQuery.refetch])
 
-  // 从 localStorage 恢复 webSearch 偏好
+  // 从 localStorage 恢复 webSearch 偏好(全局记忆:已有对话也恢复,切换会话/刷新不丢)
   useEffect(() => {
-    if (!initialConversationId && localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
+    if (localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
       setWebSearch(true)
     }
   }, [initialConversationId])
 
-  // 从 localStorage 恢复 MCP 工具偏好(默认启用,仅显式 false 时关闭)
+  // 从 localStorage 恢复 MCP 工具偏好(默认启用,仅显式 false 时关闭;已有对话也恢复)
   useEffect(() => {
-    if (!initialConversationId && localStorage.getItem(MCP_ENABLED_STORAGE_KEY) === 'false') {
+    if (localStorage.getItem(MCP_ENABLED_STORAGE_KEY) === 'false') {
       setMcpEnabled(false)
     }
   }, [initialConversationId])
@@ -401,22 +412,25 @@ export function ChatPanel({
     setConversationId((prev) => prev ?? convId)
   }, [])
 
-  // On mount, for new chats, load the last selected model and deep think preference from localStorage
+  // On mount, load last selected model (new chats only) and deepThink preference (global).
+  // deepThink 恢复不受 initialConversationId 限制:已有对话切换/刷新后同样保留用户偏好。
   useEffect(() => {
     if (!initialConversationId) {
       const saved = localStorage.getItem(MODEL_STORAGE_KEY)
       if (saved && mergedModels.some((m) => m.id === saved)) {
         setCurrentModel(saved)
       }
-      const savedDeepThink = localStorage.getItem(DEEP_THINK_STORAGE_KEY)
-      if (savedDeepThink === 'true') {
-        setDeepThink(true)
-        userToggledDeepThink.current = true
-      } else if (savedDeepThink === 'false') {
-        // 用户显式关闭过: 恢复关闭状态,并阻止推理模型 auto-enable 重新打开
-        setDeepThink(false)
-        userToggledDeepThink.current = true
-      }
+    }
+    const savedDeepThink = localStorage.getItem(DEEP_THINK_STORAGE_KEY)
+    if (savedDeepThink === 'true') {
+      setDeepThink(true)
+      userToggledDeepThink.current = true
+    } else if (savedDeepThink === 'false') {
+      // 用户显式关闭过: 恢复关闭状态,并阻止推理模型 auto-enable 重新打开
+      setDeepThink(false)
+      userToggledDeepThink.current = true
+    }
+    if (!initialConversationId) {
       // 恢复对比模式预设 (移动端不实现对比，跳过)
       if (
         window.matchMedia('(min-width: 768px)').matches &&
@@ -434,6 +448,7 @@ export function ChatPanel({
         // 忽略损坏的 localStorage 数据
       }
     }
+    // mergedModels 故意不加入依赖:仅挂载时读一次,避免列表异步加载完成后覆盖恢复值
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const conversationIdRef = useRef(initialConversationId)
@@ -522,6 +537,10 @@ export function ChatPanel({
           get localFilesEnabled() {
             return getIsTauri() && localFilesToggleRef.current
           },
+          // 代码编辑器面板是否打开:服务端据此注入 code_edit 工具(AI 改代码片段)
+          get codePanelOpen() {
+            return useChatStore.getState().codePanelOpen
+          },
           // Attachments are read from ref at send time
           get attachments() {
             return attachmentsRef.current
@@ -569,6 +588,37 @@ export function ChatPanel({
     // 并在本地(Tauri)执行——create 自动写入、delete 交卡片确认——再 addToolOutput 回填,
     // 配合 sendAutomaticallyWhen 在同一轮内让模型据结果续跑收尾。
     onToolCall: async ({ toolCall }) => {
+      // code_edit:AI 改代码文档 → 写 pendingDiff + 展开代码面板 + 回填「待审查」,本轮流结束。
+      // 用户在编辑器审查 Diff 后采纳/放弃(后续动作,不自动回填)。
+      if (toolCall.toolName === CODE_EDIT_TOOL_NAME) {
+        const callId = toolCall.toolCallId
+        if (executedLocalFileCallsRef.current.has(callId)) return
+        executedLocalFileCallsRef.current.add(callId)
+        const ci = (toolCall.input ?? {}) as {
+          docId?: string
+          old_text?: string
+          new_text?: string
+        }
+        const docId = typeof ci.docId === 'string' ? ci.docId : ''
+        const original = typeof ci.old_text === 'string' ? ci.old_text : ''
+        const modified = typeof ci.new_text === 'string' ? ci.new_text : ''
+        if (!docId) {
+          addToolOutput({
+            tool: CODE_EDIT_TOOL_NAME,
+            toolCallId: callId,
+            output: { ok: false, error: '缺少 docId' } satisfies CodeEditToolOutput,
+          })
+          return
+        }
+        useChatStore.getState().setCodePendingDiff({ docId, original, modified })
+        useChatStore.getState().openCodePanel(docId)
+        addToolOutput({
+          tool: CODE_EDIT_TOOL_NAME,
+          toolCallId: callId,
+          output: { ok: true, status: 'pending-review' } satisfies CodeEditToolOutput,
+        })
+        return
+      }
       if (toolCall.toolName !== LOCAL_FILE_TOOL_NAME) return
       const callId = toolCall.toolCallId
       if (executedLocalFileCallsRef.current.has(callId)) return
@@ -713,6 +763,17 @@ export function ChatPanel({
       ) {
         return
       }
+      // 系统通知:回复完成且窗口失焦时弹通知(仅桌面端;开关在设置-聊天行为,默认开)。
+      // 放在 early-return 之后:错误/中止不通知;local_file 多轮只在收尾轮通知一次。
+      const notifyText = message.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => (p as { text?: string }).text ?? '')
+        .join('')
+        .trim()
+      void tauri.notifyReplyDone(
+        useChatStore.getState().conversationTitle || 'AI 回复完成',
+        notifyText || '回复已完成'
+      )
       try {
         // 服务端在 finish 事件之前已完成生图与入库(onFinish 先于 finish part 发送),
         // 这里拉取最新的助手消息,把含图片的最终内容同步到界面。
@@ -920,6 +981,42 @@ export function ChatPanel({
   // local_file 决策:卡片上用户点「批准」→ 按动作执行(delete=移入回收站;
   // create=覆盖写入)并回填;「拒绝」→ 回填 denied。回填后由 sendAutomaticallyWhen
   // 触发同轮续跑,让模型基于结果向用户收尾。
+  const handleOpenEditor = useCallback(
+    (path: string) => {
+      openEditor(path)
+    },
+    [openEditor]
+  )
+
+  // 代码编辑器「让 AI 改这段」:CodeEditor 派发 aichatt:code-ask-ai 事件(带文档全文+指令),
+  // 这里构造一条 user 消息发出。code_edit 工具仅在面板打开时注入(见 transport body.codePanelOpen),
+  // AI 据指令返回 code_edit → 上方 onToolCall 写 pendingDiff → 编辑器切 Diff 审查。
+  useEffect(() => {
+    function onAsk(e: Event) {
+      const detail = (e as CustomEvent<{
+        docId: string
+        language: string
+        code: string
+        selection?: string
+        instruction?: string
+      }>).detail
+      if (!detail || !detail.docId) return
+      const selHint = detail.selection
+        ? `\n【用户选中区域(请重点改这部分,其余保持稳定)】\n${detail.selection}`
+        : ''
+      const text =
+        `请用 code_edit 工具修改代码文档。\n` +
+        `文档 id: ${detail.docId}\n语言: ${detail.language}\n\n` +
+        `【当前完整代码】\n${detail.code}\n` +
+        selHint +
+        `\n\n【改写需求】\n${detail.instruction ?? '(用户未填写,按你理解的合理改写)'}\n\n` +
+        `返回 code_edit:docId 用上面这个 id,old_text 逐字复制上面的完整原文,new_text 写改写后的完整代码。`
+      handleSend(text)
+    }
+    window.addEventListener('aichatt:code-ask-ai', onAsk)
+    return () => window.removeEventListener('aichatt:code-ask-ai', onAsk)
+  }, [handleSend])
+
   const handleLocalFileDecision = useCallback(
     async (
       toolCallId: string,
@@ -1301,12 +1398,14 @@ export function ChatPanel({
         initialVote={initialCompareVote ?? null}
       />
       <WriteDocPanel />
+<FileEditorPanel />
+<CodePanel />
       </>
     )
   }
 
   return (
-    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${writePanelOpen || previewOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
+    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${codePanelOpen ? 'md:mr-[min(60vw,960px)]' : writePanelOpen || previewOpen || editorOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
 
       {/* Error banner */}
       {error && errorInfo && (
@@ -1460,6 +1559,7 @@ export function ChatPanel({
                   onEditMessage={handleEditMessage}
                   onClarifySubmit={handleSend}
                   onLocalFileDecision={handleLocalFileDecision}
+                  onOpenEditor={handleOpenEditor}
                 />
                 <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
               </div>
@@ -1537,6 +1637,8 @@ export function ChatPanel({
       )}
 
       <WriteDocPanel />
+      <FileEditorPanel />
+      <CodePanel />
       <ChatPreviewPanel />
     </div>
   )

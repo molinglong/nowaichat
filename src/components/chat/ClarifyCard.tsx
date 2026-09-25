@@ -13,10 +13,11 @@ import type { ToolCallView } from './ToolCallCard'
  * 三态(由 view.state + answered 驱动):
  * - 流式(input-streaming): 参数还在生成,显示骨架占位,不可交互
  * - 待答(input-available + 未回答): 问题 + 选项 chips + 可选补充输入,点选后提交
+ *   单选题点一个选项;multiSelect 题可累计点选(再点取消),题干旁标「可多选」
  * - 已答(answered): 折叠为摘要行,可展开回看问题列表(只读)
  *
- * 提交协议:回答以普通 user 消息回流(逐题"问题:答案"编号列表),走 sendMessage
- * 复用落库/排队/token 统计全链路;"已答"判定由消息列表层给出(卡片之后存在 user 消息)。
+ * 提交协议:回答以普通 user 消息回流(逐题"问题:答案"编号列表,多选题选项以「、」连接),
+ * 走 sendMessage 复用落库/排队/token 统计全链路;"已答"判定由消息列表层给出(卡片之后存在 user 消息)。
  */
 interface ClarifyCardProps {
   view: ToolCallView
@@ -31,13 +32,16 @@ function ClarifyCardInner({ view, answered, onSubmit }: ClarifyCardProps) {
   const intro = useMemo(() => toClarifyIntro(view.input), [view.input])
   const isStreaming = view.state === 'input-streaming'
 
-  // 每题的选择:选项点选记入 selected;自由填写记入 custom(互斥,后写的覆盖先写的)
-  const [selected, setSelected] = useState<Record<number, string>>({})
+  // 每题的选择:选项点选记入 selected(单选恒为一元素数组,多选题可累计/再点取消);
+  // 自由填写记入 custom(与选项互斥,后写的覆盖先写的)
+  const [selected, setSelected] = useState<Record<number, string[]>>({})
   const [custom, setCustom] = useState<Record<number, string>>({})
   const [expanded, setExpanded] = useState(false)
 
   const answers = useMemo(() => {
-    return questions.map((q, i) => selected[i] ?? custom[i]?.trim() ?? '').filter(Boolean)
+    return questions
+      .map((q, i) => (selected[i]?.length ? selected[i].join('、') : custom[i]?.trim() ?? ''))
+      .filter(Boolean)
   }, [questions, selected, custom])
   const canSubmit = !isStreaming && !answered && answers.length > 0 && !!onSubmit
 
@@ -45,7 +49,7 @@ function ClarifyCardInner({ view, answered, onSubmit }: ClarifyCardProps) {
     if (!canSubmit) return
     const lines = questions
       .map((q, i) => {
-        const a = selected[i] ?? custom[i]?.trim() ?? ''
+        const a = selected[i]?.length ? selected[i].join('、') : custom[i]?.trim() ?? ''
         return a ? `${i + 1}. ${q.question}：${a}` : null
       })
       .filter((l): l is string => !!l)
@@ -110,18 +114,29 @@ function ClarifyCardInner({ view, answered, onSubmit }: ClarifyCardProps) {
             <div key={i} className="flex flex-col gap-1.5">
               <p className="font-medium text-content-primary leading-relaxed">
                 {i + 1}. {q.question}
+                {q.multiSelect && (
+                  <span className="ml-1.5 text-[10px] font-normal text-content-muted">可多选</span>
+                )}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {q.options.map((opt) => {
-                  const active = picked === opt
+                  const active = picked?.includes(opt) ?? false
                   return (
                     <button
                       key={opt}
                       type="button"
                       onClick={() => {
                         // 选项与自由填写互斥:选中选项时清掉该题的自由输入
-                        setSelected((prev) => ({ ...prev, [i]: opt }))
                         setCustom((prev) => ({ ...prev, [i]: '' }))
+                        setSelected((prev) => {
+                          // 单选:一题只保留一个选项;多选:同项再点取消,异项追加
+                          if (!q.multiSelect) return { ...prev, [i]: [opt] }
+                          const cur = prev[i] ?? []
+                          return {
+                            ...prev,
+                            [i]: cur.includes(opt) ? cur.filter((o) => o !== opt) : [...cur, opt],
+                          }
+                        })
                       }}
                       className={cn(
                         'rounded-md border px-2 py-1 leading-none transition-colors',

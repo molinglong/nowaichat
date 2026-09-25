@@ -173,7 +173,7 @@ export function FileUpload({
         ref={inputRef}
         type="file"
         multiple
-        accept="image/*,text/*,application/pdf"
+        accept="image/*,text/*,application/pdf,.xlsx,.xls,.docx,.html,.htm"
         className="hidden"
         onChange={(e) => {
           if (e.target.files) handleFiles(e.target.files)
@@ -204,14 +204,19 @@ export function FileUpload({
                     <p className="text-xs text-content-primary truncate">
                       {att.name}
                     </p>
-                    {att.type === 'application/pdf' ? (
+                    {att.parseStatus ? (
+                      // 中转站解析型附件(文本/PDF/Excel/Word/HTML):展示解析状态
                       att.parseStatus === 'failed' ? (
                         <p className="text-[10px] text-red-500 truncate">
                           解析失败{att.parseError ? `：${att.parseError}` : ''}
                         </p>
-                      ) : (
+                      ) : att.type === 'application/pdf' ? (
                         <p className="text-[10px] text-content-muted">
                           {att.pageCount ?? '?'} 页 · {formatChars(att.charCount ?? 0)}
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-content-muted">
+                          {formatChars(att.charCount ?? 0)}
                         </p>
                       )
                     ) : (

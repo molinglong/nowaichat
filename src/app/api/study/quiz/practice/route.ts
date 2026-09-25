@@ -11,6 +11,7 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { newCardFields } from '@/lib/study/fsrs'
 import { NOTE_SUBJECTS } from '@/lib/study/tagging'
+import { monitor } from '@/lib/monitor'
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
     if (existing) {
+      monitor('practice_idempotent_reuse', { questionId: question.id, noteId: existing.id })
       return NextResponse.json({ noteId: existing.id, existing: true })
     }
 
@@ -75,6 +77,7 @@ export async function POST(req: NextRequest) {
       },
       select: { id: true, title: true, createdAt: true },
     })
+    monitor('practice_card_created', { questionId: question.id, noteId: row.id })
 
     return NextResponse.json({ noteId: row.id, existing: false }, { status: 201 })
   } catch (err) {

@@ -8,13 +8,17 @@ import { ClarifyCard } from './ClarifyCard'
 import { LocalFileCard } from './LocalFileCard'
 import { GenerateMaskCard } from './GenerateMaskCard'
 import { WriteDocCard } from './WriteDocCard'
+import { WriteCodeCard } from './WriteCodeCard'
 import { TripMapCard } from './TripMapCard'
+import { ProviderModelCard } from './ProviderModelCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 import { LOCAL_FILE_TOOL_NAME } from '@/lib/ai/local-file-tool'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
 import { WRITE_DOC_TOOL_NAME } from '@/lib/ai/write-doc-tool'
+import { WRITE_CODE_TOOL_NAME } from '@/lib/ai/write-code-tool'
 import { TRIP_TOOL_NAME } from '@/lib/ai/trip-tool'
 import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
+import { PROVIDER_MODEL_TOOL_NAME } from '@/lib/ai/provider-model-tool'
 import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
 import { KNOWLEDGE_TOOL_NAME } from '@/lib/ai/knowledge-tool'
 import { TODO_TOOL_NAME, type TodoToolOutput } from '@/lib/ai/todo-tool'
@@ -188,9 +192,11 @@ interface ToolCallCardProps {
     approved: boolean,
     decision: import('@/lib/ai/local-file-tool').LocalFileDecision
   ) => void
+  /** local_file:在编辑器中打开(Monaco 侧栏面板);缺省则不显示按钮 */
+  onOpenEditor?: (path: string) => void
 }
 
-function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFileDecision }: ToolCallCardProps) {
+function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFileDecision, onOpenEditor }: ToolCallCardProps) {
   // hooks 置顶(web_search 的展开状态),避免条件 return 造成 hooks 顺序不稳定
   const [manual, setManual] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -202,7 +208,7 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
 
   // 本地文件操作:专用卡片(create 自动执行展示结果;delete 待确认→批准后执行)
   if (view.tool === LOCAL_FILE_TOOL_NAME) {
-    return <LocalFileCard view={view} onDecision={onLocalFileDecision} />
+    return <LocalFileCard view={view} onDecision={onLocalFileDecision} onOpenEditor={onOpenEditor} />
   }
 
   // 面具工坊:专用交互卡片(草稿预览+一键添加),不进通用工具卡分支
@@ -210,9 +216,19 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
     return <GenerateMaskCard view={view} />
   }
 
+  // 服务商模型管理:确认卡片(用户点确认才写入;移除带二次确认+计算题防护)
+  if (view.tool === PROVIDER_MODEL_TOOL_NAME) {
+    return <ProviderModelCard view={view} />
+  }
+
   // 写作文档:一行式卡片(成功→打开按钮;流式→占位;失败→标红)
   if (view.tool === WRITE_DOC_TOOL_NAME) {
     return <WriteDocCard view={view} />
+  }
+
+  // 代码文档:与写作文档对称(成功自动滑出代码编辑器面板)
+  if (view.tool === WRITE_CODE_TOOL_NAME) {
+    return <WriteCodeCard view={view} />
   }
 
   // 行程规划:地图卡片(AI 结构化行程,前端段间真实路径规划+时间线联动+全屏总览)

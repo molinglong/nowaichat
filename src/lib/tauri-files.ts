@@ -221,6 +221,31 @@ export async function readFile(
 }
 
 /**
+ * 编辑器整文件读取(独立于模型的 64KB read 通道,Rust 侧上限 5MB):
+ * 供 Monaco 面板加载完整文本给「人看人改」。二进制/非 UTF-8 会被 Rust 侧拒绝。
+ */
+export async function readFullFile(
+  relPath: string
+): Promise<LocalFileOpResult & { bytes?: number }> {
+  if (!getIsTauri()) return WEB_ONLY
+  try {
+    const r = await invoke<{
+      absPath: string
+      bytes: number
+      contentBase64: string
+    }>('lf_read_full_file', { relPath })
+    return {
+      ok: true,
+      absPath: r.absPath,
+      bytes: r.bytes,
+      content: base64ToUtf8(r.contentBase64),
+    }
+  } catch (err) {
+    return { ok: false, error: String(err) }
+  }
+}
+
+/**
  * 列出工作区内一个目录的单层内容(目录在前、名称排序,Rust 侧限 500 条)。
  * relPath 传空字符串表示列工作区根目录。
  */

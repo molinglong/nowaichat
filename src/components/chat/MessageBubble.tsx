@@ -283,6 +283,8 @@ interface MessageBubbleProps {
     approved: boolean,
     decision: import('@/lib/ai/local-file-tool').LocalFileDecision
   ) => void
+  /** local_file:在编辑器中打开,透传给 ToolCallCard 内的 LocalFileCard */
+  onOpenEditor?: (path: string) => void
   /** 澄清问答:该消息之后是否已有 user 消息(已答则卡片锁定为摘要行) */
   clarifyAnswered?: boolean
 }
@@ -300,6 +302,7 @@ function MessageBubbleInner({
   prevUserContent,
   onClarifySubmit,
   onLocalFileDecision,
+  onOpenEditor,
   clarifyAnswered,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
@@ -886,6 +889,7 @@ function MessageBubbleInner({
                     clarifyAnswered={clarifyAnswered}
                     onClarifySubmit={onClarifySubmit}
                     onLocalFileDecision={onLocalFileDecision}
+                    onOpenEditor={onOpenEditor}
                   />
                 ))}
               </div>

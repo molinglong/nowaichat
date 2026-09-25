@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { providers } from "@/lib/ai/registry"
 
 /**
  * GET /api/provider-models
@@ -34,6 +35,12 @@ export async function GET() {
       supportsFiles: r.supportsFiles,
       supportsReasoning: r.supportsReasoning,
       updatedAt: r.updatedAt,
+    })),
+    // 内置模型目录（registry 权威）：前端用它判断 hide/unhide 的目标是否为内置模型
+    builtinCatalog: Object.values(providers).map((p) => ({
+      id: p.id,
+      name: p.name,
+      models: p.models.map((m) => m.id),
     })),
   })
 }
@@ -73,6 +80,14 @@ export async function POST(req: NextRequest) {
   if (!provider || !modelId) {
     return NextResponse.json(
       { error: "provider 和 modelId 是必填项" },
+      { status: 400 }
+    )
+  }
+  // provider 白名单（registry 单一数据源）：拦住 AI/脚本幻觉出的 provider id，
+  // 避免脏覆盖记录进入 effectiveModels 计算链路
+  if (!providers[provider]) {
+    return NextResponse.json(
+      { error: `未知服务商 "${provider}"，可用：${Object.keys(providers).join(" / ")}` },
       { status: 400 }
     )
   }

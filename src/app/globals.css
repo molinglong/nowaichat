@@ -344,12 +344,26 @@ html:not([data-tauri]) .tauri-only {
   }
 }
 
-/* 桌面端：调整圆角大小和阴影匹配全屏感 */
+/* 桌面端：调整主壳圆角大小和阴影匹配全屏感。
+   只作用于 .app-shell 主卡片——不要用 .shadow-2xl.border-line 这种宽选择器:
+   右侧滑出面板(HTML 预览/文件编辑器/写作画布)关闭时 translate-x-full 停在
+   视口右缘外,fixed 定位不受外层 overflow:hidden 裁剪,32px 模糊阴影会渗入
+   视口,在窗口右缘形成一条灰色阴影带(多个面板还会叠加变深)。 */
 @media (min-width: 1024px) {
-  [data-tauri] .shadow-2xl.border-line {
+  [data-tauri] .app-shell {
     border-radius: 12px !important;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25) !important;
   }
+}
+
+/* 右侧滑出面板关闭态(translate-x-full 停在屏外)去掉投影,避免阴影模糊渗入
+   视口形成右缘灰带;box-shadow 纳入与 transform 相同时长的过渡,滑入渐显、
+   滑出渐隐,不产生突变。Web 端默认 shadow-2xl(-12px 收缩)渗透很弱,一并收口。 */
+aside.fixed.inset-y-0.right-0.shadow-2xl {
+  transition-property: transform, box-shadow;
+}
+aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
+  box-shadow: none;
 }
 
 /* 隐藏浏览器右键菜单（已经在 layout.tsx 用 JS 拦截，

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { monitor } from "@/lib/monitor"
 
 /**
  * AI 设置控制总开关(aiSettingsControl) —— 与 settings/clarify 同构:
@@ -41,6 +42,8 @@ export async function PATCH(req: Request) {
     data: { aiSettingsControl: body.enabled },
     select: { aiSettingsControl: true },
   })
+
+  monitor("ai_control_toggle", { enabled: user.aiSettingsControl })
 
   return NextResponse.json({ aiSettingsControl: user.aiSettingsControl })
 }

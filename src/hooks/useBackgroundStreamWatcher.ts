@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { useChatStore } from '@/store/chat-store'
+import { tauri } from '@/lib/tauri'
 
 /** 轮询间隔:后台完成提示不需要实时,5s 足够(蓝点最多延迟一个周期点亮) */
 const POLL_INTERVAL = 5000
@@ -43,6 +44,11 @@ export function useBackgroundStreamWatcher() {
           if (done) {
             unregisterBackgroundStreaming(id)
             bumpConversationVersion()
+            // 系统通知:后台会话回复完成且窗口失焦时弹通知(仅桌面端;
+            // 开关在设置-聊天行为,默认开)。latest 为空(会话清空)时不通知。
+            if (latest?.role === 'assistant' && typeof latest.content === 'string' && latest.content.trim()) {
+              void tauri.notifyReplyDone('AI 回复完成', latest.content)
+            }
           }
         } catch {
           // 网络抖动:下个周期重试

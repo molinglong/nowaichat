@@ -31,12 +31,22 @@ import {
   createLocalFileTool,
 } from "@/lib/ai/local-file-tool"
 import {
+  CODE_EDIT_TOOL_NAME,
+  CODE_EDIT_TOOL_PROMPT,
+  createCodeEditTool,
+} from "@/lib/ai/code-edit-tool"
+import {
   SETTINGS_TOOL_NAME,
   SETTINGS_TOOL_PROMPT,
   SETTINGS_DISABLED_PROMPT,
   buildSettingsSnapshotSection,
   createSettingsTool,
 } from "@/lib/ai/settings-tool"
+import {
+  PROVIDER_MODEL_TOOL_NAME,
+  createProviderModelTool,
+} from "@/lib/ai/provider-model-tool"
+import { buildProviderModelSection } from "@/lib/ai/provider-model-tool.server"
 import {
   MEMORY_TOOL_NAME,
   MEMORY_TOOL_PROMPT,
@@ -59,6 +69,11 @@ import {
   WRITE_DOC_TOOL_PROMPT,
 } from "@/lib/ai/write-doc-tool"
 import { createWriteDocTool } from "@/lib/ai/write-doc-tool.server"
+import {
+  WRITE_CODE_TOOL_NAME,
+  WRITE_CODE_TOOL_PROMPT,
+} from "@/lib/ai/write-code-tool"
+import { createWriteCodeTool } from "@/lib/ai/write-code-tool.server"
 import {
   TRIP_TOOL_NAME,
   TRIP_TOOL_PROMPT,
@@ -83,6 +98,7 @@ import { sanitizeUploadName, readUploadAsDataUrl, sweepOrphanUploadsThrottled } 
 import { SCANNED_PDF_MIN_CHARS } from "@/lib/file-parser"
 import type { ModelDefinition } from "@/lib/ai/types"
 import { isEphemeralSession } from "@/lib/ephemeral"
+import { monitor } from "@/lib/monitor"
 
 export const maxDuration = 120 // seconds。深度思考耗时较长,Vercel Pro 允许到 300
 
@@ -102,6 +118,7 @@ interface ChatRequestBody {
   settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
   currentWriteDocId?: string // 写作画布面板当前打开的文档 id（注入提示词与 append 续写）
   localFilesEnabled?: boolean // 客户端(Tauri)本地文件能力:仅桌面端且用户开关开启时上报 true,服务端据此注入 local_file 工具
+  codePanelOpen?: boolean // 客户端上报:代码编辑器面板是否打开,服务端据此注入 code_edit 工具
 }
 
 /** 客户端传入的消息（UIMessage 格式的结构化子集）*/
@@ -369,6 +386,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   let apiKey: string | undefined
   let provider: (modelId: string) => ReturnType<typeof createProviderInstanceForEffectiveModel>
   let realModelId = modelId // for builtin models same as input; for custom use modelId from DB
+  // 自定义模型推理信息:是否勾选推理 + Base URL(决定 deepThink 时是否注入 reasoning_effort 档位)
+  let cmSupportsReasoning = false
+  let cmBaseURL = ""
 
   if (modelId.startsWith("custom:")) {
     const cmId = modelId.slice(7) // strip "custom:" prefix
@@ -382,6 +402,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     }
     modelDef = buildCustomModelDefinition(cmRecord)
     realModelId = cmRecord.modelId
+    cmSupportsReasoning = cmRecord.supportsReasoning
+    cmBaseURL = cmRecord.baseURL || ""
     // Resolve API key (own key > provider key > none/local)
     apiKey = await resolveApiKey(userId, cmRecord)
     // Build provider instance (native for provider-key reuse without baseURL; OpenAI-compatible otherwise)
@@ -507,10 +529,11 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
               }`
             })
           } else if (rec?.parseStatus === "done") {
-            // done 但提取不到有效文本(扫描件/图片型 PDF)
+            // done 但提取不到有效文本(扫描件/图片型 PDF)。视觉模型也读不了(服务端不渲染 PDF 页为图),
+            // 故不误导用户切模型,直接给出可行动建议
             contentParts.push({
               type: "text",
-              text: `（用户上传的 PDF「${att.name}」是扫描件/图片型，未能提取到文本。请告诉用户：扫描版 PDF 暂无法阅读，建议提供文字版，或在设置中切换到支持视觉的模型。）`,
+              text: `（用户上传的 PDF「${att.name}」是扫描件/图片型，未能提取到文本。请告诉用户：可以将 PDF 中的文字内容复制后直接发送给你；图片型扫描件暂无法自动识别。）`,
             })
           } else if (rec) {
             // failed 等异常状态
@@ -616,6 +639,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       })
     )
     systemParts.push(SETTINGS_TOOL_PROMPT)
+    // 服务商模型管理(添加/移除/隐藏模型):与设置控制同开关同三道闸门。
+    // 只注入规则+快照,真实写入由前端确认卡片完成(见 ProviderModelCard)。
+    systemParts.push(await buildProviderModelSection(userId))
   } else if (!groupId && !isEphemeral) {
     systemParts.push(SETTINGS_DISABLED_PROMPT)
   }
@@ -651,6 +677,13 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
     }
     systemParts.push(WRITE_DOC_TOOL_PROMPT + currentDocHint)
+  }
+
+  // 代码文档:与 write_document 对称(非临时非对比),模型产出代码/网页类产物时创建
+  // CodeDoc 并在前端自动滑出代码编辑器面板——「写个主页 html」类请求的默认通道,
+  // 不再误入写作画布;两条 prompt 紧邻注入,边界对照更清晰。
+  if (!isEphemeral && !groupId) {
+    systemParts.push(WRITE_CODE_TOOL_PROMPT)
   }
 
   // 行程规划:非对比模式注入(纯只读不落库,临时模式安全);模型仅在用户提出
@@ -742,10 +775,25 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 对比模式不注入(多泳道各自触发澄清卡片会互相踩踏),v1 仅单聊启用。
   const clarifyTool = clarifyEnabled && !groupId ? createClarifyTool() : null
   const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
+  const providerModelTool =
+    aiControlEnabled && !isEphemeral && !groupId ? createProviderModelTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
   const writeDocTool = !isEphemeral && !groupId ? createWriteDocTool(userId) : null
+  // 代码文档落库需要 conversationId,但新对话的 convId 在下方才解析:
+  // 改为工厂惰性单例 —— 首次 execute 时 convId 已确定,拿当届值建工具。
+  // 用 const 局部变量中转,不依赖 TS 对闭包内可变捕获变量的收窄
+  let writeCodeToolInstance: ReturnType<typeof createWriteCodeTool> | null = null
+  const writeCodeTool = !isEphemeral && !groupId
+    ? () => {
+        const existing = writeCodeToolInstance
+        if (existing) return existing
+        const created = createWriteCodeTool(userId, convId)
+        writeCodeToolInstance = created
+        return created
+      }
+    : null
   const tripTool = !groupId ? createTripTool(userId) : null
 
   // 本地文件工具(无 execute:文件操作在用户本地机器执行,远程服务器碰不到磁盘)。
@@ -759,6 +807,17 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   if (localFileTool) {
     systemParts.push(LOCAL_FILE_TOOL_PROMPT)
     console.log(`[chat] local_file tool attached (desktop client, user ${userId})`)
+  }
+
+  // 代码编辑器工具(无 execute:操作的是 DB 里的 CodeDoc + 前端 Diff 审查,不碰磁盘)。
+  // 注入条件:客户端上报 codePanelOpen(用户打开了代码面板)且非临时非对比模式。
+  const codeEditTool =
+    body.codePanelOpen === true && !isEphemeral && !groupId
+      ? createCodeEditTool()
+      : null
+  if (codeEditTool) {
+    systemParts.push(CODE_EDIT_TOOL_PROMPT)
+    console.log(`[chat] code_edit tool attached (user ${userId})`)
   }
 
   // 课本知识库检索:半绑定(用户名下有知识切块才注入,物理级闸门,无课本则工具不存在);
@@ -1024,7 +1083,23 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           },
         }
       : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || tripTool || localFileTool || mcpToolCount > 0)
+    // qianwen 思考联动:qwen3.8 系列默认开思考,由 provider 的自定义 fetch 把
+    // reasoning_effort 翻译成 enable_thinking(见 providers/qianwen.ts)。
+    // deepThink 关 → 不带参数(fetch 层强制 enable_thinking: false);
+    // deepThink 开 → 传档位开启思考。
+    ...(modelDef.provider === "qianwen" && modelDef.supportsReasoning && deepThink
+      ? { providerOptions: { openai: { reasoningEffort: "medium" } } }
+      : {}),
+    // 自定义模型思考联动:DashScope 兼容端点的 fetch 层把 reasoning_effort
+    // 翻译成 enable_thinking(见 openai-reasoning-adapter.ts);勾了推理的模型
+    // 在其他端点也传档位(OpenAI 兼容网关普遍接受/忽略该参数)。
+    // deepThink 关 → 不传,DashScope fetch 层强制关闭思考,快答不受影响。
+    ...(modelDef.provider === "custom" &&
+    deepThink &&
+    (cmSupportsReasoning || /dashscope\.aliyuncs\.com/i.test(cmBaseURL))
+      ? { providerOptions: { openai: { reasoningEffort: "medium" } } }
+      : {}),
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || providerModelTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || writeCodeTool || tripTool || localFileTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
@@ -1033,12 +1108,15 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(knowledgeTool ? { [KNOWLEDGE_TOOL_NAME]: knowledgeTool } : {}),
             ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
             ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
+            ...(providerModelTool ? { [PROVIDER_MODEL_TOOL_NAME]: providerModelTool } : {}),
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
             ...(writeDocTool ? { [WRITE_DOC_TOOL_NAME]: writeDocTool } : {}),
+            ...(writeCodeTool ? { [WRITE_CODE_TOOL_NAME]: writeCodeTool() } : {}),
             ...(tripTool ? { [TRIP_TOOL_NAME]: tripTool } : {}),
             ...(localFileTool ? { [LOCAL_FILE_TOOL_NAME]: localFileTool } : {}),
+            ...(codeEditTool ? { [CODE_EDIT_TOOL_NAME]: codeEditTool } : {}),
           },
         }
       : {}),
@@ -1309,6 +1387,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       console.error('[chat] Stream error:', error)
       if (error instanceof APICallError) {
         const status: number | undefined = error.statusCode ?? undefined
+        monitor("chat_upstream_error", { status: status ?? null })
         if (status === 401) {
           return '服务商鉴权失败(401),请检查该模型的 API Key 是否有效'
         }

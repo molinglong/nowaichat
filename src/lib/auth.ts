@@ -2,6 +2,7 @@ import NextAuth, { CredentialsSignin } from "next-auth"
 import Credentials from "next-auth/providers/credentials"
 import bcrypt from "bcryptjs"
 import { prisma } from "./db"
+import { monitor } from "@/lib/monitor"
 
 // ── 临时聊天(访客模式)常量 ──────────────────────────────
 /** 临时会话(访客密码登录)的 JWT 有效期:12 小时,公共电脑场景自动过期 */
@@ -43,6 +44,7 @@ function recordLoginFailure(identifier: string): void {
     return
   }
   entry.count += 1
+  monitor("login_failed", { identifier })
 }
 
 function clearLoginFailures(identifier: string): void {
@@ -70,6 +72,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const identifier = credentials.email as string
         const rateLimitKey = identifier.toLowerCase()
         if (loginRateLimited(rateLimitKey)) {
+          monitor("login_rate_limited", { identifier: rateLimitKey })
           throw new RateLimitedError()
         }
 
@@ -95,6 +98,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (user.passwordHash && (await bcrypt.compare(password, user.passwordHash))) {
           // 临时入口拒绝主密码:防止在公共电脑误输主密码造成泄露
           if (ephemeralEntry) {
+            monitor("login_ephemeral_entry_main_password", { identifier: rateLimitKey })
             throw new GuestPasswordRequiredError()
           }
           clearLoginFailures(rateLimitKey)
@@ -112,6 +116,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           (await bcrypt.compare(password, user.guestPasswordHash))
         ) {
           clearLoginFailures(rateLimitKey)
+          monitor("login_guest_ok", { identifier: rateLimitKey })
           return {
             id: user.id,
             email: user.email,

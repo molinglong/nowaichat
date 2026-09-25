@@ -31,7 +31,7 @@ export default async function AppLayout({
   // pt-[var(--sat)]: PWA 全屏模式下顶部让出刘海/灵动岛安全区(浏览器内为 0);md 起恢复统一 6px 内边距
   return (
     <div className="h-screen bg-surface-muted p-0 pt-[var(--sat)] md:p-1.5 overflow-hidden">
-      <div className="h-full flex overflow-hidden rounded-none md:rounded-xl shadow-2xl border border-line bg-surface">
+      <div className="app-shell h-full flex overflow-hidden rounded-none md:rounded-xl shadow-2xl border border-line bg-surface">
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 bg-surface">
           <TopBar />

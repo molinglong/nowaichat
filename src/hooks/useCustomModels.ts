@@ -249,7 +249,7 @@ export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomMod
     setCmFormOpen(true)
   }, [])
 
-  const saveModel = useCallback(async () => {
+  const saveModel = useCallback(async (testAfterSave = false) => {
     const { name, modelId, baseURL } = cmForm
     // 'https://' 是占位默认值，视为未填
     const cleanBaseURL = baseURL && baseURL.trim() !== 'https://' ? baseURL.trim() : ''
@@ -269,12 +269,13 @@ export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomMod
 
     setCmSaving(true)
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         ...cmForm,
         baseURL: cleanBaseURL,
         keyProvider: cmForm.keySource === 'provider' ? cmForm.provider : undefined,
         apiKey: cmForm.keySource === 'own' ? cmForm.apiKey : '',
       }
+      if (testAfterSave) body.testAfterSave = true
       const res = await fetch('/api/custom-models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

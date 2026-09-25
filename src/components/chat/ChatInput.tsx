@@ -651,7 +651,8 @@ export function ChatInput({
                       />
                     ) : (
                       <div className="w-5 h-5 rounded bg-surface-subtle flex items-center justify-center shrink-0 text-[8px] text-content-secondary">
-                        {att.type.split('/')[1]?.toUpperCase().slice(0, 3) || 'FILE'}
+                        {/* 用扩展名而非 MIME 子类型:xlsx/docx 的 MIME 是长串 vnd.openxmlformats,截前 3 字符会显示 VND */}
+                        {att.name.split('.').pop()?.toUpperCase().slice(0, 3) || 'FILE'}
                       </div>
                     )}
                     <div className="flex-1 min-w-0">

@@ -104,6 +104,8 @@ export async function middleware(req: NextRequest) {
 
   // 临时模式统一拦截:命中账户管理类端点直接 403(与 handler 内守卫构成双保险)
   if (isLoggedIn && token.ephemeral === true && isDeniedForEphemeral(pathname, req.method)) {
+    // 监控点:edge runtime 无法写文件,仅 console(dev 终端可见),与 logs/monitor.log 同前缀
+    console.log(`[MONITOR] {"event":"ephemeral_denied","method":"${req.method}","path":"${pathname}"}`)
     return NextResponse.json(
       { error: "临时聊天模式下不可修改账户设置" },
       { status: 403 }

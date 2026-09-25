@@ -822,6 +822,47 @@ fn lf_read_file(
     })
 }
 
+/// 编辑器整文件读取上限:5MB(供客户端 Monaco 面板加载完整文件,与模型的 64KB read 通道分离)。
+const LF_EDITOR_MAX: u64 = 5 * 1024 * 1024;
+
+/// 编辑器整文件读取结果:绝对路径 + 字节数 + base64 内容。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LfEditorReadResult {
+    abs_path: String,
+    bytes: u64,
+    content_base64: String,
+}
+
+/// 编辑器整文件读取:独立于模型的 lf_read_file(64KB 截断保护模型上下文),
+/// 供 Monaco 面板加载完整文本给「人看人改」。仅 UTF-8 纯文本(二进制拒绝);
+/// 超 5MB 拒绝并带大小提示;严格 UTF-8 校验,避免糊弄解码后被写回静默损坏内容。
+#[tauri::command]
+fn lf_read_full_file(app: tauri::AppHandle, rel_path: String) -> Result<LfEditorReadResult, String> {
+    let base = lf_read_base(&app).ok_or("尚未授权工作区,请先在设置中选择文件夹")?;
+    let target = lf_safe_join(Path::new(&base), &rel_path)?;
+    if target.is_dir() {
+        return Err("目标是目录,编辑器无法打开".into());
+    }
+    let meta = fs::metadata(&target).map_err(|e| format!("读取文件失败: {}", e))?;
+    if meta.len() > LF_EDITOR_MAX {
+        return Err(format!(
+            "文件过大({} KB),编辑器仅支持 5MB 内的文本文件",
+            meta.len() / 1024
+        ));
+    }
+    let raw = fs::read(&target).map_err(|e| format!("读取文件失败: {}", e))?;
+    if raw.contains(&0) {
+        return Err("二进制文件不支持编辑".into());
+    }
+    let text = String::from_utf8(raw).map_err(|_| "文件不是有效的 UTF-8 文本".to_string())?;
+    Ok(LfEditorReadResult {
+        abs_path: target.to_string_lossy().to_string(),
+        bytes: meta.len(),
+        content_base64: BASE64.encode(text.as_bytes()),
+    })
+}
+
 /// 列目录:单层条目(目录在前、名称不区分大小写排序),上限 500 条;rel 为空列工作区根。
 #[tauri::command]
 fn lf_list_dir(app: tauri::AppHandle, rel_path: String) -> Result<LfListResult, String> {
@@ -1341,6 +1382,8 @@ pub fn run() {
         }))
         // 本地文件能力:系统目录选择对话框(用于用户授权工作区根)
         .plugin(tauri_plugin_dialog::init())
+        // 系统通知:AI 回复完成后弹系统级通知(前端经 @tauri-apps/plugin-notification 调用)
+        .plugin(tauri_plugin_notification::init())
         // 搭子窗口(悬浮球)暂时禁用:安卓适配期移动端不支持多窗口,桌面端一并下线。
         // 恢复:取消下方注释块,并在 tauri.conf.json 的 app.windows 中加回 buddy 窗口配置。
         .setup(|app| {
@@ -1417,6 +1460,7 @@ pub fn run() {
             lf_exec,
             lf_overview,
             lf_search,
+            lf_read_full_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

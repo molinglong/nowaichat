@@ -9,6 +9,7 @@ import {
 } from "@/lib/ai/registry"
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import type { ModelDefinition } from "@/lib/ai/types"
+import { monitor } from "@/lib/monitor"
 
 /**
  * 写作画布流式生成端点 —— /api/write/generate。
@@ -143,6 +144,8 @@ export async function POST(req: Request) {
     typeof body.instruction === "string" ? body.instruction.trim().slice(0, MAX_INSTRUCTION_CHARS) : ""
   const selection =
     typeof body.selection === "string" ? body.selection.slice(0, MAX_SELECTION_CHARS) : ""
+
+  monitor("write_generate_start", { action, selectionLen: selection.length, instructionLen: instruction.length })
 
   if (action === "create" && !instruction) {
     return Response.json({ error: "请先描述要写什么" }, { status: 400 })
@@ -292,6 +295,7 @@ if (action === "insert" && !selection.trim()) {
           send({ type: "done" })
         } catch (err) {
           console.error("[write-generate] stream failure:", err)
+          monitor("write_generate_stream_error", { error: String(err).slice(0, 160) })
           send({ type: "error", value: extractErrorMessage(err) })
         } finally {
           controller.close()

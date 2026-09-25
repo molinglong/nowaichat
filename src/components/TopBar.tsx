@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, Check, ChevronDown, MessageSquarePlus, BookOpen, PenLine, Settings as SettingsIcon, Keyboard } from 'lucide-react'
+import { Menu, Plus, Sparkles, Scale, Check, ChevronDown, MessageSquarePlus, BookOpen, PenLine, Settings as SettingsIcon, Keyboard, FileCode2 } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
@@ -35,6 +35,13 @@ export function TopBar() {
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
   // 写作画布面板打开时顶栏同步让位(与 ChatPanel/WriteDocPanel 同宽同动画)
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
+  // 代码编辑器面板打开时顶栏同步让位(比写作画布更宽)
+  const codePanelOpen = useChatStore((s) => s.codePanelOpen)
+  // 任一右侧编辑器面板打开:顶栏进入精简态——胶囊导航与次要入口整体隐藏,
+  // 只留标题+设置。胶囊组是绝对居中定位,顶栏被面板挤窄后可用宽度只剩
+  // 面板外那一半,胶囊会被压缩换行叠字(实测),所以面板态直接不渲染。
+  const panelOpen = writePanelOpen || codePanelOpen
+  const openCodePanel = useChatStore((s) => s.openCodePanel)
   const [title, setTitle] = useState(conversationTitle)
   // 中部胶囊「更多」二级菜单(收纳观点探索/错题本,保持胶囊组精简)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -197,9 +204,15 @@ export function TopBar() {
   // 仅在已有具体对话时(非空白新对话)显示「在新对话继续」按钮
   const canBranch = !!currentConversationId && pathname?.startsWith('/chat/c/')
 
+  // 打开代码编辑器面板:面板常开无门槡(列表按会话聚合展示当前对话的 AI 代码产物,
+  // 无产物时左栏显示引导文案)。无网络请求、无手动新建——代码文档由 write_code 工具产生。
+  const handleOpenCodePanel = useCallback(() => {
+    openCodePanel()
+  }, [openCodePanel])
+
   return (
     <header
-      className={`relative z-40 flex items-center h-11 md:h-9 px-1.5 md:px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl transition-[margin] duration-300 ease-out ${writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}
+      className={`relative z-40 flex items-center h-11 md:h-9 px-1.5 md:px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl transition-[margin] duration-300 ease-out ${codePanelOpen ? 'md:mr-[min(60vw,960px)]' : writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}
       {...(inTauri
         ? {
             'data-tauri-drag-region': '',
@@ -226,7 +239,8 @@ export function TopBar() {
         </span>
       </div>
 
-      {/* Center: 胶囊选项卡 — 绝对居中 */}
+      {/* Center: 胶囊选项卡 — 绝对居中;编辑器面板打开时整体隐藏(见上方 panelOpen 注释) */}
+      {!panelOpen && (
       <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none">
         {/* ≥381px: 完整胶囊 */}
         <div className="hidden md:flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-subtle/70 pointer-events-auto">
@@ -354,13 +368,14 @@ export function TopBar() {
 
         {/* 极窄屏折叠菜单已移除:移动端页面导航由 BottomDock(底部毛玻璃 Dock)接管 */}
       </div>
+      )}
 
       {/* Right: 「在新对话继续」按钮(仅在已有具体对话时显示) + 设置(固定最右侧)。
           不设 max-w 上限:flex-1 吸收左侧剩余空间,justify-end 把内容钉在右边缘,
           中间胶囊是绝对定位不受影响 */}
       <div className="flex items-center gap-0.5 min-w-0 flex-1 justify-end">
-        {/* 写作画布面板打开时顶栏压缩,次要入口隐藏(canBranch 已含面板态判断) */}
-        {canBranch && !writePanelOpen && (
+        {/* 编辑器面板打开时顶栏精简,次要入口隐藏 */}
+        {canBranch && !panelOpen && (
           <button
             onClick={handleBranchConversation}
             disabled={isBranching}
@@ -377,8 +392,20 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
+        {/* 代码编辑器入口:打开右侧滑出面板(本对话的 AI 代码产物列表),面板已开则隐藏避免重复点 */}
+        {!panelOpen && (
+          <button
+            onClick={handleOpenCodePanel}
+            className="shrink-0 hidden md:inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation disabled:opacity-50"
+            aria-label="代码编辑器"
+            title="打开代码编辑器(写代码 / 让 AI 改代码)"
+            style={{ WebkitTapHighlightColor: 'transparent', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            <FileCode2 className="w-3.5 h-3.5" />
+          </button>
+        )}
         {/* 快捷键说明:轻量弹层,提升 j/k 等隐藏快捷键的可发现性(紧邻设置入口) */}
-        <div className={writePanelOpen ? 'hidden' : 'relative shrink-0 hidden md:block'}>
+        <div className={panelOpen ? 'hidden' : 'relative shrink-0 hidden md:block'}>
           <button
             onClick={() => setHotkeysOpen((v) => !v)}
             className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"

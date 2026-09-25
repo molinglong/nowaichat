@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
-import { encrypt } from "@/lib/crypto"
+import { encrypt, decrypt } from "@/lib/crypto"
 import { buildCustomModelDefinition } from "@/lib/ai/custom-model"
 
 /**
@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
     supportsVision = false,
     supportsFiles = false,
     supportsReasoning = false,
+    testAfterSave = false, // 新字段：保存后是否自动测试连接（AI 调用时传 true）
   } = body
 
   const normalizedProtocol = ['auto', 'chat', 'responses', 'anthropic'].includes(protocol) ? protocol : 'auto'
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     )
   }
+
 
   const userId = session.user.id
 
@@ -193,7 +195,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 返回带是否有 Key 信息的响应
-    return NextResponse.json({
+    const response = NextResponse.json({
       ...buildCustomModelDefinition(record),
       dbId: record.id,
       hasApiKey: !!record.apiKey,
@@ -204,6 +206,40 @@ export async function POST(req: NextRequest) {
       protocol: record.protocol,
       updatedAt: record.updatedAt,
     })
+
+    // 可选：保存后自动测试连接（AI 调用 saveModel 时传 testAfterSave=true）
+    if (testAfterSave) {
+      try {
+        const { resolveApiKey, createCustomLanguageModel } = await import("@/lib/ai/custom-model")
+        const providerRec = record.keyProvider
+          ? await prisma.apiKey.findFirst({ where: { userId, provider: record.keyProvider } })
+          : null
+        const decryptedOwnKey = record.apiKey ? decrypt(record.apiKey) : undefined
+        const testKey = record.apiKey && apiKey
+          ? decrypt(apiKey)
+          : providerRec?.encryptedKey
+            ? decrypt(providerRec.encryptedKey)
+            : decryptedOwnKey
+        const testModel = createCustomLanguageModel(
+          { ...record, apiKey: record.apiKey, keyProvider: record.keyProvider },
+          testKey
+        )
+        const ai = await import("ai")
+        await ai.generateText({
+          model: testModel,
+          prompt: "ping",
+          maxOutputTokens: 8,
+        })
+        // 成功 → 不改动响应，仅静默通过
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "未知错误"
+        console.warn(`[custom-model] Auto-test after save failed for ${modelId}:`, msg)
+        // 不把错误写入响应（避免破坏已有 UI），但用户可手动点击"测试连接"再试
+        // 如需前端显示可改为返回 extra 字段，这里留空
+      }
+    }
+
+    return response
   } catch (err) {
     console.error("[custom-model] Save error:", err)
     return NextResponse.json(

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
+import { monitor } from "@/lib/monitor"
 
 /**
  * AI 本地文件能力开关(localFilesEnabled) —— 与 clarify/memories 同构:
@@ -51,6 +52,8 @@ export async function PATCH(req: Request) {
     },
     select: { localFilesEnabled: true, localFilesExecAutoRun: true },
   })
+
+  monitor("local_files_toggle", { enabled: user.localFilesEnabled, execAutoRun: user.localFilesExecAutoRun })
 
   return NextResponse.json({
     localFilesEnabled: user.localFilesEnabled,
