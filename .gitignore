@@ -38,6 +38,7 @@ next-env.d.ts
 # IDE
 .idea/
 .vscode/
+.trae/
 *.swp
 *.swo
 
@@ -98,5 +99,10 @@ test-ephemeral-full.ps1
 login-redesign-preview.html
 # 设计预览稿(不入库)
 public/preview-*.html
+# 根目录聊天重设计预览稿(2026-09-26 卫生清理追加)
+/chat-redesign-*.html
 # Monaco Editor 静态资源(由 scripts/copy-monaco.cjs 从 node_modules 拷贝,不入库)
 public/monaco/
+# 记忆冷库(本地历史知识库,导入自 D:\xiaz\记忆,不入库)
+.memory-kb/
+.zcode/plans/
