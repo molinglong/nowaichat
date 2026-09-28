@@ -2,6 +2,7 @@ import { tool } from "ai"
 import { prisma } from "@/lib/db"
 import { normalizeWriteTitle } from "@/lib/write/doc-input"
 import { normalizeCodeLanguage } from "@/lib/code/doc-input"
+import { checkCodeSyntax, formatSyntaxIssue } from "@/lib/code/syntax-check.server"
 import { writeCodeToolSchema, type WriteCodeToolOutput } from "@/lib/ai/write-code-tool"
 
 /**
@@ -32,6 +33,19 @@ export function createWriteCodeTool(userId: string, conversationId?: string) {
       if (!body) {
         return { ok: false, message: "代码内容为空" }
       }
+      // 落库前语法门禁：硬错误直接打回（附具体位置），模型在同一轮循环内自纠；
+      // 宁漏勿误报，无解析器的语言只过围栏检查（见 syntax-check.server.ts 头注释）
+      const check = await checkCodeSyntax(language, body)
+      if (check.errors.length > 0) {
+        return {
+          ok: false,
+          message:
+            `语法检查未通过，代码未保存。问题如下：\n` +
+            check.errors.map((e) => `- ${formatSyntaxIssue(e)}`).join("\n") +
+            `\n请修正语法后重新调用本工具提交完整代码（不要把代码改贴到聊天正文里）。`,
+        }
+      }
+      const warnings = check.warnings.map((w) => formatSyntaxIssue(w))
       try {
         const doc = await prisma.codeDoc.create({
           data: {
@@ -51,6 +65,7 @@ export function createWriteCodeTool(userId: string, conversationId?: string) {
           title: doc.title,
           language: doc.language,
           charCount: doc.charCount,
+          ...(warnings.length > 0 ? { warnings } : {}),
         }
       } catch {
         return { ok: false, message: "代码文档保存失败，请稍后重试" }

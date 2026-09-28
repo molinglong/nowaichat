@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { PenLine, Plus, Loader2 } from 'lucide-react'
+import { BookMarked, FileText, PenLine, Plus, Loader2 } from 'lucide-react'
 import { fetchJson } from '@/lib/query/fetcher'
 import { queryKeys } from '@/lib/query/keys'
 import { toast } from '@/lib/toast'
+import { cn } from '@/lib/utils'
 import { WriteDocList } from '@/components/write/WriteDocList'
 import { WriteEditor } from '@/components/write/WriteEditor'
+import { WriteWorkPanel } from '@/components/write/WriteWorkPanel'
 import type { WriteDocSummary } from '@/components/write/types'
 
 /**
@@ -20,6 +22,8 @@ export default function WritePage() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  /** 左栏 Tab:文档列表 / 作品设定 */
+  const [tab, setTab] = useState<'docs' | 'work'>('docs')
 
   const { data, isPending } = useQuery({
     queryKey: queryKeys.write.list(),
@@ -27,6 +31,7 @@ export default function WritePage() {
     staleTime: 30_000,
   })
   const docs = data?.docs ?? []
+  const activeDoc = docs.find((d) => d.id === activeId) ?? null
 
   // 深链定位 /write?doc=<id>(聊天文档卡片跳转):读一次 URL,列表到位后优先选中
   const deepLinkRef = useRef<string | null>(null)
@@ -63,14 +68,54 @@ export default function WritePage() {
     }
   }
 
+  // 删除回调:先把该文档从缓存列表剔除,再清空选中 —— 否则自动选中会回落到
+  // 已删除的 id(refetch 未返回前 docs 仍是旧列表),进入 404「加载失败」死状态
+  function handleDocDeleted(id: string) {
+    queryClient.setQueryData<{ docs: WriteDocSummary[] }>(queryKeys.write.list(), (prev) =>
+      prev ? { ...prev, docs: prev.docs.filter((d) => d.id !== id) } : prev
+    )
+    setActiveId((cur) => (cur === id ? null : cur))
+  }
+
   const listNode = (
-    <WriteDocList
-      docs={docs}
-      isPending={isPending}
-      activeId={activeId}
-      onSelect={setActiveId}
-      onDeleted={(id) => setActiveId((cur) => (cur === id ? null : cur))}
-    />
+    <>
+      {/* Tab 切换:文档 / 设定 */}
+      <div className="shrink-0 flex items-center gap-1 p-2 border-b border-line">
+        {(
+          [
+            { key: 'docs', label: '文档', icon: FileText },
+            { key: 'work', label: '设定', icon: BookMarked },
+          ] as const
+        ).map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              tab === key
+                ? 'bg-surface-muted text-content-primary'
+                : 'text-content-muted hover:text-content-secondary hover:bg-surface-subtle'
+            )}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 min-h-0">
+        {tab === 'docs' ? (
+          <WriteDocList
+            docs={docs}
+            isPending={isPending}
+            activeId={activeId}
+            onSelect={setActiveId}
+            onDeleted={handleDocDeleted}
+          />
+        ) : (
+          <WriteWorkPanel activeDoc={activeDoc} />
+        )}
+      </div>
+    </>
   )
 
   return (
@@ -84,7 +129,7 @@ export default function WritePage() {
       {listOpen && (
         <div className="md:hidden fixed inset-0 z-40 flex">
           <div className="absolute inset-0 bg-black/40" onClick={() => setListOpen(false)} />
-          <div className="relative w-[280px] max-w-[82vw] h-full bg-surface border-r border-line shadow-xl">
+          <div className="relative w-[280px] max-w-[82vw] h-full flex flex-col bg-surface border-r border-line shadow-xl">
             {listNode}
           </div>
         </div>
@@ -102,8 +147,8 @@ export default function WritePage() {
             <div>
               <div className="text-sm font-medium text-content-primary">开始你的第一部小说</div>
               <p className="mt-1.5 text-xs text-content-muted leading-relaxed max-w-xs">
-                新建文档后,输入一句指令 AI 直接生成正文;
-                选中任意文字可润色、扩写、改写、去AI味。
+                新建文档开始写作,选中任意文字可润色、扩写、改写、去AI味;
+                长篇建议先在左侧「设定」里建作品与人物卡、大纲,续写时 AI 自动遵守,不怕跨章吃书。
               </p>
             </div>
             <button

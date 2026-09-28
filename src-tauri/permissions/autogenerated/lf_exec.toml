@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-exec"
+description = "Enables the lf_exec command without any pre-configured scope."
+commands.allow = ["lf_exec"]
+
+[[permission]]
+identifier = "deny-lf-exec"
+description = "Denies the lf_exec command without any pre-configured scope."
+commands.deny = ["lf_exec"]

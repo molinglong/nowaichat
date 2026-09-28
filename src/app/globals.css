@@ -33,6 +33,12 @@
   --surface: 255 255 255;
   --surface-muted: 245 245 247;
   --surface-subtle: 233 233 236;
+  /* 便利贴材质色:摘要块用,纸张固定偏黄,不跟随中性色阶 */
+  --note-paper: 255 246 201;
+  --note-edge: 235 217 140;
+  --note-ink: 63 58 30;
+  --note-sub: 126 116 66;
+  --note-tape: 235 217 140;
   --surface-glass: 255 255 255;
 
   /* 边框 */
@@ -75,6 +81,10 @@
   /* 试卷纸面: 暖纸底与装订线色（纸质卷面风格，定稿自 preview-chinese-exam 方向A） */
 --exam-paper: 251 250 246;
 --exam-paper-line: 216 210 196;
+
+  /* 节日点缀金(中秋层的月盘/桂花点/品牌月相/金色标签)。基线给中性金,
+     节日配色块内覆盖;始终有值,避免元素在切换过渡态引用未定义变量 */
+  --fest-gold: 214 178 106;
 }
 
 .dark {
@@ -86,6 +96,12 @@
   --surface: 28 28 30;
   --surface-muted: 38 38 40;
   --surface-subtle: 51 51 54;
+  /* 便利贴材质色:深色下退化成「深色牛皮纸」,保留暖调但不再发亮 */
+  --note-paper: 59 53 32;
+  --note-edge: 85 76 43;
+  --note-ink: 243 238 220;
+  --note-sub: 180 171 134;
+  --note-tape: 85 76 43;
   --surface-glass: 28 28 30;
 
   /* 边框 */
@@ -128,6 +144,225 @@
   /* 试卷纸面: 暗色用暖深灰保纸感,线色同步提亮 */
 --exam-paper: 29 28 26;
 --exam-paper-line: 68 64 57;
+
+  /* 节日点缀金: 暗色下提亮一档 */
+  --fest-gold: 226 186 108;
+}
+
+/* ── 配色维度：html[data-pal]（与明暗独立的一维）──────────────────
+   base = 上方的黑白基线(:root/.dark 就是基线值,无需重复声明)。
+   新增配色 = 追加 [data-pal=x] 与 [data-pal=x].dark 两块,必须排在基线之后:
+   与 .dark 同特异度时靠源顺序取胜,[data-pal=x].dark 特异度更高、再压过浅色块。
+   「格子」是一套配色、四个光态同一扇窗(见 html[data-grid-tone]),按一天的时间序:
+   日出 = 晨光窗棂(3000K 右上低角,光在右上/影朝左下 + 全屏薄雾),
+   白天 = 正午窗棂(5600K 顶光,天光从画面外溢入),
+   暮色 = 日落窗棂(2400K 左下近地平线,地平线暖带 + 朝右上的长格影),
+   晚上 = 深夜窗棂 —— 四个里唯一的深底(冷蓝),且按定稿**不含任何光层**。
+   月白·桂花金只有深色一态(月夜版),浅色态已撤销(见 .fest-night)。
+   取值经 WCAG 对比度校验(实测对照表见 public/preview-midautumn-daylight.html)。 */
+
+/* ── 格子 · 白天 = 正午-格子: 正午白光底 + 中性墨黑强调色 ─────────
+   对应方向 B(正午窗棂),天光层由 .grid-day 门控(见 .light-layer)。
+   强调色刻意压成中性墨黑 —— "格子"的中性气质由它承担,金色只留给散点与格影;
+   若强调色也做成金,浅色态会被读成"这不还是桂花金吗"。
+   这是格子的默认块(不带 data-grid-tone);暮色块特异性更高(0,2,0)且排在后面,
+   故 data-grid-tone="dusk" 时被整块覆盖。 */
+[data-pal="grid"] {
+  --background: 249 246 238;
+  --foreground: 30 27 21;
+
+  --surface: 255 255 253;
+  --surface-muted: 248 246 239;
+  --surface-subtle: 241 238 229;
+  /* 便利贴材质色: 正午白光下纸面微暖,不压黄 */
+  --note-paper: 255 251 233;
+  --note-edge: 234 221 170;
+  --note-ink: 62 55 32;
+  --note-sub: 126 116 76;
+  --note-tape: 234 221 170;
+  --surface-glass: 255 255 253;
+
+  --line: 216 210 195;
+  --line-strong: 192 184 163;
+
+  --content-primary: 30 27 21;
+  --content-secondary: 104 99 86;
+  --content-muted: 150 144 128;
+
+  --accent: 63 63 70;
+  --accent-hover: 39 39 42;
+  --accent-foreground: 255 255 255;
+  --accent-soft: 236 236 238;
+
+  --code-header: 248 246 239;
+  --code-bg: 253 252 248;
+
+  /* 散点在此配色下是暖金(元素复用 .osmanthus,只换点色) */
+  --fest-gold: 214 168 74;
+}
+
+/* ── 格子 · 日出 = 晨光-格子: 蜜桃暖白底 + 蜜桃赭强调色 ────────────
+   一天时序的第一个光态(00:00 之后的第一缕光)。与暮色必须一眼可分,
+   靠的是**侧别镜像**而不是色温 —— 光暖色暖谁都会调,两态会撞脸:
+   暮色光在左下、影朝右上(rotate 负);日出光在右上、影朝左下(rotate 正),
+   且影色偏冷、画面另一侧留着夜的余冷(冷暖对峙) —— 这是暮色永远做不到的
+   (暮色是暖对暖)。定稿自预览页「日出-格子 A 蜜桃晨雾」: 3000K 蜜桃粉 +
+   全屏薄雾,对比压到四个光态里最低。
+   与白天/暮色一样是**浅底** → 不写 .dark(只有晚上写)。 */
+[data-pal="grid"][data-grid-tone="dawn"] {
+  --background: 250 244 241;
+  --foreground: 38 30 28;
+
+  --surface: 255 253 251;
+  --surface-muted: 250 245 243;
+  --surface-subtle: 244 235 231;
+  /* 便利贴材质色: 晨雾里的纸面比白天更粉一档,但不压成土色 */
+  --note-paper: 255 250 234;
+  --note-edge: 240 220 178;
+  --note-ink: 64 54 34;
+  --note-sub: 128 114 76;
+  --note-tape: 240 220 178;
+  --surface-glass: 255 253 251;
+
+  --line: 224 211 208;
+  --line-strong: 200 184 178;
+
+  --content-primary: 38 30 28;
+  --content-secondary: 118 103 98;
+  --content-muted: 162 145 140;
+
+  /* 蜜桃赭强调色: 比暮色的暖赭(161 98 20)偏粉,比白天的中性墨黑暖 ——
+     三态各有一个"变天信号",互不重复 */
+  --accent: 176 104 78;
+  --accent-hover: 150 84 60;
+  --accent-foreground: 255 255 255;
+  --accent-soft: 251 233 226;
+
+  --code-header: 250 245 243;
+  --code-bg: 255 253 251;
+
+  /* 散点在此配色下偏蜜桃金(晨光把金点也染粉了) */
+  --fest-gold: 252 200 158;
+}
+
+/* ── 格子 · 暮色 = 日落-格子: 暖橙浅底 + 暖赭强调色 ────────────────
+   与白天-格子是同一扇窗的两个时刻,两态都是**浅底**,不再有深色态:
+   只是日头贴到地平线,光色从 5600K 转到 2400K,影从"顶光短影"变"左下长影"。
+   故不能再用 .dark 区分两态 —— 由 html[data-grid-tone="dusk"] 驱动,
+   特异性高于上方的白天块(0,2,0 > 0,1,0),源顺序在其后,稳赢。 */
+[data-pal="grid"][data-grid-tone="dusk"] {
+  --background: 251 242 229;
+  --foreground: 40 30 18;
+
+  --surface: 255 252 246;
+  --surface-muted: 250 243 232;
+  --surface-subtle: 245 235 221;
+  /* 便利贴材质色: 日落暖光下纸面比白天更黄一档,但不压成土色 */
+  --note-paper: 255 249 231;
+  --note-edge: 240 216 168;
+  --note-ink: 66 52 30;
+  --note-sub: 130 108 70;
+  --note-tape: 240 216 168;
+  --surface-glass: 255 252 246;
+
+  --line: 219 205 182;
+  --line-strong: 196 178 150;
+
+  --content-primary: 40 30 18;
+  --content-secondary: 118 100 76;
+  --content-muted: 160 142 116;
+
+  /* 暖赭强调色: 与白天的中性墨黑(63 63 70)明确分开,承担"变天"的信号 */
+  --accent: 161 98 20;
+  --accent-hover: 132 78 12;
+  --accent-foreground: 255 255 255;
+  --accent-soft: 250 236 216;
+
+  --code-header: 250 243 232;
+  --code-bg: 255 252 246;
+
+  /* 散点在此配色下更金更亮(低角度暖光下,金点本身就是光源的碎屑) */
+  --fest-gold: 240 176 88;
+}
+
+/* ── 格子 · 晚上 = 深夜-格子: 冷蓝深底 + 冷蓝白强调色 ──────────────
+   格子的第四个光态(一天时序的最后一刻),也是格子下**唯一一个深底**态 —— 故 applyAppearance 会为它
+   写 .dark(下游靠 .dark 判明暗),深色 token 由本块(0,2,0)整块压过 .dark(0,1,0)。
+   与「月白·桂花金」同为深色,但两者必须一眼可分:
+   桂花金 = 暖金 + 右上金月盘 + 有光;深夜-格子 = 冷蓝 + **无天体、无光层**,
+   只留一层冷月白的格影(screen 提亮)。定稿自预览页「夜蓝 · 删光 B」:
+   金属感的来源是右上那团径向镜面高光(高光泽反射是金属的签名),删光即断根。 */
+[data-pal="grid"][data-grid-tone="night"] {
+  --background: 14 18 27;
+  --foreground: 235 240 250;
+
+  --surface: 26 31 42;
+  --surface-muted: 33 39 52;
+  --surface-subtle: 42 49 64;
+  /* 便利贴材质色: 与基线深色同一份"深色牛皮纸",保留暖调、不发亮 */
+  --note-paper: 59 53 32;
+  --note-edge: 85 76 43;
+  --note-ink: 243 238 220;
+  --note-sub: 180 171 134;
+  --note-tape: 85 76 43;
+  --surface-glass: 26 31 42;
+
+  --line: 52 60 78;
+  --line-strong: 72 82 104;
+
+  --content-primary: 235 240 250;
+  --content-secondary: 156 166 188;
+  --content-muted: 112 122 144;
+
+  /* 冷蓝白强调色。深底上强调色是浅的,故前景色必须回到深色 —— 
+     否则按钮/选中态上的白字压在浅蓝上会糊成一片 */
+  --accent: 170 196 238;
+  --accent-hover: 190 210 244;
+  --accent-foreground: 14 18 27;
+  --accent-soft: 42 52 70;
+
+  --code-header: 33 39 52;
+  --code-bg: 26 31 42;
+
+  /* 散点在此配色下仍偏金(与白天/暮色共用同一套金点,夜里更亮更虚一档) */
+  --fest-gold: 236 206 138;
+}
+
+/* ── 月白·桂花金: 仅深色(月夜版)─────────────────────────────────
+   浅色态(白天-桂花金)已撤销。这里写 [data-pal="guihua"] 而不带 .dark 后缀:
+   该配色只可能在深色下出现(见 theme.ts 的 normalizeAppearance),不带后缀后
+   即便 .dark 晚一拍也不会闪出一套没人设计过的浅色值。 */
+[data-pal="guihua"] {
+  --background: 21 19 15;
+  --foreground: 243 240 231;
+
+  --surface: 32 29 24;
+  --surface-muted: 42 38 31;
+  --surface-subtle: 55 50 41;
+  /* 便利贴材质色:桂花暖调 + 深色 */
+  --note-paper: 61 54 32;
+  --note-edge: 88 78 44;
+  --note-ink: 245 240 222;
+  --note-sub: 182 172 134;
+  --note-tape: 88 78 44;
+  --surface-glass: 32 29 24;
+
+  --line: 62 56 46;
+  --line-strong: 84 76 62;
+
+  --content-primary: 243 240 231;
+  --content-secondary: 170 162 145;
+  --content-muted: 124 117 102;
+
+  --accent: 226 179 90;
+  --accent-hover: 236 194 116;
+  --accent-foreground: 32 29 24;
+  --accent-soft: 58 50 34;
+
+  --code-header: 44 40 33;
+  --code-bg: 32 29 24;
+
+  --fest-gold: 232 192 104;
 }
 
 /* 触屏全局反馈: 去掉 iOS 点按灰色高亮;
@@ -245,6 +480,25 @@ body {
     overscroll-behavior: contain;
   }
 
+  /* 内容区上沿渐隐(仅 ≥md,由使用处加 hidden md:block)。
+     顶栏下沉后内容滚到容器上沿本会被硬切一刀,而浮簇(TopBar ≥md 分支)自身没有底板 ——
+     消息正文的笔画直接从按钮下沿断开。这层把「硬切」换成「渐隐」。
+     顶部色取 --surface,与主区底色同源 ⇒ 未滚动 / 短会话(内容不足一屏)时完全不可见,
+     因此不需要监听 scrollTop 来决定显隐,零 JS。
+     96px 长渐隐(实测:y=6px 处完全无墨、y=36px 开始透出、y=96px 仍在衰减)。 */
+  .top-fade {
+    height: 96px;
+    background: linear-gradient(
+      to bottom,
+      rgb(var(--surface)) 0%,
+      rgb(var(--surface)) 18%,
+      rgb(var(--surface) / 0.8) 40%,
+      rgb(var(--surface) / 0.42) 66%,
+      rgb(var(--surface) / 0.12) 86%,
+      rgb(var(--surface) / 0) 100%
+    );
+  }
+
   /* 触屏设备(无 hover)直接显示按钮;桌面端 hover 才显示。
      用来替代"纯靠 group-hover 显示"的编辑/删除按钮等,
      让手机端用户永远能看到并点中这些操作。 */
@@ -314,6 +568,580 @@ body {
   }
 }
 
+/* ── 欢迎页壁纸(设置 → 通用开启;图层层级见 WelcomeWallpaperLayer) ──
+   挂在 .app-shell 内首位:z-index:-1 使它铺在 shell 底色之上、
+   侧栏/内容列之下(shell 加 relative isolate 收拢层叠上下文)。
+   可读性蒙版用 linear-gradient 同层合成在图片上 —— 蒙版天然跟随
+   壁纸铺满整窗(含侧栏底下),不会出现「侧栏鲜艳/内容区发白」的分界。 */
+.welcome-wallpaper {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(var(--background) / 0.6), rgb(var(--background) / 0.6)),
+    url('/wallpaper/bizhi.jpg');
+  background-size: cover;
+  background-position: center;
+}
+
+/* 壁纸激活:内容列放行(壁纸透出),侧栏变毛玻璃卡片 ——
+   aside 自带的 backdrop-blur-xl 从「纯色上空转」变成吃到壁纸的真玻璃。
+   蒙版已随壁纸垫在侧栏下,这里只补一层浅色调做出卡片感,浓度别太高
+   (会与底层蒙版叠乘)。聊天态/其他 tab 下壁纸层不存在,:has 不命中,
+   两处恢复不透明 */
+.app-shell:has(> .welcome-wallpaper) .app-shell-column {
+  background-color: transparent;
+}
+.app-shell:has(> .welcome-wallpaper) .app-shell-sidebar {
+  background-color: rgb(var(--surface-muted) / 0.35);
+}
+
+/* ── 主题专属元素门控（显隐走纯 CSS,不做 JS 条件渲染）────────────
+   data-pal 由 layout 首帧内联脚本在首次绘制前写好,首帧即正确 ——
+   无闪烁、无水合(hydration)分歧,装饰元素也不需要客户端状态。
+   ── 门控类族 ──
+   .fest-only   仅 月白·桂花金 可见(无明暗之分的元素,如登录页月夜层)
+   .fest-night  仅 月白·桂花金 可见 —— 该配色只有深色一态(月夜版),
+                故与 .fest-only 同条件,门控留在这里只为语义明确
+   .grid-dawn   仅 格子 + 日出 可见 = 晨光-格子
+   .grid-day    仅 格子 + 白天 可见 = 正午-格子
+   .grid-night  仅 格子 + 暮色 可见 = 日落-格子
+                (历史错名: 它管的是**暮色**不是晚上,晚上见下面那个)
+   .grid-nightfall 仅 格子 + 晚上 可见 = 深夜-格子
+   .no-fest     非 月白·桂花金 可见(黑白基线与格子共用同一份文案,如登录页标语)
+   .base-only   仅 黑白基线 可见(该处文案在格子下另有专属版本,如欢迎页问候语)
+   注意 ① 四个光态里只有「晚上」是深底,由 applyAppearance 为它写 .dark;
+        ② 显隐判据**逐个列出目标取值**,不用 :not() 反推 —— 白天那条曾在新增
+           「晚上」时把深夜态误落进白天分支,散点那条也曾"只排除 dusk"而把深夜
+           一并吃进来。新增「日出」时三处一并改成逐值列举,这个坑到此为止;
+        ③ 缺省(未写 data-grid-tone)按白天处理。
+   每个格子专属类要排除 3 个"非己"取值,故下面按 4 组 × 3 行逐个列出。 */
+html:not([data-pal="guihua"]) .fest-only,
+html:not([data-pal="guihua"]) .fest-night,
+html:not([data-pal="grid"]) .grid-dawn,
+html:not([data-pal="grid"]) .grid-day,
+html:not([data-pal="grid"]) .grid-night,
+html:not([data-pal="grid"]) .grid-nightfall,
+html[data-pal="guihua"] .no-fest,
+html[data-pal="guihua"] .base-only,
+html[data-pal="grid"] .base-only,
+/* 缺省(未写 data-grid-tone)= 白天: 三个"非白天"类在缺省下也必须收掉 */
+html[data-pal="grid"]:not([data-grid-tone]) .grid-dawn,
+html[data-pal="grid"]:not([data-grid-tone]) .grid-night,
+html[data-pal="grid"]:not([data-grid-tone]) .grid-nightfall,
+html[data-pal="grid"][data-grid-tone="day"] .grid-dawn,
+html[data-pal="grid"][data-grid-tone="dusk"] .grid-dawn,
+html[data-pal="grid"][data-grid-tone="night"] .grid-dawn,
+html[data-pal="grid"][data-grid-tone="dawn"] .grid-day,
+html[data-pal="grid"][data-grid-tone="dusk"] .grid-day,
+html[data-pal="grid"][data-grid-tone="night"] .grid-day,
+html[data-pal="grid"][data-grid-tone="dawn"] .grid-night,
+html[data-pal="grid"][data-grid-tone="day"] .grid-night,
+html[data-pal="grid"][data-grid-tone="night"] .grid-night,
+html[data-pal="grid"][data-grid-tone="dawn"] .grid-nightfall,
+html[data-pal="grid"][data-grid-tone="day"] .grid-nightfall,
+html[data-pal="grid"][data-grid-tone="dusk"] .grid-nightfall {
+  display: none !important;
+}
+
+/* 欢迎页右上角月盘(F-1 定稿案): 落在点阵留白的右上空白区。
+   实心金盘 + 柔边光晕 —— 不用多色标渐变(平色底上会出现马赫带光斑轮廓) */
+.moon-corner {
+  position: absolute;
+  right: 64px;
+  top: 44px;
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgb(var(--fest-gold) / 0.95) 0%,
+    rgb(var(--fest-gold) / 0.62) 46%,
+    rgb(var(--fest-gold) / 0.18) 78%,
+    transparent 90%
+  );
+  box-shadow: 0 0 80px 26px rgb(var(--fest-gold) / 0.16);
+}
+
+/* 窄屏: 月盘收小贴角,避让居中的问候/输入块 */
+@media (max-width: 767px) {
+  .moon-corner {
+    right: 22px;
+    top: 20px;
+    width: 84px;
+    height: 84px;
+  }
+}
+
+/* 桂花散点(F-3): 3px 金点 + 7px 柔光晕,沿点阵外圈稀疏散布,避开中心内容带 */
+.osmanthus {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.osmanthus i {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgb(var(--fest-gold) / 0.6);
+  box-shadow: 0 0 7px rgb(var(--fest-gold) / 0.4);
+}
+
+/* 散点层归属"桂花金 + 格子"两套配色(点色由 --fest-gold 驱动,不用两份 DOM) */
+html:not([data-pal="guihua"]):not([data-pal="grid"]) .osmanthus-layer {
+  display: none;
+}
+
+/* 正午-格子(白天): 金点在白光上略实一点、光晕收小(强光下不发散)。
+   白天是格子的**缺省**光态(不带 data-grid-tone 即白天),故这里写成不带取值
+   的基础规则,由其余三态各自覆盖 —— 判据逐个列值,不用 :not() 反推 */
+html[data-pal="grid"] .osmanthus i {
+  background: rgb(var(--fest-gold) / 0.9);
+  box-shadow: 0 0 6px rgb(var(--fest-gold) / 0.5);
+}
+
+/* 晨光-格子(日出): 晨雾里金点最虚、光晕放开 —— 雾把点"化开"了 */
+html[data-pal="grid"][data-grid-tone="dawn"] .osmanthus i {
+  background: rgb(var(--fest-gold) / 0.82);
+  box-shadow: 0 0 8px rgb(var(--fest-gold) / 0.46);
+}
+
+/* 日落-格子: 金点更亮、光晕略大(低角度暖光下,金点像被余晖点着) */
+html[data-pal="grid"][data-grid-tone="dusk"] .osmanthus i {
+  background: rgb(var(--fest-gold) / 0.88);
+  box-shadow: 0 0 8px rgb(var(--fest-gold) / 0.52);
+}
+
+/* 深夜-格子: 金点略虚、光晕放开 —— 暗底上它是画面里唯一的暖色,像悬着的小灯 */
+html[data-pal="grid"][data-grid-tone="night"] .osmanthus i {
+  background: rgb(var(--fest-gold) / 0.8);
+  box-shadow: 0 0 9px rgb(var(--fest-gold) / 0.45);
+}
+
+/* 日出/白天/暮色三态都是浅底: 收起点阵 —— 背景纹理交由天光层承担(窗棂格影)。
+   圆点(22px)与格线(128/114px)是两套频率,叠着看会互相打架,也容易生摩尔纹。
+   深夜态例外: 它按定稿"删光"、没有天光层,点阵回归,否则背景只剩一块纯色。
+   判据逐个列值(含"未写 data-grid-tone = 白天"这条缺省),不用 :not() 反推 */
+html[data-pal="grid"]:not([data-grid-tone]) .dot-grid,
+html[data-pal="grid"][data-grid-tone="dawn"] .dot-grid,
+html[data-pal="grid"][data-grid-tone="day"] .dot-grid,
+html[data-pal="grid"][data-grid-tone="dusk"] .dot-grid {
+  display: none;
+}
+
+/* ── 晨光-格子 · 天光层（仅 格子 + 日出 可见,由 .grid-dawn 门控）────
+   一天的第一缕光: 光源在**右上**画外低角(≈30°),光斑从右上角溢进来。
+   与暮色必须一眼可分,靠的是**侧别镜像** —— 暮色光在左下、影朝右上;
+   这里光在右上、影朝**左下**(rotate 正值)。
+   定稿自预览页「日出-格子 A 蜜桃晨雾」: 3000K 蜜桃粉 + 一层全屏薄雾,
+   对比压到四个光态里最低 —— 雾是这个态的主角,抽掉它就和"暖调白天"无异。
+   不画天体(四个光态一律不画,与白天/暮色/晚上一致)。 */
+.dawn-glow {
+  position: absolute;
+  right: -16%;
+  top: -14%;
+  width: 66%;
+  height: 74%;
+  filter: blur(30px);
+  background: radial-gradient(
+    58% 58% at 66% 46%,
+    rgb(255 186 146 / 0.6),
+    rgb(255 212 178 / 0.26) 46%,
+    transparent 74%
+  );
+}
+/* 全屏薄雾: 与"暖调白天"最直观的差别 —— 把整体对比拉平。
+   inset 取负值(不用 0): blur 会把元素边缘与"透明"平均,正好铺满会看到一圈压边 */
+.dawn-haze {
+  position: absolute;
+  inset: -8%;
+  filter: blur(16px);
+  opacity: 0.72;
+  background: linear-gradient(
+    196deg,
+    rgb(255 240 228 / 0.62) 0%,
+    rgb(252 246 242 / 0.34) 46%,
+    rgb(244 236 234 / 0.2) 100%
+  );
+}
+/* 晨雾里的窗棂格影: 影被雾化开(blur 3.4px,是四个光态里最虚的),方向朝**左下**
+   (rotate +10° 就是暮色 −8° 的镜像 —— 这一条比色温更能把两态分开)。
+   浅底上继续 multiply。影色用去饱和的暖灰(132 100 92),比暮色的橘褐
+   (126 84 40)中性得多: 雾天里影子本就淡而中性 */
+.dawn-mullion {
+  position: absolute;
+  inset: -18% -20%;
+  transform: rotate(10deg) scale(1.1);
+  filter: blur(3.4px);
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(132 100 92 / 0.11) 0 13px, transparent 13px 150px),
+    repeating-linear-gradient(0deg, rgb(132 100 92 / 0.075) 0 10px, transparent 10px 106px);
+  animation: dawn-drift 126s linear infinite;
+}
+
+/* 平移距离必须与格线尺寸(150×106)对齐,否则循环回起点会跳帧。
+   数值与 dusk-drift 相同,仍保留独立命名: 四个光态各一条,改某态时不牵连别态 */
+@keyframes dawn-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 150px 106px, 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dawn-mullion {
+    animation: none;
+  }
+}
+
+/* ── 正午-格子 · 天光层（仅 格子 + 白天 可见,由 .grid-day 门控）───
+   光源刻意留在画面外: 顶边过曝带 + 右上角外溢柔光 + 窗棂格影。
+   不画圆盘 —— 白天在角落放一个"太阳"会被读成凭空出现的发光球,
+   而格影本身已说明天光从窗外来。四个光态的装饰层共用 .light-layer 这个定位盒
+   (深夜态也用它 —— 虽然那一态按定稿只有格影、没有光)。 */
+.light-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* 顶边过曝带: 从画面外溢入的天光,向下渐隐(无圆形边界) */
+.daylight-skyfall {
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  top: -4%;
+  height: 56%;
+  filter: blur(11px);
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 252 / 0.98) 0%,
+    rgb(255 253 242 / 0.74) 24%,
+    rgb(255 250 232 / 0.32) 54%,
+    transparent 100%
+  );
+}
+/* 右上角外溢柔光: 径向渐变 72% 即透明,看不出边界 */
+.daylight-skyfall::after {
+  content: '';
+  position: absolute;
+  right: -10%;
+  top: -16%;
+  width: 58%;
+  height: 86%;
+  filter: blur(18px);
+  background: radial-gradient(58% 58% at 76% 10%, rgb(255 255 251 / 0.92), transparent 72%);
+}
+/* 窗棂格影: 斜向格网 + 极缓平移(90s),方向与光带一致 */
+.daylight-mullion {
+  position: absolute;
+  inset: -16%;
+  transform: rotate(-11deg) scale(1.08);
+  filter: blur(1.1px);
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(104 90 60 / 0.16) 0 13px, transparent 13px 128px),
+    repeating-linear-gradient(0deg, rgb(104 90 60 / 0.11) 0 10px, transparent 10px 114px);
+  animation: daylight-drift 90s linear infinite;
+}
+/* 玻璃斜光: 一道很淡的过曝斜纹,补足"光穿过玻璃"的质感 */
+.daylight-sheen {
+  position: absolute;
+  inset: 0;
+  filter: blur(6px);
+  opacity: 0.75;
+  background: linear-gradient(128deg, transparent 40%, rgb(255 255 255 / 0.55) 47%, transparent 55%);
+}
+
+@keyframes daylight-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 128px 114px, 0 0; }
+}
+
+/* 窄屏: 过曝带收窄,避免压到居中的问候/输入块 */
+@media (max-width: 767px) {
+  .daylight-skyfall {
+    height: 46%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .daylight-mullion {
+    animation: none;
+  }
+}
+
+/* ── 日落-格子 · 暮色层（仅 格子 + 暮色 可见,由 .grid-night 门控）──
+   与白天-格子是同一扇窗、同一套格影,只是日头贴到地平线:
+   光源挪到画面外左下近地平线 —— 地平线暖带 + 左下外溢柔光 + 云条 + 暖调斜光。
+   格影仍是"压暗的影"(两态都是浅底,不翻转混合模式,继续 multiply),
+   只是被低角度光拉长拉平: 角距 −8°/150px(白天版是 −11°/128px)。 */
+.dusk-horizon {
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -8%;
+  height: 34%;
+  filter: blur(20px);
+  background: linear-gradient(0deg, rgb(255 172 92 / 0.5) 0%, rgb(232 146 74 / 0.22) 44%, transparent 100%);
+}
+/* 左下外溢暖光: 日头就在画面外的左下角,光从那一侧漫进来 */
+.dusk-spill {
+  position: absolute;
+  left: -14%;
+  bottom: -20%;
+  width: 64%;
+  height: 62%;
+  filter: blur(30px);
+  background: radial-gradient(
+    60% 60% at 18% 82%,
+    rgb(255 168 84 / 0.62),
+    rgb(255 196 128 / 0.28) 46%,
+    transparent 74%
+  );
+}
+/* 水平云条: 被余晖染暖的长条云,横向缓移(88s)。
+   浅底上透明度必须比深底版高一档才读得出来,但仍压到"有形不抢眼" */
+.dusk-cloudband {
+  position: absolute;
+  inset: 0;
+  animation: dusk-cloud 88s ease-in-out infinite alternate;
+}
+.dusk-cloudband i {
+  position: absolute;
+  left: -18%;
+  right: -18%;
+  border-radius: 999px;
+  filter: blur(14px);
+}
+.dusk-cloudband i:nth-child(1) {
+  top: 14%;
+  height: 24px;
+  background: linear-gradient(90deg, transparent, rgb(236 156 96 / 0.22) 50%, transparent);
+}
+.dusk-cloudband i:nth-child(2) {
+  top: 24%;
+  height: 16px;
+  background: linear-gradient(90deg, transparent, rgb(246 178 118 / 0.34) 34%, rgb(255 206 152 / 0.28) 62%, transparent);
+}
+.dusk-cloudband i:nth-child(3) {
+  top: 37%;
+  height: 9px;
+  background: linear-gradient(90deg, transparent, rgb(246 178 118 / 0.2) 40%, transparent);
+}
+/* 被拉平拉长的窗棂格影(与白天版同一扇窗、同一套"影"):
+   浅底上继续用 multiply —— 深底那套 screen 混合在这里会把格线变成白痕 */
+.dusk-mullion {
+  position: absolute;
+  inset: -16%;
+  transform: rotate(-8deg) scale(1.08);
+  filter: blur(1.4px);
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(126 84 40 / 0.16) 0 14px, transparent 14px 150px),
+    repeating-linear-gradient(0deg, rgb(126 84 40 / 0.11) 0 10px, transparent 10px 106px);
+  animation: dusk-drift 110s linear infinite;
+}
+/* 玻璃斜光: 暖调版(白天版是纯白),补足"光斜穿玻璃"的质感 */
+.dusk-sheen {
+  position: absolute;
+  inset: 0;
+  filter: blur(7px);
+  opacity: 0.7;
+  background: linear-gradient(-118deg, transparent 42%, rgb(255 232 196 / 0.6) 49%, transparent 57%);
+}
+
+@keyframes dusk-cloud {
+  from { transform: translate3d(-2%, 0, 0); }
+  to { transform: translate3d(4%, 0, 0); }
+}
+@keyframes dusk-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 150px 106px, 0 0; }
+}
+
+/* 窄屏: 暖带收窄,避免压到居中的问候/输入块 */
+@media (max-width: 767px) {
+  .dusk-horizon {
+    height: 26%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dusk-cloudband,
+  .dusk-mullion {
+    animation: none;
+  }
+}
+
+/* ── 深夜-格子 · 格影层（仅 格子 + 晚上 可见,由 .grid-nightfall 门控）──
+   定稿自预览页「夜蓝 · 删光 B」: 这一态**没有光**。前两态都有天光层
+   (正午的顶边过曝带 / 暮色的地平线暖带 + 云条),深夜态则把光整个删掉 ——
+   右上那团径向镜面高光正是金属感的来源(高光泽反射是金属最核心的签名),
+   删光即断根。于是画面只剩: 底色 + 一层格影 + 点阵 + 冷金散点。
+   深底上格影必须换回 screen(提亮)混合 —— 浅底那两态的 multiply 压在近黑底上
+   会整片消失;颜色取冷月白而非橘金,与「月白·桂花金」的暖金格调拉开距离。
+   格线参数沿用夜蓝定稿(140×110 / −9°),故自带一条关键帧,不复用 dusk-drift
+   (平移距离必须与格子尺寸对齐,否则循环回起点会跳帧)。 */
+.nightfall-mullion {
+  position: absolute;
+  inset: -18%;
+  transform: rotate(-9deg) scale(1.1);
+  filter: blur(2.2px);
+  mix-blend-mode: screen;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(178 204 244 / 0.14) 0 13px, transparent 13px 140px),
+    repeating-linear-gradient(0deg, rgb(178 204 244 / 0.09) 0 10px, transparent 10px 110px);
+  animation: nightfall-drift 116s linear infinite;
+}
+
+@keyframes nightfall-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 140px 110px, 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nightfall-mullion {
+    animation: none;
+  }
+}
+
+/* ── 侧栏材质层（B）：仅「配色 = 格子」下渲染 ──────────────────────
+   侧栏(Sidebar.tsx)的底色是 --surface-muted,本身是一块纯色平面;这一层给它叠上
+   窗棂格影,与聊天区共用同一套光照语言 —— 日出/白天/暮色走 multiply 压暗(浅底),
+   晚上走 screen 提亮(深底:压暗的影在近黑底上会整片消失)。
+   间距按侧栏窄条重算: 聊天区是 140/110px,侧栏只有 224px 宽,照搬只剩一格半,
+   故收到 84/64px;线宽 2px 且压得很低(见下)——宁可几乎看不见,也不要"拉丝/刻蚀"。
+   基线 / 月白·桂花金下不渲染(display:none) —— 那两套保持素净。 */
+.sidebar-material {
+  display: none;
+  position: absolute;
+  inset: 0;
+  /* 负 z-index: 落在 aside 自身背景之上、所有内容之下。
+     aside 带 transform + backdrop-filter,本身即层叠上下文,负值不会漏到外面 */
+  z-index: -10;
+  pointer-events: none;
+  overflow: hidden;
+}
+html[data-pal="grid"] .sidebar-material {
+  display: block;
+}
+.sidebar-material::before {
+  content: '';
+  position: absolute;
+  inset: -14%;
+  transform: rotate(-8deg) scale(1.1);
+  filter: blur(2.2px);
+}
+/* 白天(正午 5600K,格子的缺省光态): 中性墨色格影,压得很淡 ——
+   它只是"光被窗框挡住"的痕迹。写成不带取值的基础规则,其余三态各自覆盖 */
+html[data-pal="grid"] .sidebar-material::before {
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(104 90 60 / 0.05) 0 2px, transparent 2px 84px),
+    repeating-linear-gradient(0deg, rgb(104 90 60 / 0.035) 0 2px, transparent 2px 64px);
+}
+/* 日出(晨光 3000K): 蜜桃暖灰格影 —— 比白天的中性墨色暖、比暮色的橘褐淡一档 */
+html[data-pal="grid"][data-grid-tone="dawn"] .sidebar-material::before {
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(122 96 74 / 0.052) 0 2px, transparent 2px 84px),
+    repeating-linear-gradient(0deg, rgb(122 96 74 / 0.036) 0 2px, transparent 2px 64px);
+}
+/* 暮色(日落 2400K): 暖赭格影,与暮色的暖底同族 */
+html[data-pal="grid"][data-grid-tone="dusk"] .sidebar-material::before {
+  mix-blend-mode: multiply;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(150 96 32 / 0.06) 0 2px, transparent 2px 84px),
+    repeating-linear-gradient(0deg, rgb(150 96 32 / 0.042) 0 2px, transparent 2px 64px);
+}
+/* 晚上(深夜): 冷月白格影 + screen 提亮;这一态按定稿没有光,只有影 */
+html[data-pal="grid"][data-grid-tone="night"] .sidebar-material::before {
+  mix-blend-mode: screen;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(178 204 244 / 0.075) 0 2px, transparent 2px 84px),
+    repeating-linear-gradient(0deg, rgb(178 204 244 / 0.05) 0 2px, transparent 2px 64px);
+}
+
+/* ── 侧栏远侧入影：靠聊天区那一侧微暗,向左渐隐 ─────────────────────
+   这里原本还叠着一层"左缘来光"白渐变(90deg,左缘 0.92 白),已撤掉。
+   原因(截图逐像素实测): 侧栏底色 --surface-muted 是 245/248 的近白,再刷
+   0.92 白,面板左侧约 30% 会落到 254 —— 底下的格影被整片冲掉,既无纹理也无
+   色差,读起来不是"被光照亮",而是"少了一块内容"(面板左缘出现一块空白)。
+   现在明暗坡只由暗部给出: 左缘保持面板本色(格影可见),右端入影,方向感
+   保留,面板里也不再出现第二块纯白。
+   挂在整块面板(aside.sidebar-panel)而不是只挂会话列表容器: 列表容器只是
+   面板里的一块,渐变若只铺它,列表顶边会多出一条横向亮暗断层。 */
+.sidebar-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -9;
+  pointer-events: none;
+  background-image:
+    /* 270deg = 朝左,故 0% 落在右缘: 靠聊天区那一侧入影,向左渐隐 */
+    linear-gradient(
+      270deg,
+      rgb(0 0 0 / 0.05) 0%,
+      rgb(0 0 0 / 0.022) 26%,
+      rgb(0 0 0 / 0) 58%
+    );
+}
+html.dark .sidebar-panel::after {
+  /* 深色底(33/39/52)与浅色侧同一口径: 只留暗部,那层 0.1 白高光一并撤掉,
+     避免边缘糊成灰雾 */
+  background-image:
+    linear-gradient(
+      270deg,
+      rgb(0 0 0 / 0.16) 0%,
+      rgb(0 0 0 / 0.07) 28%,
+      rgb(0 0 0 / 0) 62%
+    );
+}
+
+/* 侧栏品牌月相徽标(F-4): 15px 圆缺月(CSS 双圆相减)。
+   缺口色取 --surface-muted —— 侧栏面板底色就是它,镂空处必须与面板同色,
+   侧栏换材质时这里要跟着换(旧值是 --surface-glass) */
+.brand-moon {
+  position: relative;
+  overflow: hidden;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: rgb(var(--fest-gold) / 0.85);
+}
+.brand-moon::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: -2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: rgb(var(--surface-muted));
+}
+
+/* 副标题里的金色「中秋」标签(F-2 定稿变体甲副行) */
+.fest-tag {
+  color: rgb(var(--fest-gold));
+}
+
+/* 格子的两个尾标(正午 / 暮色)走"金色胶囊": 只有描边与底色是金,
+   文字用次级墨色 —— 浅色态下金色文字压在白底上只有 ~1.9:1,读不出来 */
+html[data-pal="grid"] .fest-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid rgb(var(--fest-gold) / 0.5);
+  background: rgb(var(--fest-gold) / 0.14);
+  color: rgb(var(--content-secondary));
+}
+
 /* Tauri 专属元素门控：带 .tauri-only 的元素只在桌面壳渲染显示。
    data-tauri 属性由 layout.tsx 的 head 内联脚本在首帧前同步注入，
    桌面端零闪烁、Web 端零渲染差异（登录页红绿灯/拖动区用） */
@@ -366,18 +1194,18 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   box-shadow: none;
 }
 
-/* 隐藏浏览器右键菜单（已经在 layout.tsx 用 JS 拦截，
-   这里给一个兜底 CSS 方案） */
-[data-tauri] * {
+/* 客户端文本选择：默认可选（正文/代码块/输入框与 Web 端行为一致），
+   只摘掉纯操作控件，避免点按/拖动时误选中按钮文案。
+   历史坑：这里曾用 `[data-tauri] * { user-select: none }` 全局禁选，
+   再配 `.message-content` / `.chat-input` 白名单放行；但这两个类在全项目
+   组件里从未出现过（死选择器），导致客户端内所有文本都选不中 ——
+   拖选 / Ctrl+A / Ctrl+C / 右键「复制」全部失效（Web 端因规则挂在 [data-tauri]
+   下不受影响，故只有客户端异常）。拖拽区安全已有别的机制兜底：
+   标题栏块走 -webkit-app-region: drag、卡片拖动期由 useWindowDrag 临时设 none。 */
+[data-tauri] button,
+[data-tauri] [role='button'] {
   -webkit-user-select: none;
   user-select: none;
-}
-
-/* 允许特定元素可选中（聊天消息等） */
-[data-tauri] .message-content,
-[data-tauri] .chat-input {
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 /* 客户端专属滚动条样式 */
@@ -409,6 +1237,13 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
 /* ── Tauri 拖拽区自动隔离 ─────────────────────────────
    在 header 上设了 data-tauri-drag-region 的元素
    内部所有交互控件自动排除拖拽,无需逐个加 style。
+   ───────────────────────────────────────────────────
+   两种挂法,按区域性质选:
+   1) 属性 + -webkit-app-region: drag(侧栏头/移动顶栏等"标题栏"块):
+      子元素继承拖拽区,整块都能抓窗,故必须靠上面这条隔离规则把按钮摘出去;
+   2) 只挂属性(内容区顶部拖动带、聊天留白带、各 tab 顶部栏):
+      Tauri 内置脚本只认 mousedown 的 e.target 自身带属性 —— 元素自身的留白
+      可拖、子元素(正文/按钮/弹层)一概不受影响,天然不会吃掉点击与选词。
    ─────────────────────────────────────────────────── */
 [data-tauri] [data-tauri-drag-region] button,
 [data-tauri] [data-tauri-drag-region] a,
@@ -420,31 +1255,7 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
 
 /* ── 客户端专属视觉增强(配套 TauriVisualFX.tsx,仅 Tauri 生效,Web 零影响) ── */
 
-/* 1) 系统毛玻璃(Mica/Acrylic):窗口底层换半透明,让系统材质透出。
-      弹窗等浮层保持纯色背景(弹窗纯色背景规范),这里只动根底色与主外壳两层:
-      body + (app)/layout.tsx 的外壳底 + 主卡片/内容列。 */
-[data-tauri][data-glass] body {
-  background: rgb(var(--background) / 0.72);
-}
-.dark[data-tauri][data-glass] body {
-  background: rgb(var(--background) / 0.6);
-}
-[data-tauri][data-glass] .h-screen.bg-surface-muted {
-  background: rgb(var(--surface-muted) / 0.55);
-}
-[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface,
-[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface > .bg-surface {
-  background: rgb(var(--surface) / 0.6);
-}
-.dark[data-tauri][data-glass] .h-screen.bg-surface-muted {
-  background: rgb(var(--surface-muted) / 0.5);
-}
-.dark[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface,
-.dark[data-tauri][data-glass] .h-screen.bg-surface-muted > .h-full.bg-surface > .bg-surface {
-  background: rgb(var(--surface) / 0.55);
-}
-
-/* 2) 启动淡入:掩盖远程壳 splash → 远程站跳转的闪白;
+/* 1) 启动淡入:掩盖远程壳 splash → 远程站跳转的闪白;
       关闭时缩小淡出(tauri.close() 先挂 data-closing 播完再真正关窗)。 */
 @media (prefers-reduced-motion: no-preference) {
   [data-tauri] body {
@@ -463,8 +1274,11 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   to { opacity: 0; transform: scale(0.98); }
 }
 
-/* 3) 失焦降饱和:独立 fixed 灰罩层(TauriVisualFX 渲染),
-      不用 html/body filter —— filter 会产生 containing block 破坏 fixed 弹窗定位。 */
+/* 2) 失焦降饱和:独立 fixed 灰罩层(TauriVisualFX 渲染),
+      不用 html/body filter —— filter 会产生 containing block 破坏 fixed 弹窗定位。
+      默认 visibility:hidden:opacity:0 的元素仍参与合成,全屏 backdrop-filter
+      会让滚动/动画每帧多付一层全屏重采样;hidden 才真正零开销,
+      visibility 可过渡(delay 挪到隐藏侧),240ms 淡出动画保留。 */
 [data-tauri] .tauri-blur-overlay {
   position: fixed;
   inset: 0;
@@ -473,13 +1287,32 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   -webkit-backdrop-filter: saturate(0.75);
   backdrop-filter: saturate(0.75);
   opacity: 0;
-  transition: opacity 240ms ease;
+  visibility: hidden;
+  transition: opacity 240ms ease, visibility 0s linear 240ms;
 }
 [data-tauri][data-tauri-blurred] .tauri-blur-overlay {
   opacity: 1;
+  visibility: visible;
+  transition: opacity 240ms ease;
 }
 
 /* ── 富渲染(markdown+公式)局部覆盖 ───────────────────────── */
+/* 两段式翻转淡入: 生成结束时消息从纯文本切到富渲染,排版硬切的观感是"闪一下";
+   180ms 渐显把切换软化(重排本身不变,只改观感)。类由 MarkdownRenderer 仅在
+   「本次挂载内发生过 rich 翻转」时挂上,历史消息/虚拟化重挂载不会触发 */
+@keyframes md-fade-in {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+.md-enter {
+  animation: md-fade-in 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-enter {
+    animation: none;
+  }
+}
+
 /* 块级代码: 去掉行内 code 的背景/边框,由 pre 容器统一承担 */
 .rich-md pre code {
   background: transparent;
@@ -984,6 +1817,18 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   text-decoration-color: rgb(var(--exam-mat) / 0.45);
 }
 
+/* ── 图表(Recharts)外壳跟随主题 token ─────────────────────────────
+   Recharts 把颜色写成 SVG 表现属性(优先级低于任何 CSS 规则),且网格/坐标轴
+   组件不透传 className;统一按它自己的类名接色,组件内不再留硬编码色值,
+   深浅与任意配色(月白·桂花金等)自动跟随。 */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: rgb(var(--line));
+}
+.recharts-cartesian-axis-tick text {
+  fill: rgb(var(--content-muted));
+}
+
 /* ── 认证页（登录/注册）品牌分栏共用样式 ─────────────────── */
 /* 极细展示字体：标题/Logo 徽标专用，复用苹方子集分片 100 字重 */
 .font-ultra {
@@ -1001,6 +1846,64 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   background-image: radial-gradient(circle, rgb(var(--line)) 1px, transparent 1.4px);
   background-size: 22px 22px;
   background-position: 4px 6px;
+}
+
+/* ── 中秋 · 登录页左栏「月夜版」(F-5 定稿) ───────────────────────
+   仅配色 = 月白·桂花金时启用: 品牌栏整体换月夜深色(黛蓝暗色 token,固定深色,
+   不随明暗开关变化),与右栏表单形成夜/日对照。
+   只覆盖变量、不重写选择器 —— 栏内既有 token 类(bg-surface/70、border-line、
+   text-content-*)自动跟随,缩影卡片/标签/Logo 一并换装。 */
+[data-pal="guihua"] .auth-brand {
+  --background: 14 19 30;
+  --surface: 23 30 45;
+  --surface-muted: 32 41 58;
+  --surface-subtle: 44 55 75;
+  --surface-glass: 23 30 45;
+  --line: 51 62 83;
+  --line-strong: 71 85 110;
+  --content-primary: 234 239 247;
+  --content-secondary: 157 168 188;
+  --content-muted: 111 123 143;
+  --accent: 178 197 229;
+  --accent-foreground: 23 30 45;
+  --accent-soft: 40 52 72;
+  --fest-gold: 224 182 110;
+  /* 覆盖 Tailwind 的 bg-gradient-to-br(同属性、特异度更高) */
+  background-image: linear-gradient(
+    160deg,
+    rgb(var(--background)) 0%,
+    rgb(var(--surface)) 62%,
+    rgb(var(--surface-muted)) 100%
+  );
+}
+
+.auth-night-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.auth-night-stars i {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgb(var(--content-muted) / 0.6);
+}
+.auth-night-moon {
+  position: absolute;
+  right: 96px;
+  top: 150px;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgb(var(--fest-gold) / 0.95) 0%,
+    rgb(var(--fest-gold) / 0.55) 52%,
+    rgb(var(--fest-gold) / 0.12) 78%,
+    transparent 88%
+  );
+  box-shadow: 0 0 90px 30px rgb(var(--fest-gold) / 0.22);
 }
 
 /* 入场动画：元素错峰上浮（MacOS 风格缓动） */

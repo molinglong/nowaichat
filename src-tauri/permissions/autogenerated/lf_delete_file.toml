@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-delete-file"
+description = "Enables the lf_delete_file command without any pre-configured scope."
+commands.allow = ["lf_delete_file"]
+
+[[permission]]
+identifier = "deny-lf-delete-file"
+description = "Denies the lf_delete_file command without any pre-configured scope."
+commands.deny = ["lf_delete_file"]

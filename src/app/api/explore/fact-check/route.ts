@@ -48,7 +48,7 @@ export async function POST(request: Request) {
     const userId = session.user.id
 
     // === 1. 选择可用的内置模型 (按用户已配置 key 的优先级) ===
-    const candidateModels = ['gpt-4o', 'claude-3-5-sonnet', 'deepseek-flash', 'gemini-1.5-pro']
+    const candidateModels = ['gpt-5.4-mini', 'claude-haiku-4-5-20251001', 'deepseek-flash', 'gemini-3.5-flash']
     let chosenModelId: string | null = null
     let apiKey: string | null = null
 

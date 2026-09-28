@@ -4,17 +4,30 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
+import {
+  applyAppearance,
+  FEST_PALETTE,
+  GRID_TONES,
+  normalizeAppearance,
+  PALETTES,
+  readAppearance,
+  resolveAutoTone,
+  THEME_CHOICES,
+  type Appearance,
+  type GridTone,
+  type SelectablePalette,
+  type ThemeChoice,
+} from '@/lib/theme'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
 import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
 import { detectModelCapabilities } from '@/lib/ai/model-capabilities'
-import { useChatStore } from '@/store/chat-store'
+import { useChatStore, type BackdropMode } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel } from '@/lib/ai/style'
 import { useIsTauri, getNotifyOnReply, setNotifyOnReply } from '@/lib/tauri'
 import { pickWorkspaceDir, getWorkspaceDir, LOCAL_FILES_SYNC_KEY } from '@/lib/tauri-files'
-import { TAURI_GLASS_KEY, TAURI_GLASS_EVENT, getGlassEnabled } from '@/components/TauriVisualFX'
 import { toast } from '@/lib/toast'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
@@ -23,6 +36,12 @@ import MasksSettings from '@/components/settings/MasksSettings'
 import McpSettings from '@/components/settings/McpSettings'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
+
+/** 背景 设置的选项 */
+const BACKDROP_CHOICES: { value: BackdropMode; label: string }[] = [
+  { value: 'off', label: '关闭' },
+  { value: 'image', label: '壁纸' },
+]
 
 interface ProviderInfo {
   id: string
@@ -455,14 +474,6 @@ const PROVIDER_URL: Record<string, string> = {
 
 type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens'
 
-type ThemeChoice = 'light' | 'dark' | 'system'
-
-const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
-  { value: 'light', label: '浅色' },
-  { value: 'dark', label: '深色' },
-  { value: 'system', label: '跟随系统' },
-]
-
 type NavItem = { id: SectionId; label: string; icon: typeof Key }
 type NavGroup = { title: string; items: NavItem[] }
 
@@ -600,6 +611,9 @@ export function SettingsModal({
   // 聊天行为:思考完毕自动折叠思考框(纯本地偏好,localStorage 持久化,不入 AI 可控注册表)
   const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
   const setAutoCollapseReasoning = useChatStore((s) => s.setAutoCollapseReasoning)
+  // 背景:关 / 内置壁纸(纯本地偏好,localStorage 持久化,不入 AI 可控注册表)
+  const backdropMode = useChatStore((s) => s.backdropMode)
+  const setBackdropMode = useChatStore((s) => s.setBackdropMode)
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [keys, setKeys] = useState<KeyInfo[]>([])
   const [loading, setLoading] = useState(true)
@@ -647,26 +661,14 @@ export function SettingsModal({
   const [memoryImportError, setMemoryImportError] = useState<string | null>(null)
   const [refCopied, setRefCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
+  // 外观是一维的: 上面那排主题(浅色/深色/跟随系统/格子)四选一,
+  // 下面那排按主题切换 —— 非格子时选配色,格子时选日出/白天/暮色/晚上,
+  // 那个"按时间自动"开关则决定光态是手选还是由时间解析
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system')
-    // 系统毛玻璃(Mica/Acrylic)开关:仅桌面端渲染,偏好存 localStorage(默认开)。
-    // 切换后派发 TAURI_GLASS_EVENT,TauriVisualFX 监听并同步 html[data-glass] + Rust 材质。
+  const [paletteChoice, setPaletteChoice] = useState<SelectablePalette>('base')
+  const [gridTone, setGridTone] = useState<GridTone>('day')
+  const [gridToneAuto, setGridToneAuto] = useState(false)
     const inTauri = useIsTauri()
-    const [glassEnabled, setGlassEnabled] = useState(true)
-    useEffect(() => {
-      if (!inTauri) return
-      setGlassEnabled(getGlassEnabled())
-    }, [inTauri])
-    const handleToggleGlass = useCallback(() => {
-      setGlassEnabled((v) => {
-        const next = !v
-        try {
-          localStorage.setItem(TAURI_GLASS_KEY, next ? 'on' : 'off')
-        } catch {}
-        // 本窗口的 TauriVisualFX 立即生效;其他窗口经 storage 事件跟进
-        window.dispatchEvent(new Event(TAURI_GLASS_EVENT))
-        return next
-      })
-    }, [])
 
     // 回复完成系统通知开关:仅桌面端有意义(依赖系统通知能力),偏好存 localStorage(默认开)
     const [notifyOnReply, setNotifyOnReplyState] = useState(true)
@@ -745,6 +747,8 @@ export function SettingsModal({
         const res = await pickWorkspaceDir()
         if (res.ok && res.base) {
           setWorkspaceDir(res.base)
+          // 右侧「工作区」产物区读同一个 query（授权根），选完即全局刷新
+          queryClient.invalidateQueries({ queryKey: ['workspace'] })
           toast.success('工作区已授权')
         } else if (!res.cancelled) {
           toast.error(res.error || '设置工作区失败')
@@ -1309,11 +1313,22 @@ export function SettingsModal({
     }
   }, [currentConversationId, setConversationStylePreset])
 
-  // Init theme choice from localStorage
+  // Init appearance from localStorage
   useEffect(() => {
-    const stored = localStorage.getItem('theme')
-    setThemeChoice(stored === 'light' || stored === 'dark' ? stored : 'system')
+    const a = readAppearance()
+    setThemeChoice(a.choice)
+    setPaletteChoice(a.palette)
+    setGridTone(a.gridTone)
+    setGridToneAuto(a.gridToneAuto)
   }, [])
+
+  // 智能模式开着设置面板时,高亮那一段要跟着时间走(每 30s 对一次表,跨段才变);
+  // 只同步面板本地的展示状态 —— 真正写 DOM 的是 Providers 上那个看门人
+  useEffect(() => {
+    if (!gridToneAuto || themeChoice !== 'grid') return
+    const id = window.setInterval(() => setGridTone(resolveAutoTone()), 30 * 1000)
+    return () => window.clearInterval(id)
+  }, [gridToneAuto, themeChoice])
 
   // 生图设置自动保存：模型 + 尺寸变化时 PATCH
   useEffect(() => {
@@ -1358,16 +1373,53 @@ export function SettingsModal({
     }
   }, [imageSize])
 
-  function applyTheme(choice: ThemeChoice) {
-    setThemeChoice(choice)
-    if (choice === 'system') {
-      localStorage.removeItem('theme')
-      const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      document.documentElement.classList.toggle('dark', dark)
-    } else {
-      localStorage.setItem('theme', choice)
-      document.documentElement.classList.toggle('dark', choice === 'dark')
+  // 外观只有一个写入路径(applyAppearance),本地 state 只负责选中态展示。
+  // 合法化统一走 lib/theme 的 normalizeAppearance: 格子接管明暗、桂花金仅深色,
+  // 归一化后的结果必须回写 state,否则选中态会与实际渲染对不上。
+  function commit(next: Appearance) {
+    const safe = normalizeAppearance(next)
+    // 智能模式下"哪一段亮着"以此刻的解析结果为准 —— applyAppearance 内部也会
+    // 再解析一次(那边刻意不信任外部传入的光态),两处结果必须一致
+    const shown = safe.gridToneAuto ? resolveAutoTone() : safe.gridTone
+    setThemeChoice(safe.choice)
+    setPaletteChoice(safe.palette)
+    setGridTone(shown)
+    setGridToneAuto(safe.gridToneAuto)
+    applyAppearance(safe)
+    return safe
+  }
+
+  function handleChoiceChange(choice: ThemeChoice) {
+    const hadFest = paletteChoice === FEST_PALETTE
+    const safe = commit({ choice, palette: paletteChoice, gridTone, gridToneAuto })
+    if (hadFest && safe.palette !== FEST_PALETTE) {
+      toast.info('月白·桂花金仅深色可用，已切回黑白基线')
     }
+  }
+
+  // 配色行只在「主题 ≠ 格子」时渲染,故这里 themeChoice 一定是明暗三态之一
+  function handlePaletteChange(palette: SelectablePalette) {
+    const choice: ThemeChoice = palette === FEST_PALETTE ? 'dark' : themeChoice
+    commit({ choice, palette, gridTone, gridToneAuto })
+    if (choice !== themeChoice) {
+      toast.info('月白·桂花金仅深色可用，已切到深色')
+    }
+  }
+
+  // 日出/白天/暮色/晚上这一排只在「主题 = 格子」时渲染。
+  // 手点任一时段 = 明确表态,即退出智能(否则会出现"选完 10 分钟被定时器抢回去")
+  function handleGridToneChange(tone: GridTone) {
+    commit({ choice: 'grid', palette: paletteChoice, gridTone: tone, gridToneAuto: false })
+  }
+
+  // 智能开关: 开启时立刻按当前时间解析一次(不等下一次 tick),关闭时保留当前光态
+  function handleAutoToneToggle(on: boolean) {
+    commit({
+      choice: 'grid',
+      palette: paletteChoice,
+      gridTone: on ? resolveAutoTone() : gridTone,
+      gridToneAuto: on,
+    })
   }
 
   // ── 总览(仪表盘化)派生数据:全部来自已加载 state,零新增请求;随渲染重算,量级很小 ──
@@ -2544,12 +2596,12 @@ export function SettingsModal({
                     <div className="flex items-center justify-between mb-1.5">
                       <Settings2 className="w-4 h-4 text-amber-500" />
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-surface-subtle text-content-muted">
-                        {themeChoice === 'light' ? '浅色' : themeChoice === 'dark' ? '深色' : '系统'}
+                        {THEME_CHOICES.find((c) => c.value === themeChoice)?.label ?? '跟随系统'}
                       </span>
                     </div>
                     <p className="text-xs font-medium text-content-primary">外观</p>
                     <p className="text-[10px] text-content-muted mt-0.5 truncate">
-                      浅色 · 深色 · 跟随系统
+                      浅色 · 深色 · 跟随系统 · 格子
                     </p>
                   </button>
                 </div>
@@ -5000,19 +5052,27 @@ export function SettingsModal({
                     />
                     </div>
 
-                    {/* 外观 */}
+                    {/* 外观是一维的: 上面那排「主题」四选一(浅色/深色/跟随系统/格子),
+                        下面那排随主题切换 —— 非格子时选配色,格子时选日出/白天/暮色/晚上。
+                        明暗走 html.dark,配色走 html[data-pal],格子的光态走
+                        html[data-grid-tone]。注意四个光态里**只有晚上是深底**,
+                        它也是格子下唯一会写 .dark 的态(下游组件靠 .dark 判明暗) */}
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
                     <div className="text-left">
                       <p className="text-xs text-content-secondary">外观</p>
-                      <p className="text-[11px] text-content-muted">选择界面明暗主题</p>
+                      <p className="text-[11px] text-content-muted">
+                        {themeChoice === 'grid'
+                          ? '格子四个光态：日出 / 白天(正午) / 暮色(日落) / 晚上(深夜)'
+                          : '月白·桂花金仅深色可用'}
+                      </p>
                     </div>
                     <div className="mt-2.5 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
-                      {THEME_OPTIONS.map((opt) => (
+                      {THEME_CHOICES.map((opt) => (
                         <button
                           key={opt.value}
-                          onClick={() => applyTheme(opt.value)}
+                          onClick={() => handleChoiceChange(opt.value)}
                           className={cn(
-                            'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
+                            'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
                             themeChoice === opt.value
                               ? 'bg-accent text-accent-foreground shadow-sm'
                               : 'text-content-muted hover:text-content-primary'
@@ -5022,32 +5082,132 @@ export function SettingsModal({
                         </button>
                       ))}
                     </div>
-                    {/* 系统毛玻璃:仅桌面端(Win11 Mica / Win10 Acrylic),Web 端不渲染 */}
-                    {inTauri && (
-                      <div className="mt-2.5 pt-2.5 border-t border-line/60 flex items-center justify-between gap-3">
-                        <div className="text-left min-w-0">
-                          <p className="text-xs text-content-secondary">系统毛玻璃</p>
-                          <p className="text-[11px] text-content-muted">窗口底层透出桌面云母/亚克力材质</p>
-                        </div>
-                        <button
-                          type="button"
+                    {themeChoice === 'grid' ? (
+                      /* 主题 = 格子: 下面这排选格子的光态(日出 / 白天 / 暮色 / 晚上)。
+                         晚上会顺带切到 .dark —— 它是格子下唯一的深底态。
+                         上面那行开关决定这排是"手选"还是"按时间自动":自动时
+                         这排仍可点(点了即改回手动),高亮段跟着时间走 */
+                      <>
+                      <div className="mt-2.5 flex items-center gap-2">
+                        <span className="text-[11px] text-content-muted">按时间自动</span>
+                        {/* 卡片内开关:span 避免 button 嵌套 */}
+                        <span
                           role="switch"
-                          aria-checked={glassEnabled}
-                          onClick={handleToggleGlass}
+                          aria-checked={gridToneAuto}
+                          aria-label="按时间自动选择光态"
+                          onClick={() => handleAutoToneToggle(!gridToneAuto)}
                           className={cn(
-                            'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                            glassEnabled ? 'bg-accent' : 'bg-surface-subtle'
+                            'relative w-8 h-[18px] rounded-full transition-colors shrink-0 ml-auto cursor-pointer',
+                            gridToneAuto ? 'bg-accent' : 'bg-surface-subtle'
                           )}
                         >
                           <span
                             className={cn(
-                              'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                              glassEnabled && 'translate-x-4'
+                              'absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-white dark:bg-surface transition-transform',
+                              gridToneAuto && 'translate-x-[14px]'
                             )}
                           />
-                        </button>
+                        </span>
+                      </div>
+                      <div className="mt-2 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
+                        {GRID_TONES.map((t) => (
+                          <button
+                            key={t.value}
+                            onClick={() => handleGridToneChange(t.value)}
+                            aria-pressed={gridTone === t.value}
+                            className={cn(
+                              'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
+                              gridTone === t.value
+                                ? 'bg-accent text-accent-foreground shadow-sm'
+                                : 'text-content-muted hover:text-content-primary'
+                            )}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+                      {gridToneAuto ? (
+                        <p className="mt-1.5 text-[11px] text-content-muted">
+                          自动 · {GRID_TONES.find((t) => t.value === gridTone)?.label}（点任一时段即改回手动）
+                        </p>
+                      ) : null}
+                      </>
+                    ) : (
+                      /* 主题 ≠ 格子: 下面这排选配色。每套配色一个色点 + 名称;
+                         月白·桂花金仅深色,选中会自动切到深色。
+                         两套起步,故用两列网格换行,避免 flex 等分把名称挤断 */
+                      <div className="mt-2.5 grid grid-cols-2 gap-2">
+                        {PALETTES.map((p) => (
+                          <button
+                            key={p.value}
+                            onClick={() => handlePaletteChange(p.value)}
+                            aria-pressed={paletteChoice === p.value}
+                            className={cn(
+                              'flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors',
+                              paletteChoice === p.value
+                                ? 'border-accent bg-accent-soft/60'
+                                : 'border-line/60 hover:bg-surface-muted'
+                            )}
+                          >
+                            <span
+                              aria-hidden
+                              className="h-3.5 w-3.5 shrink-0 rounded-full border border-line/70"
+                              style={{ background: p.swatch }}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-medium text-content-primary">
+                                {p.label}
+                              </span>
+                              <span className="block text-[10px] text-content-muted">{p.hint}</span>
+                            </span>
+                            {paletteChoice === p.value && (
+                              <Check className="h-3.5 w-3.5 shrink-0 text-accent" />
+                            )}
+                          </button>
+                        ))}
                       </div>
                     )}
+                    </div>
+
+                    {/* 背景:关 / 内置壁纸(欢迎页) / 桌面毛玻璃(透出软件外部,仅桌面端) */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0 text-left">
+                          {/* 缩略图:一眼看出「壁纸」选项对应哪张图 */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src="/wallpaper/bizhi.jpg"
+                            alt=""
+                            className="w-9 h-9 rounded-lg object-cover border border-line/60 shrink-0"
+                            loading="lazy"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-xs text-content-secondary">背景</p>
+                            <p className="text-[11px] text-content-muted">
+                              {backdropMode === 'image'
+                                ? '新对话欢迎页显示内置壁纸'
+                                : '纯色界面;壁纸仅新对话欢迎页生效'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
+                        {BACKDROP_CHOICES.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => setBackdropMode(opt.value)}
+                            aria-pressed={backdropMode === opt.value}
+                            className={cn(
+                              'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
+                              backdropMode === opt.value
+                                ? 'bg-accent text-accent-foreground shadow-sm'
+                                : 'text-content-muted hover:text-content-primary'
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     {/* 聊天行为:开关组(卡内两行,行间细线分隔) */}

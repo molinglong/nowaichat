@@ -102,8 +102,12 @@ export function WriteDocPanel() {
         transition-transform duration-300 ease-out
         ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}
     >
-      {/* 面板头 */}
-      <div className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line">
+      {/* 面板头(data-tauri-drag-region="deep":客户端下即面板「标题栏」,
+          整块按下都能拖窗、双击转最大化;右侧按钮由 Tauri 脚本自动排除) */}
+      <div
+        data-tauri-drag-region="deep"
+        className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line"
+      >
         <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
           <PenLine className="w-3.5 h-3.5 text-accent" />
         </div>

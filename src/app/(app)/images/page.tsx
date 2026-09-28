@@ -50,6 +50,10 @@ const PROMPT_PRESETS = [
   '极简几何风格的山脉海报,扁平设计',
 ]
 
+// 与服务端默认一致(image-settings GET / images POST 的兜底值);
+// 本地 state 初始化和「存档模型已下线」自愈都回落到它
+const DEFAULT_IMAGE_MODEL = 'builtin:wanx2.1-t2i-turbo'
+
 function ImagesContent() {
   const queryClient = useQueryClient()
   const [prompt, setPrompt] = useState('')
@@ -66,7 +70,7 @@ function ImagesContent() {
     model: string
     size: string
   }>({
-    model: 'builtin:wanx2.1-t2i-turbo',
+    model: DEFAULT_IMAGE_MODEL,
     size: '1024*1024',
   })
   const [viewMode, setViewMode] = useState<'gallery' | 'preview'>('gallery')
@@ -168,10 +172,19 @@ function ImagesContent() {
     if (settingsHydratedRef.current) return
     if (!settingsQuery.data) return
     settingsHydratedRef.current = true
-    setUserImageConfig((prev) => ({
-      model: settingsQuery.data?.settings?.imageModel ?? prev.model,
-      size: settingsQuery.data?.settings?.imageSize ?? prev.size,
-    }))
+    setUserImageConfig((prev) => {
+      const model = settingsQuery.data?.settings?.imageModel
+      // 存档模型已不存在(旧 ID 被下线且未配自定义模型)时回落默认,
+      // 避免下拉显示裸 ID、点生成报「未知的内置模型」
+      const known =
+        !!model &&
+        [...(settingsQuery.data?.builtinModels ?? []), ...(settingsQuery.data?.customModels ?? [])]
+          .some((m) => m.id === model)
+      return {
+        model: model ? (known ? model : DEFAULT_IMAGE_MODEL) : prev.model,
+        size: settingsQuery.data?.settings?.imageSize ?? prev.size,
+      }
+    })
   }, [settingsQuery.data])
 
   const imageSettings = useMemo(() => {
@@ -382,7 +395,13 @@ function ImagesContent() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-4 py-3 border-b border-line/50 flex items-center gap-2 shrink-0 relative">
+      {/* data-tauri-drag-region="deep":客户端下内容区顶部此栏即页面「标题栏」,
+          deep = 子树任意处按下都能拖窗(标题文字/图标也算),视觉与手感整块一致;
+          按钮等可点元素由 Tauri 脚本自动排除(模型下拉照旧可点),双击转最大化 */}
+      <div
+        data-tauri-drag-region="deep"
+        className="px-4 py-3 border-b border-line/50 flex items-center gap-2 shrink-0 relative"
+      >
         <Sparkles className="w-4 h-4 text-accent" />
         <h2 className="text-sm font-semibold">生图工作台</h2>
         <div className="ml-auto relative" ref={modelDropRef}>
@@ -399,7 +418,8 @@ function ImagesContent() {
               {(() => {
                 const allModels = [...imageSettings.builtinModels, ...imageSettings.customModels]
                 const current = allModels.find((m) => m.id === imageSettings.model)
-                return current ? (current.name as string) : imageSettings.model
+                // 已下线的存档模型不展示裸 ID,提示用户重新选择
+                return current ? (current.name as string) : '模型已下线 · 点击切换'
               })()}
             </span>
             <ChevronDown

@@ -133,8 +133,9 @@ export function WriteDocList({ docs, isPending, activeId, onSelect, onDeleted }:
                     >
                       {doc.title}
                     </div>
-                    <div className="text-[10px] text-content-muted mt-0.5">
+                    <div className="text-[10px] text-content-muted mt-0.5 truncate">
                       {doc.charCount} 字 · {fmtTime(doc.updatedAt)}
+                      {doc.workTitle ? ` · 《${doc.workTitle}》` : ''}
                     </div>
                   </div>
                   <button

@@ -161,6 +161,7 @@ function LocalFileCardInner({ view, onDecision, onOpenEditor }: LocalFileCardPro
       action: info.action === 'create' ? 'create' : info.action === 'exec' ? 'exec' : 'delete',
       content: info.content || undefined,
       command: info.action === 'exec' ? info.command : undefined,
+      timeoutMs: info.action === 'exec' ? info.timeoutMs : undefined,
     })
   }
 
@@ -358,18 +359,36 @@ function LocalFileCardInner({ view, onDecision, onOpenEditor }: LocalFileCardPro
     if (!isDelete) {
       if (pendingCreate && coverExists) {
         const canAct = !!onDecision && !!view.toolCallId && !busy
+        // 所见即所批:把将要写入的完整内容亮出来(限高滚动),而不是只给路径让用户盲批
+        const content = info.content
+        const lineCount = typeof content === 'string' ? content.split('\n').length : 0
         return (
           <div className={cn(CONTAINER, 'border-amber-500/40')}>
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-content-secondary border-b border-line/40">
               <TriangleAlert className="w-3.5 h-3.5 shrink-0 text-amber-500" />
               <span className="min-w-0 truncate">AI 请求覆盖已有文件</span>
+              {lineCount > 0 && (
+                <span className="ml-auto shrink-0 text-[10px] text-content-muted font-mono">
+                  将写入 {lineCount} 行
+                </span>
+              )}
             </div>
             <div className="px-2.5 py-2 flex flex-col gap-2">
               <div className="break-all font-mono text-[11px] leading-relaxed text-content-primary">
                 {relPath || '(未知路径)'}
               </div>
+              {typeof content === 'string' && content.trim() ? (
+                <div className="overflow-hidden rounded-md border border-line/60">
+                  <div className="border-b border-line/40 bg-surface-subtle px-2 py-1 text-[10px] text-content-muted">
+                    将要写入的完整内容
+                  </div>
+                  <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-all bg-white/60 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-content-primary">
+                    {content}
+                  </pre>
+                </div>
+              ) : null}
               <p className="text-content-muted leading-relaxed">
-                该文件已存在,批准后内容会被完整覆盖(不可还原);拒绝则原文件保持不变。
+                批准后整篇覆盖;写前已自动快照,<span className="text-content-secondary">可随时撤销</span>;拒绝则原文件保持不变。
               </p>
               {busy ? (
                 <div className="flex items-center gap-1.5 text-content-muted">

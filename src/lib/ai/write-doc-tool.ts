@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { DEAI_WRITING_DISCIPLINE } from "@/lib/text/deai"
 
 /**
  * 写作文档工具（write_document）
@@ -84,4 +85,6 @@ export const WRITE_DOC_TOOL_PROMPT: string = [
   "- 上下文里给出「用户当前打开的写作文档」时，用户说续写/接着写/往这篇补充时，用 action=append 传那个文档 id，content 只写新增的正文（与原文自然衔接，不要重复原文）；未给出当前文档时不要编造 id，仍用 create 新建",
   "- 正文必须完整可直接使用：符合用户要求的题材、篇幅与文风，段落之间用空行分隔，不要出现解释或元话语",
   "- 问答、概念解释、翻译、闲聊等对话式内容不要调用本工具",
+  "- 写小说/故事/网文类正文（含续写）时，以下文风纪律必须遵守，其他文体不受此约束：",
+  DEAI_WRITING_DISCIPLINE,
 ].join("\n")

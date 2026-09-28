@@ -49,10 +49,10 @@ export function ChartCard({ chart, className }: ChartCardProps) {
         return (
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={chart.data} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={chart.xKey || 'name'} tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey={chart.xKey || 'name'} tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip contentStyle={{ backgroundColor: 'rgb(var(--surface))', border: '1px solid rgb(var(--line))', borderRadius: '8px', color: 'rgb(var(--content-primary))' }} />
               <Legend />
               <Bar dataKey={chart.yKey || 'value'} fill={colors[0]} radius={[4, 4, 0, 0]} />
             </BarChart>
@@ -63,10 +63,10 @@ export function ChartCard({ chart, className }: ChartCardProps) {
         return (
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chart.data} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={chart.xKey || 'name'} tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey={chart.xKey || 'name'} tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip contentStyle={{ backgroundColor: 'rgb(var(--surface))', border: '1px solid rgb(var(--line))', borderRadius: '8px', color: 'rgb(var(--content-primary))' }} />
               <Legend />
               <Line type="monotone" dataKey={chart.yKey || 'value'} stroke={colors[0]} strokeWidth={2} dot={{ fill: colors[0], r: 4 }} />
             </LineChart>
@@ -77,10 +77,10 @@ export function ChartCard({ chart, className }: ChartCardProps) {
         return (
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={chart.data} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey={chart.xKey || 'name'} tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 12 }} />
-              <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey={chart.xKey || 'name'} tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip contentStyle={{ backgroundColor: 'rgb(var(--surface))', border: '1px solid rgb(var(--line))', borderRadius: '8px', color: 'rgb(var(--content-primary))' }} />
               <Legend />
               <Area type="monotone" dataKey={chart.yKey || 'value'} stroke={colors[0]} fill={colors[0]} fillOpacity={0.3} />
             </AreaChart>
@@ -104,14 +104,14 @@ export function ChartCard({ chart, className }: ChartCardProps) {
                   <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
+              <Tooltip contentStyle={{ backgroundColor: 'rgb(var(--surface))', border: '1px solid rgb(var(--line))', borderRadius: '8px', color: 'rgb(var(--content-primary))' }} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
         )
 
       default:
-        return <div className="text-sm text-gray-500">不支持的图表类型: {chart.type}</div>
+        return <div className="text-sm text-content-muted">不支持的图表类型: {chart.type}</div>
     }
   }
 
@@ -119,14 +119,14 @@ export function ChartCard({ chart, className }: ChartCardProps) {
     <div
       className={className}
       style={{
-        backgroundColor: '#fff',
+        backgroundColor: 'rgb(var(--surface))',
         borderRadius: '12px',
         padding: '16px',
-        border: '1px solid #e5e7eb',
+        border: '1px solid rgb(var(--line))',
       }}
     >
       {chart.title && (
-        <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: '#111827' }}>
+        <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'rgb(var(--content-primary))' }}>
           {chart.title}
         </h4>
       )}

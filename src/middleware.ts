@@ -52,6 +52,7 @@ const API_CORS_ALLOW_ORIGINS = [
   "http://127.0.0.1:8090",
   "http://localhost:8137", // 主页本地预览(Python http.server)
   "http://127.0.0.1:8137",
+  "https://yuban.icu", // 主页线上部署(静态站)
 ]
 
 function corsHeaders(res: NextResponse, origin: string | null): NextResponse {
@@ -160,5 +161,5 @@ export const config = {
   // 被 307 成登录页 HTML 会导致「添加到主屏幕」的 PWA 安装直接失败。
   // uploads 的安全头(X-Content-Type-Options/CSP sandbox)由 next.config.mjs headers() 独立提供,
   // 文件名 nanoid(12)/分片 hash 不可枚举,未登录直访风险可控
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|fonts|manifest.json|icons).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|fonts|manifest.json|icons|wallpaper).*)"],
 }

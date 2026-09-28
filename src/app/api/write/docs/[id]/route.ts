@@ -34,7 +34,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
 
-  const data: { title?: string; content?: string; charCount?: number } = {}
+  const data: { title?: string; content?: string; charCount?: number; workId?: string | null } = {}
   if (body.title !== undefined) {
     data.title = normalizeWriteTitle(body.title)
   }
@@ -45,6 +45,23 @@ export async function PATCH(req: Request, { params }: RouteContext) {
     }
     data.content = c
     data.charCount = c.length
+  }
+  // 归属作品:null/空串=移出作品;传 id 时校验归属防挂到他人作品
+  if (body.workId !== undefined) {
+    if (body.workId === null || body.workId === "") {
+      data.workId = null
+    } else if (typeof body.workId === "string") {
+      const work = await prisma.work.findFirst({
+        where: { id: body.workId, userId },
+        select: { id: true },
+      })
+      if (!work) {
+        return NextResponse.json({ error: "作品不存在" }, { status: 400 })
+      }
+      data.workId = work.id
+    } else {
+      return NextResponse.json({ error: "workId 非法" }, { status: 400 })
+    }
   }
 
   if (Object.keys(data).length === 0) {
@@ -67,6 +84,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
         id: true,
         title: true,
         charCount: true,
+        workId: true,
         createdAt: true,
         updatedAt: true,
       },

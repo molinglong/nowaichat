@@ -376,9 +376,10 @@ export async function searchContent(
 
 /**
  * 在工作区内执行 PowerShell 命令(cwd=工作区根):
- * 返回退出码/合并输出(UTF-8,超 8KB 截断)/耗时;是否需确认由调用方白名单判定。
+ * 返回退出码/合并输出(UTF-8,超 32KB 截断)/耗时;是否需确认由调用方白名单判定。
+ * timeoutMs 由模型按任务时长申请(Rust 侧钳制 1s~600s,缺省 30s)。
  */
-export async function execCommand(command: string): Promise<LocalFileOpResult> {
+export async function execCommand(command: string, timeoutMs?: number): Promise<LocalFileOpResult> {
   if (!getIsTauri()) return WEB_ONLY
   try {
     const r = await invoke<{
@@ -386,7 +387,7 @@ export async function execCommand(command: string): Promise<LocalFileOpResult> {
       output: string
       truncated: boolean
       durationMs: number
-    }>('lf_exec', { command })
+    }>('lf_exec', { command, timeoutMs: typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : null })
     return {
       ok: true,
       exitCode: r.exitCode,

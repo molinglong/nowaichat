@@ -74,7 +74,7 @@ export function parseChoice(text: string): ExamChoice {
     }
     stemLines.push(line)
     const qm = line.match(QUESTION_NO_RE)
-    if (qm) noRows.push({ text: qm[2].trim(), idx })
+    if (qm) noRows.push({ text: qm[1].trim(), idx })
     else plainRows.push({ text: line, idx })
   })
   const base: ExamChoice = { stem: stemLines.join('\n').trim(), options, groups: [] }

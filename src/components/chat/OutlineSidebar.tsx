@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { extractHeadings } from '@/lib/outline'
+import { getListScrollFacade } from './chat-list-bridge'
 import type { UIMessage } from 'ai'
 
 interface OutlineSidebarProps {
@@ -10,11 +11,15 @@ interface OutlineSidebarProps {
   /** 滚动容器(MessageList 的外层 overflow-y-auto 那个 div)。 */
   scrollContainer?: HTMLElement | null
   className?: string
+  /** 右墙被别的面板(对话资料)占住时的让位宽度,整列随之左移 */
+  rightOffset?: number
 }
 
 type Tick = {
   domId: string | null
   messageId: string
+  /** 该 tick 对应消息在 messages 数组中的下标(虚拟化 facade 的 spy 判定用) */
+  msgIndex: number
   label: string
   level: number
 }
@@ -29,10 +34,15 @@ type Tick = {
  *   - Popover 关闭 / 折叠按钮: 整体面板缩回窄列
  *   - scroll-spy: 滚动聊天区时,激活态实时跟随
  */
-export function OutlineSidebar({ messages, scrollContainer, className }: OutlineSidebarProps) {
+export function OutlineSidebar({
+  messages,
+  scrollContainer,
+  className,
+  rightOffset = 0,
+}: OutlineSidebarProps) {
   const ticks = useMemo<Tick[]>(() => {
     const list: Tick[] = []
-    messages.forEach((m) => {
+    messages.forEach((m, msgIndex) => {
       if (m.role !== 'assistant') return
       const text = m.parts
         .filter((p) => p.type === 'text')
@@ -44,6 +54,7 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
         list.push({
           domId: `${m.id}-${h.id}`,
           messageId: m.id,
+          msgIndex,
           label: h.text,
           level: h.level,
         })
@@ -51,7 +62,7 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
         const firstLine = text.trim().split(/\r?\n/).find((s) => s.trim().length > 0) ?? ''
         const cleaned = firstLine.replace(/^#+\s*/, '').trim()
         const label = cleaned.length > 0 ? cleaned : '新消息'
-        list.push({ domId: null, messageId: m.id, label, level: 2 })
+        list.push({ domId: null, messageId: m.id, msgIndex, label, level: 2 })
       }
     })
     return list
@@ -59,6 +70,11 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
 
   const [activeIndex, setActiveIndex] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  // messageId → DOM 节点缓存:scroll-spy 每帧只读 offsetTop,全文档查询
+  // 仅发生在缓存未命中(首次见到该消息)时 —— 此前每帧对每个 tick 都做一次
+  // querySelector 属性扫描(标题 id 从未写入 DOM,getElementById 必 miss),
+  // 是滚动掉帧的主要 JS 开销
+  const nodeCacheRef = useRef<Map<string, HTMLElement | null>>(new Map())
   // Popover 仍是悬浮窗:默认隐藏,鼠标进入右侧面板区域才打开。
   // 但打开后,mouseleave 走 600ms 延时 + Bridge 桥接,不会因为穿越间隙就关闭。
   const [popoverOpen, setPopoverOpen] = useState(false)
@@ -84,16 +100,36 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
         return
       }
 
+      // 激活项定位优先走虚拟化 facade:屏外消息不在 DOM,一次二分
+      // (视口顶 24px 处的消息下标)+ 一次线性走 tick,零 DOM 访问。
+      // 未注册 facade(非虚拟化路径)回退 DOM 查询 + nodeCache:命中缓存且
+      // 仍连接着就直接读 offsetTop,全文档查询只在首次见到某消息时发生一次
+      // —— 此前每帧对每个 tick 都 querySelector 属性扫描,是滚动掉帧的主因。
+      const facade = getListScrollFacade()
+      const at = facade?.messageIndexAtTop(visibleTop + 24)
       let current = 0
-      for (let i = 0; i < ticks.length; i++) {
-        const tick = ticks[i]
-        let node: HTMLElement | null = null
-        if (tick.domId) node = document.getElementById(tick.domId)
-        if (!node) node = document.querySelector(`[data-message-id="${tick.messageId}"]`)
-        if (!node) continue
-        const top = node.offsetTop
-        if (top <= visibleTop + 24) current = i
-        else break
+      if (at != null) {
+        for (let i = 0; i < ticks.length; i++) {
+          if (ticks[i].msgIndex <= at) current = i
+          else break
+        }
+      } else {
+        const nodeCache = nodeCacheRef.current
+        const resolveTop = (tick: Tick): number | null => {
+          const cached = nodeCache.get(tick.messageId)
+          if (cached && cached.isConnected) return cached.offsetTop
+          let node: HTMLElement | null = null
+          if (tick.domId) node = document.getElementById(tick.domId)
+          if (!node) node = document.querySelector(`[data-message-id="${tick.messageId}"]`)
+          nodeCache.set(tick.messageId, node)
+          return node ? node.offsetTop : null
+        }
+        for (let i = 0; i < ticks.length; i++) {
+          const top = resolveTop(ticks[i])
+          if (top == null) continue
+          if (top <= visibleTop + 24) current = i
+          else break
+        }
       }
       // 关键: setState 前后 bail out —— current 没变就不调用 setActiveIndex,
       // 避免每次 DOM mutation 都触发 React render → 反复调用 update 的循环源头之一
@@ -140,6 +176,12 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
     if (!scrollContainer) return
     const tick = ticks[idx]
     if (!tick) return
+    // 虚拟化模式:屏外消息节点不存在,由 facade 经虚拟化测量数据跳转
+    if (getListScrollFacade()?.jumpToMessage(tick.messageId)) {
+      setActiveIndex(idx)
+      cancelClose()
+      return
+    }
     let node: HTMLElement | null = null
     if (tick.domId) node = document.getElementById(tick.domId)
     if (!node) node = document.querySelector(`[data-message-id="${tick.messageId}"]`)
@@ -221,6 +263,9 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
         'hidden md:block fixed inset-0 z-30 select-none pointer-events-none',
         className,
       )}
+      /* 让位:aside 的右边界往里收,配合 transform 让它成为内部 fixed 子元素的包含块,
+         于是整列(trigger / bridge / popover)一起左移,而不是叠到对话资料面板上 */
+      style={rightOffset ? { right: rightOffset, transform: 'translateZ(0)' } : undefined}
     >
       {/* ============================================================
           Bridge 隐形桥接层:Bridge 跨越 trigger + 一点点右偏移 + 极少 Popover 右缘

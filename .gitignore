@@ -106,3 +106,6 @@ public/monaco/
 # 记忆冷库(本地历史知识库,导入自 D:\xiaz\记忆,不入库)
 .memory-kb/
 .zcode/plans/
+
+# 部署产物(手动 tar),不进库
+/aichatt-dist.tar.gz

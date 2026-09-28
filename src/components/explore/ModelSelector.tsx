@@ -15,6 +15,8 @@ interface ModelSelectorProps {
 
 export function ModelSelector({ models, value, onChange, compact = false }: ModelSelectorProps) {
   const [open, setOpen] = useState(false)
+  // 「显示旧版」:默认只列出 tier=mainstream 的模型,legacy 需手动展开
+  const [showLegacy, setShowLegacy] = useState(false)
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set())
   const ref = useRef<HTMLDivElement>(null)
 
@@ -30,7 +32,9 @@ export function ModelSelector({ models, value, onChange, compact = false }: Mode
   }, [])
 
   const filteredModels = models.filter(
-    (m) => configuredProviders.has(m.provider) || m.provider === 'custom'
+    (m) =>
+      (configuredProviders.has(m.provider) || m.provider === 'custom') &&
+      (showLegacy || m.tier !== 'legacy')
   )
 
   const grouped = filteredModels.reduce<Record<string, { providerName: string; models: ModelDefinition[] }>>(
@@ -68,6 +72,23 @@ export function ModelSelector({ models, value, onChange, compact = false }: Mode
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [open])
 
+  // 下拉顶部的旧版开关(compact / 常规两种形态共用)
+  const legacyToggle = (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        setShowLegacy((v) => !v)
+      }}
+      className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] text-content-muted hover:text-content-secondary border-b border-line/60 transition-colors"
+    >
+      <span>{showLegacy ? '含旧版模型' : '仅显示当前主力'}</span>
+      <span className={cn(showLegacy && 'text-content-primary font-medium')}>
+        {showLegacy ? '隐藏旧版' : '显示旧版'}
+      </span>
+    </button>
+  )
+
   if (compact) {
     return (
       <div ref={ref} className="relative">
@@ -82,6 +103,7 @@ export function ModelSelector({ models, value, onChange, compact = false }: Mode
         </button>
         {open && (
           <div className="absolute top-full left-0 mt-1 w-56 max-h-60 overflow-y-auto bg-surface border border-line/60 rounded-lg shadow-xl z-50 py-1">
+            {legacyToggle}
             {Object.keys(grouped).length > 0 ? (
               Object.entries(grouped).map(([providerId, { providerName, models: providerModels }]) => (
                 <div key={providerId}>
@@ -126,6 +148,7 @@ export function ModelSelector({ models, value, onChange, compact = false }: Mode
       </button>
       {open && (
         <div className="absolute top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-surface border border-line/60 rounded-lg shadow-xl z-50 py-1">
+          {legacyToggle}
           {Object.keys(grouped).length > 0 ? (
             Object.entries(grouped).map(([providerId, { providerName, models: providerModels }]) => (
               <div key={providerId}>

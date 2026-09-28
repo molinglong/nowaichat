@@ -1,6 +1,6 @@
 'use client'
 
-import React, { memo, useMemo, useState, useCallback } from 'react'
+import React, { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -16,10 +16,31 @@ import { parseExamSegments, parseChoice, parseEssay, parseTimeline, parseSentenc
 import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import { insertTextToInput } from '@/lib/input-bridge'
 import { useChatStore } from '@/store/chat-store'
+import dynamic from 'next/dynamic'
 
 // 可视化熔断开关: 一行降级——出现渲染死循环/性能退化时改 false,
 // 全部消息回到纯文本渲染(两段式渲染的保险丝;历史坑: 流式重渲染 Maximum update depth)
 const RICH_RENDER_ENABLED = true
+
+// 思维导图块: 只在消息里真的出现 ```mindmap 时才去加载 markmap-view(约 27KB gz),
+// 普通消息不背这个包;ssr: false —— 建图全靠 DOM 测量,服务端渲染没有意义
+const MindMapBlock = dynamic(() => import('./MindMapBlock'), {
+  ssr: false,
+  loading: () => (
+    <div className="my-3 rounded-lg overflow-hidden border border-line bg-code-bg">
+      <div className="flex items-center pl-3 pr-1.5 py-1 bg-code-header border-b border-line">
+        <span className="text-[10px] text-content-muted font-mono uppercase tracking-wider select-none">
+          mindmap
+        </span>
+      </div>
+      <div className="h-[220px]" />
+    </div>
+  ),
+})
+
+// useLayoutEffect 的同构封装: SSR 退化为 useEffect 消除服务端告警;客户端保持
+// 「提交后、绘制前」时序 —— 淡入类若晚一帧挂上,会先全亮再渐显,等于白做
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 
 interface MarkdownRendererProps {
   content: string
@@ -27,8 +48,10 @@ interface MarkdownRendererProps {
   messageId?: string
   /**
    * 富渲染开关(两段式策略):
-   * - 流式期间传 false → 纯文本,与打字机/throttle 配合保持轻量
-   * - 流式结束(含打字机追完)后传 true → react-markdown + KaTeX 一次性渲染
+   * - 生成期间传 false → 纯文本,与打字机/throttle 配合保持轻量。
+   *   以「整条消息是否在生成」为粒度(含工具轮次间隙、远程轮询),不随单个
+   *   text part 的 state 翻转 —— 否则多轮工具循环会 plain↔rich 反复横跳(闪烁)
+   * - 生成结束后传 true → react-markdown + KaTeX 一次性渲染
    * summary 卡片与「复制为 HTML」镜像始终传 true
    */
   rich?: boolean
@@ -296,7 +319,12 @@ const mdComponents: Components = {
     <th className="border-b border-line px-2.5 py-1.5 text-left font-medium text-content-secondary">{withInlineMarks(children)}</th>
   ),
   td: ({ children }) => <td className="border-b border-line px-2.5 py-1.5 align-top">{withInlineMarks(children)}</td>,
-  pre: CodeBlock,
+  // ```mindmap 围栏 → 导图卡片;其余语言照旧走 CodeBlock
+  pre: (props) => {
+    const { language, code } = extractCodeInfo(props.children)
+    if (language === 'mindmap') return <MindMapBlock source={code} />
+    return <CodeBlock>{props.children}</CodeBlock>
+  },
   // 行内 code 样式;块级 code 在 pre 内由 globals.css 的 .rich-md pre code 覆盖为无背景无边框
   code: CodeInline,
   img: ({ src, alt }) => (
@@ -364,7 +392,9 @@ function normalizeMathDelimiters(md: string): string {
     .join('')
 }
 
-function RichSegment({ content, promote = true }: { content: string; promote?: boolean }) {
+// memo: content/promote 均为原始值,父组件重渲染(操作按钮态、工具卡状态等)时
+// 内容未变的段直接跳过整条 react-markdown 管线(解析+KaTeX+高亮)
+const RichSegment = memo(function RichSegment({ content, promote = true }: { content: string; promote?: boolean }) {
   // 插件数组引用固定(memo),避免父组件重渲染导致 ReactMarkdown 反复重新解析
   const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], [])
   // rehype-highlight 只认 language-* 标注(detect:false 防误染普通文本),未注册语言静默跳过
@@ -387,7 +417,7 @@ function RichSegment({ content, promote = true }: { content: string; promote?: b
       {promoted}
     </ReactMarkdown>
   )
-}
+})
 
 const EXAM_TAG: Record<ExamKind, string> = { choice: '选择题', material: '材料', question: '设问', answer: '作答', poem: '诗句', lyrics: '歌词', essay: '作文', timeline: '时间轴', translate: '译文', sentence: '成分分析' }
 
@@ -765,6 +795,9 @@ function ExamBlock({
   const isQuizStem = kind === 'choice' || kind === 'question'
   const { sourceRef, body } = isQuizStem ? parseSourceRefLine(text) : { sourceRef: null as ExamSourceRef | null, body: text }
   const displayText = isQuizStem ? body : text
+  // 题库原题(practice_questions 抽题,出处行「参考 题库 …」)本来就已入库,
+  // 即使模型违规带了紧邻答案块也不再显示「收进题库」按钮,只留出处标签
+  const isBankRef = sourceRef?.ref.startsWith('题库') ?? false
   return (
     <div
       className={cn(
@@ -776,7 +809,7 @@ function ExamBlock({
       )}
     >
       <span className="exam-block-tag">{EXAM_TAG[kind]}</span>
-      {sourceRef && quizAnswerText && (
+      {sourceRef && quizAnswerText && !isBankRef && (
         <QuizRefBadge
           refName={sourceRef.ref}
           subject={sourceRef.subject}
@@ -785,7 +818,7 @@ function ExamBlock({
           answerText={quizAnswerText}
         />
       )}
-      {sourceRef && !quizAnswerText && (
+      {sourceRef && (!quizAnswerText || isBankRef) && (
         <span className="absolute right-2 top-2 text-[11px] leading-none text-content-muted whitespace-nowrap">参考 {sourceRef.ref}</span>
       )}
       {kind === 'choice' ? (
@@ -864,6 +897,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   className,
   rich,
 }: MarkdownRendererProps) {
+  // 两段式翻转淡入: 纯文本→富渲染的瞬间挂 md-enter(180ms 渐显),把排版硬切软化
+  // 成渐显。只在「本次挂载内发生过翻转」时触发 —— 历史消息与虚拟化重挂载首帧就是
+  // rich=true,不加动画,避免滚动回看/空闲预热挂载时跟着闪
+  const [enterAnim, setEnterAnim] = useState(false)
+  const prevRichRef = useRef(rich)
+  useIsoLayoutEffect(() => {
+    if (rich && !prevRichRef.current) setEnterAnim(true)
+    prevRichRef.current = rich
+  }, [rich])
+
   // 纯文本模式: 流式期间/熔断时走这里,与旧版行为完全一致(whitespace-pre-wrap 保留换行)
   if (!RICH_RENDER_ENABLED || !rich) {
     return (
@@ -876,7 +919,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   }
   // 富渲染: 仅内容稳定后触发(content 固定 → 外层 memo 拦截父组件重渲染,只渲染一次)
   return (
-    <div className={cn('text-sm text-content-primary leading-relaxed break-words', className)}>
+    <div
+      className={cn(
+        'text-sm text-content-primary leading-relaxed break-words',
+        enterAnim && 'md-enter',
+        className,
+      )}
+    >
       <RichMarkdown content={content} />
     </div>
   )

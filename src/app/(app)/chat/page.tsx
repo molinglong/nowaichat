@@ -59,7 +59,7 @@ function NewChatContent() {
     staleTime: STALE.providers,
   })
 
-  const defaultModel = allModels[0]?.id || 'gpt-4o'
+  const defaultModel = allModels[0]?.id || 'gpt-5.4-mini'
 
   // 跳转桥: /chat?q= 外部入口(bento AI 卡片「继续对话」等)自动发送;
   // useSearchParams 读取,ChatPanel 内部空会话触发一次并清参数

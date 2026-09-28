@@ -9,6 +9,7 @@ import {
   persistLastReadAt,
   removeLastReadAt,
 } from '@/lib/last-read'
+import type { PreviewCheckToolOutput } from '@/lib/ai/preview-check-tool'
 
 /** 最近使用模型历史上限:超过此值的最旧条目会被淘汰 */
 const MAX_RECENT_MODELS = 10
@@ -16,6 +17,29 @@ const MAX_RECENT_MODELS = 10
 /** 一次性面具信号:侧边栏「选面具开新对话」写入,ChatPanel 新对话挂载时消费并立即清除。
  *  新对话默认不带面具(上次的面具总忘记关),只有这里的显式选择才会带入。 */
 export const NEW_CHAT_MASK_SIGNAL_KEY = 'chat:newChatMaskSignal'
+
+/** 背景模式(设置 → 通用 → 背景):
+ *  - off      纯色界面
+ *  - image    新对话欢迎页铺内置壁纸(仅欢迎页) */
+export type BackdropMode = 'off' | 'image'
+
+const BACKDROP_MODE_KEY = 'chat:backdropMode'
+
+/** 读背景模式,并把旧壁纸开关(chat:welcomeWallpaper = 'true')一次性迁移成 image 回写 */
+export function readBackdropMode(): BackdropMode {
+  try {
+    const saved = localStorage.getItem(BACKDROP_MODE_KEY)
+    if (saved === 'off' || saved === 'image') return saved
+    let mode: BackdropMode = 'off'
+    if (localStorage.getItem('chat:welcomeWallpaper') === 'true') {
+      mode = 'image'
+    }
+    localStorage.setItem(BACKDROP_MODE_KEY, mode)
+    return mode
+  } catch {
+    return 'off'
+  }
+}
 
 /** 从 localStorage 读取字符串数组,失败/缺失返回 fallback */
 function loadStringArray(key: string, fallback: string[] = []): string[] {
@@ -55,6 +79,11 @@ interface ChatState {
   setSettingsSection: (section: string | null) => void
   previewCode: string | null
   setPreviewCode: (code: string | null) => void
+  /** 右侧「对话资料」竖排面板:搜索 / 摘要 / 附件一列排下来,点条目跳转到对应消息。
+   *  桌面端常驻,默认展开(与 sidebarOpen 同款 localStorage 记忆)。 */
+  infoPanelOpen: boolean
+  setInfoPanelOpen: (open: boolean) => void
+  toggleInfoPanel: () => void
   /** 会话列表刷新信号：新会话创建时 +1，侧边栏监听此值重新拉取列表 */
   conversationVersion: number
   bumpConversationVersion: () => void
@@ -82,6 +111,14 @@ interface ChatState {
   /** 思考框自动折叠:思考完毕后自动收起思考框(可在设置中关闭)。持久化到 localStorage */
   autoCollapseReasoning: boolean
   setAutoCollapseReasoning: (v: boolean) => void
+  /** 背景模式:off=纯色 / image=新对话欢迎页内置壁纸。
+      纯本地偏好,持久化到 localStorage('chat:backdropMode');旧壁纸开关偏好在读取时自动迁移 */
+  backdropMode: BackdropMode
+  setBackdropMode: (v: BackdropMode) => void
+  /** 壁纸激活态(运行时信号,不持久化):当前渲染的是新对话欢迎页。
+      shell 层壁纸层与侧栏/内容列的半透明化都以此为开关 */
+  chatWelcomeActive: boolean
+  setChatWelcomeActive: (v: boolean) => void
   /** 输入草稿:按会话 key 索引. SSR 期间为空,客户端 hydrate 后从 localStorage 灌入 */
   drafts: DraftsMap
   /** 设置某个会话的草稿(null 表示删除) */
@@ -113,19 +150,49 @@ interface ChatState {
   openEditor: (path: string, diff?: boolean) => void
   closeEditor: () => void
   /** 聊天内嵌代码编辑器面板:右侧滑出(与写作画布同款)。
-   *  codePanelOpen=面板开合;codePanelDocId=当前打开的 CodeDoc id(null=面板开着但无文档,
-   *  空态引导)。文档由聊天中的 write_code 工具产生,无手动新建入口。
-   *  独立于写作画布,专门写代码;AI 改代码片段时通过 codePendingDiff 进入 Diff 审查模式。
-   *  与写作画布面板互斥(打开时自动收起写作画布,但不清 codePendingDiff:审查建议保留)。 */
+   *  [P1 改版]codePanelOpen/editorFile/workFile 等不再各自开覆盖面板,
+   *  而是驱动右侧 WorkSidePane 的 tab;codePanelOpen=true = 代码 tab 打开。 */
   codePanelOpen: boolean
   codePanelDocId: string | null
   /** 打开代码面板;docId 缺省=打开空面板(当前会话无代码产物时顶栏入口用) */
   openCodePanel: (docId?: string) => void
   closeCodePanel: () => void
+  /** Side Pane 激活 tab:preview/files(工作区两视图)、editor(文件编辑器)、code(代码文档) */
+  sideTab: 'preview' | 'files' | 'editor' | 'code'
+  setSideTab: (t: 'preview' | 'files' | 'editor' | 'code') => void
+  /** Side Pane 宽度(px),持久化到 localStorage,拖拽分隔条时更新 */
+  sidePaneWidth: number
+  setSidePaneWidth: (w: number) => void
   /** AI code_edit 工具产出的待审查 Diff:original=原文,modified=AI 版本。
    *  docId 必须匹配当前打开文档,匹配则编辑器切 Diff 模式,用户采纳/放弃后清空。 */
   codePendingDiff: { docId: string; original: string; modified: string } | null
   setCodePendingDiff: (d: { docId: string; original: string; modified: string } | null) => void
+  /** preview_check 预览验证:CodeEditor iframe 捕获到的错误缓冲(按 docId,最新一次渲染清零)。
+   *  供 AI 检查回填与预览工具条错误角标/「把报错发给 AI」按钮共用。 */
+  previewErrors: { docId: string; items: string[] } | null
+  pushPreviewError: (docId: string, text: string) => void
+  clearPreviewErrors: (docId: string) => void
+  /** AI 发起的预览检查请求:ChatPanel.onToolCall 写入(preview_check),CodeEditor 认领执行
+   *  (切预览渲染→静默期收集错误→resolve)。nonce 保证同文档连续两次检查也能触发 effect。 */
+  previewCheckRequest: { docId: string; nonce: number } | null
+  /** ChatPanel 挂起的 resolver:CodeEditor 完成检查后经 finishPreviewCheck 回传结果 */
+  beginPreviewCheck: (
+    docId: string,
+    resolve: (output: PreviewCheckToolOutput) => void
+  ) => void
+  finishPreviewCheck: (output: PreviewCheckToolOutput) => void
+  /** 工作态开关(仅桌面客户端):true=右侧「产物区」滑出并常驻,对话保持左主位。
+   *  与上面几个右侧面板的区别:这是「模式」不是「面板」——持久化到 localStorage,
+   *  刷新后保持;且不参与 prePanelSidebarOpen 机制(工作态不折叠会话栏)。
+   *  右侧覆盖式面板(写作画布/代码/文件编辑器)打开时右栏临时让位,面板关回来。 */
+  workMode: boolean
+  setWorkMode: (on: boolean) => void
+  /** 工作区右栏当前定位的文件(相对工作区根的路径);null=未定位,预览区给引导 */
+  workFile: string | null
+  setWorkFile: (relPath: string | null) => void
+  /** 工作区右栏视图:preview=预览优先(默认) / files=全部文件(工作区文件树) */
+  workView: 'preview' | 'files'
+  setWorkView: (view: 'preview' | 'files') => void
   /** 键盘导航(j/k)选中的消息 ID,null 表示未选中任何消息 */
   focusedMessageId: string | null
   setFocusedMessageId: (id: string | null) => void
@@ -150,12 +217,30 @@ const getInitialSearchEngine = (): 'qianfan' | 'tavily' => {
   return localStorage.getItem('chat:searchEngine') === 'tavily' ? 'tavily' : 'qianfan'
 }
 
+/** preview_check 的 resolver 存放处(模块级,函数不进 zustand state) */
+const previewCheckResolverRef: { current: ((output: PreviewCheckToolOutput) => void) | null } = {
+  current: null,
+}
+
+/**
+ * 代码编辑器实时内容镜像(模块级单例,非响应式):CodeEditor 每次 latestRef 同步时顺手写入,
+ * code_edit 片段替换时用它拿「含未保存改动」的当前值,避免读 DB 落后于防抖保存窗口。
+ * 只有一个编辑器实例(面板单文档),docId 不匹配时调用方回落 GET 接口读落库版本。
+ */
+export const liveCodeDoc: { docId: string; content: string } = { docId: '', content: '' }
+
 /** 读取侧边栏折叠偏好: 桌面端用户上次的选择 */
 const getInitialSidebarOpen = (): boolean => {
   if (typeof window === 'undefined') return true
   const v = localStorage.getItem('chat:sidebarOpen')
   // 缺失值或 'true' 视为展开;'false' 才视为折叠
   return v === null ? true : v === 'true'
+}
+
+/** 右侧「对话资料」面板默认展开(缺省即展开),用户手动收起后记住 */
+const getInitialInfoPanelOpen = (): boolean => {
+  if (typeof window === 'undefined') return true
+  return localStorage.getItem('chat:infoPanelOpen') !== 'false'
 }
 
 const storeInitializer: StateCreator<ChatState> = (set) => ({
@@ -195,6 +280,21 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
   setSettingsSection: (section) => set({ settingsSection: section }),
   previewCode: null,
   setPreviewCode: (code) => set({ previewCode: code }),
+  infoPanelOpen: typeof window !== 'undefined' ? getInitialInfoPanelOpen() : true,
+  setInfoPanelOpen: (open) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat:infoPanelOpen', String(open))
+    }
+    set({ infoPanelOpen: open })
+  },
+  toggleInfoPanel: () =>
+    set((state) => {
+      const next = !state.infoPanelOpen
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('chat:infoPanelOpen', String(next))
+      }
+      return { infoPanelOpen: next }
+    }),
   conversationVersion: 0,
   bumpConversationVersion: () =>
     set((state) => ({ conversationVersion: state.conversationVersion + 1 })),
@@ -234,6 +334,17 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
     localStorage.setItem('chat:autoCollapseReasoning', String(v))
     set({ autoCollapseReasoning: v })
   },
+  // 背景模式:读取时自动迁移旧壁纸开关偏好(见 readBackdropMode);
+  // SSR 期间恒为 off,客户端 hydration 后从 localStorage 灌入
+  backdropMode: typeof window !== 'undefined' ? readBackdropMode() : 'off',
+  setBackdropMode: (v) => {
+    try {
+      localStorage.setItem(BACKDROP_MODE_KEY, v)
+    } catch {}
+    set({ backdropMode: v })
+  },
+  chatWelcomeActive: false,
+  setChatWelcomeActive: (v) => set({ chatWelcomeActive: v }),
   drafts: typeof window !== 'undefined' ? loadDrafts() : {},
   setDraft: (convKey, entry) =>
     set((state) => {
@@ -289,8 +400,12 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
       return patch
     }),
   editorFile: null,
-  openEditor: (path, diff = false) => set({ editorFile: { path, diff } }),
-  closeEditor: () => set({ editorFile: null }),
+  openEditor: (path, diff = false) => set({ editorFile: { path, diff }, sideTab: 'editor' }),
+  closeEditor: () =>
+    set((state) => ({
+      editorFile: null,
+      ...(state.sideTab === 'editor' ? { sideTab: 'preview' as const } : {}),
+    })),
   codePanelOpen: false,
   codePanelDocId: null,
   openCodePanel: (docId) =>
@@ -299,6 +414,7 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
         codePanelOpen: true,
         codePanelDocId: docId ?? null,
         writePanelDocId: null,
+        sideTab: 'code',
       }
       if (state.prePanelSidebarOpen === null && state.sidebarOpen) {
         patch.prePanelSidebarOpen = true
@@ -313,14 +429,70 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
         codePanelDocId: null,
         codePendingDiff: null,
       }
+      if (state.sideTab === 'code') patch.sideTab = 'preview'
       if (state.prePanelSidebarOpen !== null) {
         patch.sidebarOpen = state.prePanelSidebarOpen
         patch.prePanelSidebarOpen = null
       }
       return patch
     }),
+  sideTab: 'preview',
+  setSideTab: (t) => set({ sideTab: t }),
+  // Side Pane 宽度:持久化,钳制 300~660
+  sidePaneWidth:
+    typeof window !== 'undefined'
+      ? Math.min(660, Math.max(300, Number(localStorage.getItem('chat:sidePaneWidth')) || 420))
+      : 420,
+  setSidePaneWidth: (w) => {
+    const clamped = Math.min(660, Math.max(300, Math.round(w)))
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat:sidePaneWidth', String(clamped))
+    }
+    set({ sidePaneWidth: clamped })
+  },
   codePendingDiff: null,
   setCodePendingDiff: (d) => set({ codePendingDiff: d }),
+  previewErrors: null,
+  pushPreviewError: (docId, text) =>
+    set((state) => {
+      // docId 变化=换文档渲染,旧缓冲直接丢弃;同文档追加(上限 50 条,防长刷爆内存)
+      if (!state.previewErrors || state.previewErrors.docId !== docId) {
+        return { previewErrors: { docId, items: [text] } }
+      }
+      if (state.previewErrors.items.length >= 50) return state
+      return { previewErrors: { docId, items: [...state.previewErrors.items, text] } }
+    }),
+  clearPreviewErrors: (docId) =>
+    set((state) => (state.previewErrors?.docId === docId ? { previewErrors: null } : state)),
+  previewCheckRequest: null,
+  beginPreviewCheck: (docId, resolve) => {
+    // resolver 挂模块级 ref(函数不进 state,避免序列化/比较问题);state 只放触发信号
+    previewCheckResolverRef.current = resolve
+    set((state) => ({
+      previewCheckRequest: { docId, nonce: (state.previewCheckRequest?.nonce ?? 0) + 1 },
+      // 新一轮检查开始:清空上一轮错误缓冲,CodeEditor 从干净状态收集
+      previewErrors: null,
+    }))
+  },
+  finishPreviewCheck: (output) => {
+    set({ previewCheckRequest: null })
+    const resolve = previewCheckResolverRef.current
+    previewCheckResolverRef.current = null
+    resolve?.(output)
+  },
+  // 默认关(与旧行为一致=纯聊天);用户上次的选择在下次启动读回。
+  // 仅桌面客户端显示入口,Web 端该值为 false 且不可改
+  workMode: typeof window !== 'undefined' ? localStorage.getItem('chat:workMode') === 'true' : false,
+  setWorkMode: (on) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat:workMode', String(on))
+    }
+    set({ workMode: on })
+  },
+  workFile: null,
+  setWorkFile: (relPath) => set({ workFile: relPath }),
+  workView: 'preview',
+  setWorkView: (view) => set({ workView: view }),
   focusedMessageId: null,
   setFocusedMessageId: (id) => set({ focusedMessageId: id }),
   replyingTo: null,

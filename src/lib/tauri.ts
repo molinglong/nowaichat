@@ -140,14 +140,6 @@ export const tauri = {
   toggleMaximize: () => invoke('toggle_maximize'),
 
   /**
-   * 系统毛玻璃材质开关(Mica/Acrylic,对应 Rust set_glass_effect)。
-   * dark: 应用当前深浅色(同步给系统材质着色),缺省跟随系统。
-   * Web 端 no-op。
-   */
-  setGlass: (enabled: boolean, dark?: boolean | null) =>
-    invoke('set_glass_effect', { enabled, dark: dark ?? null }),
-
-  /**
    * 监听窗口状态变化(全屏/最大化进入退出),
    * 用于红绿灯图标的视觉反馈。
    */

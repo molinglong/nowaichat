@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-move-file"
+description = "Enables the lf_move_file command without any pre-configured scope."
+commands.allow = ["lf_move_file"]
+
+[[permission]]
+identifier = "deny-lf-move-file"
+description = "Denies the lf_move_file command without any pre-configured scope."
+commands.deny = ["lf_move_file"]

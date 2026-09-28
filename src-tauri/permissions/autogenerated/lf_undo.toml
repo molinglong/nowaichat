@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-undo"
+description = "Enables the lf_undo command without any pre-configured scope."
+commands.allow = ["lf_undo"]
+
+[[permission]]
+identifier = "deny-lf-undo"
+description = "Denies the lf_undo command without any pre-configured scope."
+commands.deny = ["lf_undo"]

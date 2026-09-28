@@ -1,16 +1,14 @@
 'use client'
 
-import { Menu, Plus, Sparkles, Scale, Check, ChevronDown, MessageSquarePlus, BookOpen, PenLine, Settings as SettingsIcon, Keyboard, FileCode2 } from 'lucide-react'
+import { Menu, FileCode2, Keyboard, MessageSquarePlus, MessagesSquare, FolderTree, Settings as SettingsIcon } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
-import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useIsTauri } from '@/lib/tauri'
-import { useStartNewChat } from '@/hooks/useStartNewChat'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { prefetchTabData as prefetchTabDataShared, type TabKey } from '@/lib/query/prefetchTab'
+import { prefetchTabData as prefetchTabDataShared } from '@/lib/query/prefetchTab'
 
 // 快捷键提示表:与已实现行为一一对应(j/k 与 Enter 复制见 MessageList,搜索见 Sidebar)
 const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
@@ -22,132 +20,65 @@ const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
   { keys: '⌘ / Ctrl + K', desc: '搜索会话' },
 ]
 
+/**
+ * 顶栏(T-C 顶栏下沉)。
+ *
+ * 结构:
+ * - <md 移动端:保留原顶栏带(汉堡开侧栏抽屉 + 页面标题 + 设置),顶部导航由 BottomDock 接管
+ * - ≥md 桌面端:顶栏带整体下线 —— 页面导航进侧边栏(SidebarNav),工具簇浮到内容区右上,
+ *   主区拿回整条高度;右缘随右侧编辑器/产物面板让位(定位改 right-*)
+ *
+ * 主区拿回高度后,本组件返回的两块(移动带 + 浮动簇)一个在流内、一个绝对定位,
+ * 由 (app)/layout.tsx 的内容列(relative)承接。
+ */
 export function TopBar() {
   const inTauri = useIsTauri()
-  // 临时聊天模式(访客密码登录):隐藏设置入口(账户管理写操作已被服务端拦截)
-  const { data: session } = useSession()
-  const isEphemeral = session?.ephemeral === true
   // 从 store 读 currentConversationId:克隆分支时用 —— 用 selector 而非全量订阅(zustand v5 下避免过度渲染)
   const conversationTitle = useChatStore((s) => s.conversationTitle)
   const toggleSidebar = useChatStore((s) => s.toggleSidebar)
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const bumpConversationVersion = useChatStore((s) => s.bumpConversationVersion)
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
-  // 写作画布面板打开时顶栏同步让位(与 ChatPanel/WriteDocPanel 同宽同动画)
+  // 写作画布面板打开时浮动工具簇同步让位(与 ChatPanel/WriteDocPanel 同宽同动画)
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
-  // 代码编辑器面板打开时顶栏同步让位(比写作画布更宽)
+  // 代码编辑器已是 Side Pane 的代码 tab([P1 改版]):不再各自占屏
   const codePanelOpen = useChatStore((s) => s.codePanelOpen)
-  // 任一右侧编辑器面板打开:顶栏进入精简态——胶囊导航与次要入口整体隐藏,
-  // 只留标题+设置。胶囊组是绝对居中定位,顶栏被面板挤窄后可用宽度只剩
-  // 面板外那一半,胶囊会被压缩换行叠字(实测),所以面板态直接不渲染。
-  const panelOpen = writePanelOpen || codePanelOpen
+  // 工作态(仅桌面端):右侧 Side Pane 常驻开关
+  const workMode = useChatStore((s) => s.workMode)
+  const setWorkMode = useChatStore((s) => s.setWorkMode)
+  const previewOpen = useChatStore((s) => s.previewCode !== null)
+  // 右侧「对话资料」面板:浮动工具簇要跟着让位,否则压在面板头上。
+  // 与 ChatPanel 同口径:新对话主页没有会话不登场;面板收起时只剩 28px 竖标签;
+  // 任一右侧抽屉打开时整列撤下,让位交给上面的抽屉分支。
+  const infoPanelOpen = useChatStore((s) => s.infoPanelOpen) && !!currentConversationId
+  // 次要工具入口隐藏口径:仅覆盖层(写作画布/聊天预览)打开时——tab 不再遮聊天
+  const panelOpen = writePanelOpen || previewOpen
   const openCodePanel = useChatStore((s) => s.openCodePanel)
+  const setSideTab = useChatStore((s) => s.setSideTab)
+  const sidePaneWidth = useChatStore((s) => s.sidePaneWidth)
   const [title, setTitle] = useState(conversationTitle)
-  // 中部胶囊「更多」二级菜单(收纳观点探索/错题本,保持胶囊组精简)
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreRef = useRef<HTMLDivElement>(null)
   // 快捷键说明弹层开合
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
   const queryClient = useQueryClient()
 
-  // 导航过渡状态 —— 点击立刻设上, 导航完成(pathname 更新)清掉.
-  const [pendingTab, setPendingTab] = useState<TabKey | null>(null)
-
   // Update local state when store changes
   useEffect(() => {
     setTitle(conversationTitle)
   }, [conversationTitle])
 
-  // 路由变化时自动关闭更多菜单 + 清掉 pendingTab
+  // 启动时预热一次聊天数据,这样首次进入 /chat 时 cache 已经在
   useEffect(() => {
-    setMoreOpen(false)
-    setPendingTab(null)
-  }, [pathname])
+    prefetchTabDataShared(queryClient, 'chat')
+  }, [queryClient])
 
-  // 预编译路由 — 让 Next.js 在背景里把目标路由的 RSC chunk / page chunk 下好
-  useEffect(() => {
-    router.prefetch('/chat')
-    router.prefetch('/images')
-    router.prefetch('/explore')
-    router.prefetch('/write')
-  }, [router])
-
-  // ── Tab 数据预热 ────────────────────────────────────────
-  // 实现体抽到 lib/query/prefetchTab.ts(移动端 BottomDock 共用同一套预热),
-  // 这里保留同名薄包装 —— 所有调用点零改动。
-  const prefetchTabData = useCallback(
-    (tab: TabKey) => prefetchTabDataShared(queryClient, tab),
-    [queryClient]
-  )
-
-  // 启动时也预热一次,这样首次访问任意页面时 cache 已经在
-  useEffect(() => {
-    prefetchTabData('chat')
-  }, [prefetchTabData])
-
-  // 点击外部关闭「更多」二级菜单
-  useEffect(() => {
-    if (!moreOpen) return
-    function onPointerDown(e: PointerEvent) {
-      if (moreOpen && moreRef.current && !moreRef.current.contains(e.target as Node)) {
-        setMoreOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [moreOpen])
-
-  // 在 /images 页面显示固定的页面标题
+  // 在 /images 等页面显示固定的页面标题(移动端顶栏带用)
   const isImagesPage = pathname?.startsWith('/images')
   const isExplorePage = pathname?.startsWith('/explore')
   const isStudyPage = pathname?.startsWith('/study')
   const isWritePage = pathname?.startsWith('/write')
   const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : isStudyPage ? '错题本' : isWritePage ? '写作画布' : (title || '新对话')
-
-  // 活跃态
-  const isChatActive = (!isImagesPage && !isExplorePage && !isStudyPage && !isWritePage) || pendingTab === 'chat'
-  const isStudyActive = Boolean(isStudyPage)
-  const isImagesActive = Boolean(isImagesPage) || pendingTab === 'images'
-  const isExploreActive = Boolean(isExplorePage) || pendingTab === 'explore'
-  const isWriteActive = Boolean(isWritePage) || pendingTab === 'write'
-  // 「更多」按钮的激活态:探索/错题本/写作任一页面即点亮(收纳入口的父级高亮)
-  const isMoreActive = isExploreActive || isStudyActive || isWriteActive
-
-  const navigateTo = useCallback((tab: TabKey, go: () => void) => {
-    setPendingTab(tab)
-    go()
-  }, [])
-
-  // 「聊天」tab / 新对话入口:走统一的重置流程。
-  // 旧的 router.replace('/chat') + router.refresh() 对 client page 无效:
-  // replace 同路径是 no-op,refresh 重拉 RSC 但客户端状态全保留,
-  // 表现为点击后毫无反应。见 useStartNewChat 的注释。
-  const startNewChat = useStartNewChat()
-  const handleNewChat = useCallback(() => {
-    // 跨 tab 进入时给高亮过渡反馈;已在 /chat 时 nonce 重置本身立即生效
-    if (pathname !== '/chat') setPendingTab('chat')
-    startNewChat()
-  }, [pathname, startNewChat])
-
-  const handleGoImages = useCallback(() => {
-    if (pathname?.startsWith('/images')) return
-    // 在调用 router.push 之前预热 — 点按瞬间就开始拉数据
-    prefetchTabData('images')
-    navigateTo('images', () => router.push('/images'))
-  }, [navigateTo, pathname, router, prefetchTabData])
-
-  const handleGoExplore = useCallback(() => {
-    if (pathname?.startsWith('/explore')) return
-    prefetchTabData('explore')
-    navigateTo('explore', () => router.push('/explore'))
-  }, [navigateTo, pathname, router, prefetchTabData])
-
-  const handleGoWrite = useCallback(() => {
-    if (pathname?.startsWith('/write')) return
-    navigateTo('write', () => router.push('/write'))
-  }, [navigateTo, pathname, router])
 
   /**
    * 「在新对话继续」:把当前对话(含所有上下文消息)用 LLM 压缩成结构化摘要,
@@ -204,183 +135,146 @@ export function TopBar() {
   // 仅在已有具体对话时(非空白新对话)显示「在新对话继续」按钮
   const canBranch = !!currentConversationId && pathname?.startsWith('/chat/c/')
 
-  // 打开代码编辑器面板:面板常开无门槡(列表按会话聚合展示当前对话的 AI 代码产物,
-  // 无产物时左栏显示引导文案)。无网络请求、无手动新建——代码文档由 write_code 工具产生。
+  // 打开代码编辑器:已开(任意 tab)时跳到代码 tab,未开则打开代码 tab 并带出 Side Pane。
+  // 无网络请求、无手动新建——代码文档由 write_code 工具产生,无产物时 tab 内显示引导。
   const handleOpenCodePanel = useCallback(() => {
-    openCodePanel()
-  }, [openCodePanel])
+    if (codePanelOpen) setSideTab('code')
+    else openCodePanel()
+  }, [codePanelOpen, openCodePanel, setSideTab])
+
+  const dragProps = inTauri
+    ? {
+        'data-tauri-drag-region': '',
+        style: { WebkitAppRegion: 'drag' } as React.CSSProperties,
+      }
+    : {}
 
   return (
-    <header
-      className={`relative z-40 flex items-center h-11 md:h-9 px-1.5 md:px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl transition-[margin] duration-300 ease-out ${codePanelOpen ? 'md:mr-[min(60vw,960px)]' : writePanelOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}
-      {...(inTauri
-        ? {
-            'data-tauri-drag-region': '',
-            style: { WebkitAppRegion: 'drag' } as React.CSSProperties,
-            onDoubleClick: () => {
-              import('@/lib/tauri').then(({ tauri }) => tauri.toggleMaximize())
-            },
-          }
-        : {})}
-    >
-      {/* Left: 汉堡菜单(仅移动端可见) + 当前页标题 */}
-      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[60%] md:max-w-[40%]">
-        <button
-          onClick={toggleSidebar}
-          className="md:hidden shrink-0 p-2 -ml-1 md:p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors active:scale-95 touch-manipulation"
-          aria-label="打开侧边栏"
-          title="打开侧边栏"
-          style={{ WebkitTapHighlightColor: 'transparent' }}
-        >
-          <Menu className="w-4 h-4" />
-        </button>
-        <span className="text-sm font-medium text-content-secondary truncate ml-1.5 md:ml-1 md:text-xs md:text-content-muted">
-          {displayTitle}
-        </span>
-      </div>
-
-      {/* Center: 胶囊选项卡 — 绝对居中;编辑器面板打开时整体隐藏(见上方 panelOpen 注释) */}
-      {!panelOpen && (
-      <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none">
-        {/* ≥381px: 完整胶囊 */}
-        <div className="hidden md:flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-subtle/70 pointer-events-auto">
-          <button
-            onClick={handleNewChat}
-            onMouseEnter={() => prefetchTabData('chat')}
-            onFocus={() => prefetchTabData('chat')}
-            className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
-              isChatActive
-                ? 'bg-surface text-content-primary shadow-sm'
-                : 'text-content-secondary hover:text-content-primary active:scale-95'
-            )}
-            aria-label="新对话"
-            title="新对话"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">聊天</span>
-          </button>
-          {/* 临时聊天模式：只保留聊天，隐藏生图/探索/错题本入口 */}
-          {!isEphemeral && (
-          <>
-          <button
-            onClick={handleGoImages}
-            onMouseEnter={() => prefetchTabData('images')}
-            onFocus={() => prefetchTabData('images')}
-            className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
-              isImagesActive
-                ? 'bg-surface text-content-primary shadow-sm'
-                : 'text-content-secondary hover:text-content-primary active:scale-95'
-            )}
-            aria-label="生图工作台"
-            title="生图工作台"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">生图</span>
-          </button>
-          {/* 更多:二级菜单收纳低频入口(探索/错题本),胶囊组只留高频的聊天/生图 */}
-          <div ref={moreRef} className="relative">
-            <button
-              onClick={() => setMoreOpen((o) => !o)}
-              onMouseEnter={() => prefetchTabData('explore')}
-              onFocus={() => prefetchTabData('explore')}
-              className={cn(
-                'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
-                isMoreActive || moreOpen
-                  ? 'bg-surface text-content-primary shadow-sm'
-                  : 'text-content-secondary hover:text-content-primary active:scale-95'
-              )}
-              aria-label="更多功能"
-              aria-expanded={moreOpen}
-              aria-haspopup="menu"
-              title="更多功能"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-            >
-              <ChevronDown className={cn('w-3.5 h-3.5 transition-transform duration-150', moreOpen && 'rotate-180')} />
-              <span className="hidden sm:inline">更多</span>
-            </button>
-            {moreOpen && (
-              <div
-                role="menu"
-                className="absolute top-full right-0 mt-1.5 w-44 bg-surface border border-line/60 rounded-lg shadow-xl z-50 py-1 overflow-hidden"
-              >
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    handleGoExplore()
-                  }}
-                  onMouseEnter={() => prefetchTabData('explore')}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                    isExploreActive
-                      ? 'bg-surface-subtle text-content-primary'
-                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                  )}
-                >
-                  <Scale className="w-3.5 h-3.5 shrink-0" />
-                  <span className="flex-1">观点探索</span>
-                  {isExploreActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-                </button>
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    handleGoWrite()
-                  }}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                    isWriteActive
-                      ? 'bg-surface-subtle text-content-primary'
-                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                  )}
-                >
-                  <PenLine className="w-3.5 h-3.5 shrink-0" />
-                  <span className="flex-1">写作画布</span>
-                  {isWriteActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-                </button>
-                <button
-                  role="menuitem"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    if (!isStudyActive) router.push('/study')
-                  }}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                    isStudyActive
-                      ? 'bg-surface-subtle text-content-primary'
-                      : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                  )}
-                >
-                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                  <span className="flex-1">错题本</span>
-                  {isStudyActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
-                </button>
-              </div>
-            )}
-          </div>
-          </>
-          )}
-        </div>
-
-        {/* 极窄屏折叠菜单已移除:移动端页面导航由 BottomDock(底部毛玻璃 Dock)接管 */}
-      </div>
+    <>
+      {/* ── ≥md 窗口拖动带(仅客户端):顶栏带下沉后内容区顶部没有抓手,
+             仅侧栏头部可拖窗,窗口几乎"钉"在原位。这里补一条与浮簇同层的
+             透明拖动带(内容区顶部 12px),把「抓顶部空白即可移动窗口」的
+             直觉还回来;右侧浮簇 z-40 压其上,按钮不受影响。
+             12px 高是安全值:各 tab 顶部栏内容起于 y=8~12px,不遮挡可点区域;
+             聊天滚动区顶部另有 48px 留白带(md:pt-12),叠加后左中区域更好抓。
+             空 div 无子元素:属性取默认(bare)语义 —— 命中即拖;
+             双击由 Tauri 内置脚本转 maximize(再挂 onDoubleClick 会二次切换)。 */}
+      {inTauri && (
+        <div
+          aria-hidden
+          className="hidden md:block absolute inset-x-0 top-0 z-30 h-3"
+          data-tauri-drag-region=""
+          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        />
       )}
 
-      {/* Right: 「在新对话继续」按钮(仅在已有具体对话时显示) + 设置(固定最右侧)。
-          不设 max-w 上限:flex-1 吸收左侧剩余空间,justify-end 把内容钉在右边缘,
-          中间胶囊是绝对定位不受影响 */}
-      <div className="flex items-center gap-0.5 min-w-0 flex-1 justify-end">
-        {/* 编辑器面板打开时顶栏精简,次要入口隐藏 */}
+      {/* ── <md 移动端顶栏带(原样保留):汉堡 + 页面标题 + 设置 ── */}
+      <header
+        className="md:hidden relative z-40 flex items-center h-11 px-1.5 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl"
+        {...dragProps}
+        {...(inTauri
+          ? {
+              onDoubleClick: () => {
+                import('@/lib/tauri').then(({ tauri }) => tauri.toggleMaximize())
+              },
+            }
+          : {})}
+      >
+        <div className="flex items-center gap-0.5 min-w-0 flex-1">
+          <button
+            onClick={toggleSidebar}
+            className="shrink-0 p-2 -ml-1 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors active:scale-95 touch-manipulation"
+            aria-label="打开侧边栏"
+            title="打开侧边栏"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          {/* 聊天 / 工作 模式开关(仅桌面客户端):「工作」= 右侧产物区滑出并常驻。
+              纯状态切换 —— 不跳路由、不重建会话(useChat 状态留在 ChatPanel 内),收起即纯聊天 */}
+          {inTauri && (
+            <div
+              role="tablist"
+              aria-label="聊天 / 工作"
+              className="shrink-0 hidden sm:flex items-center gap-0.5 p-0.5 ml-1 rounded-lg bg-surface-subtle/70"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              <button
+                role="tab"
+                aria-selected={!workMode}
+                onClick={() => setWorkMode(false)}
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
+                  !workMode
+                    ? 'bg-surface text-content-primary shadow-sm'
+                    : 'text-content-secondary hover:text-content-primary active:scale-95'
+                )}
+                title="聊天模式（收起右侧产物区）"
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                <MessagesSquare className="w-3.5 h-3.5" />
+              </button>
+              <button
+                role="tab"
+                aria-selected={workMode}
+                onClick={() => setWorkMode(true)}
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation',
+                  workMode
+                    ? 'bg-surface text-content-primary shadow-sm'
+                    : 'text-content-secondary hover:text-content-primary active:scale-95'
+                )}
+                title="工作模式（右侧滑出产物区：预览 / 全部文件）"
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          <span className="text-sm font-medium text-content-secondary truncate ml-1.5">
+            {displayTitle}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+          {/* 设置入口:正常模式打开完整设置;临时模式打开精简版(仅通用/帮助/关于) */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="shrink-0 inline-flex items-center justify-center p-2 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+            aria-label="设置"
+            title="设置"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <SettingsIcon className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </header>
+
+      {/* ── ≥md 浮动工具簇(T-C):顶栏带下线后,工具浮在内容区右上;无底板,只有图标 ──
+          [P1]right 跟随 Side Pane 实际宽度(可拖拽),覆盖层打开时退回各自让位宽度 */}
+      <div
+        className={cn(
+          'hidden md:flex absolute top-0 z-40 items-center gap-0.5 p-1.5 transition-[right] duration-300 ease-out right-0'
+        )}
+        style={
+          {
+            right: inTauri && workMode && !writePanelOpen && !previewOpen
+              ? `${sidePaneWidth}px`
+              : writePanelOpen || previewOpen
+                ? 'min(46vw, 720px)'
+                : undefined,
+          } as React.CSSProperties
+        }
+        {...dragProps}
+      >
+        {/* 聊天 / 工作 模式开关(仅桌面客户端)已下沉到侧边栏「聊天」导航之上;
+            这里只剩移动端顶栏那一份(见上方 md:hidden 分支) */}
+        {/* 「在新对话继续」按钮(仅在已有具体对话时显示) */}
         {canBranch && !panelOpen && (
           <button
             onClick={handleBranchConversation}
             disabled={isBranching}
             className={cn(
-              'hidden md:inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
+              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
               'text-content-secondary hover:text-content-primary hover:bg-surface-subtle active:scale-95',
               isBranching && 'opacity-60 cursor-wait'
             )}
@@ -392,11 +286,11 @@ export function TopBar() {
             <span className="hidden sm:inline">在新对话继续</span>
           </button>
         )}
-        {/* 代码编辑器入口:打开右侧滑出面板(本对话的 AI 代码产物列表),面板已开则隐藏避免重复点 */}
-        {!panelOpen && (
+        {/* 代码编辑器入口([P1]):跳到 Side Pane 的代码 tab(已开则激活);写作画布覆盖层打开时隐藏 */}
+        {!writePanelOpen && (
           <button
             onClick={handleOpenCodePanel}
-            className="shrink-0 hidden md:inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation disabled:opacity-50"
+            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation disabled:opacity-50"
             aria-label="代码编辑器"
             title="打开代码编辑器(写代码 / 让 AI 改代码)"
             style={{ WebkitTapHighlightColor: 'transparent', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -404,8 +298,8 @@ export function TopBar() {
             <FileCode2 className="w-3.5 h-3.5" />
           </button>
         )}
-        {/* 快捷键说明:轻量弹层,提升 j/k 等隐藏快捷键的可发现性(紧邻设置入口) */}
-        <div className={panelOpen ? 'hidden' : 'relative shrink-0 hidden md:block'}>
+        {/* 快捷键说明:轻量弹层,提升 j/k 等隐藏快捷键的可发现性 */}
+        <div className={panelOpen ? 'hidden' : 'relative shrink-0'}>
           <button
             onClick={() => setHotkeysOpen((v) => !v)}
             className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
@@ -440,18 +334,17 @@ export function TopBar() {
             </>
           )}
         </div>
-        {/* 设置入口:正常模式打开完整设置;临时模式打开精简版(仅通用/帮助/关于,
-            账户管理类板块及其数据加载已在 SettingsModal 内按 isEphemeral 跳过) */}
+        {/* 设置入口(与侧栏用户行齿轮同一个弹窗;临时模式下为精简版) */}
         <button
           onClick={() => setSettingsOpen(true)}
-            className="shrink-0 inline-flex items-center justify-center p-2 md:p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
-            aria-label="设置"
-            title="设置"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <SettingsIcon className="w-3.5 h-3.5" />
+          className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+          aria-label="设置"
+          title="设置"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          <SettingsIcon className="w-3.5 h-3.5" />
         </button>
       </div>
-    </header>
+    </>
   )
 }

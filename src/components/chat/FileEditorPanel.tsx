@@ -14,11 +14,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { FileCode2, Loader2, Undo2, X } from 'lucide-react'
+import { FileCode2, Loader2, TriangleAlert, Undo2, X } from 'lucide-react'
 import { useChatStore } from '@/store/chat-store'
 import { readFullFile, undoFile, writeFile, getWorkspaceDir } from '@/lib/tauri-files'
 import { getIsTauri } from '@/lib/tauri'
 import { toast } from '@/lib/toast'
+import { cn } from '@/lib/utils'
 
 /** Monaco 共享配置(lang 映射/选项/主题/资源路径)从 lib 引入,与代码编辑器共用 */
 import {
@@ -53,7 +54,7 @@ type LoadState =
   | { kind: 'ready'; disk: string; absPath: string; bytes: number }
   | { kind: 'error'; message: string }
 
-export function FileEditorPanel() {
+export function FileEditorPanel({ embedded = false }: { embedded?: boolean }) {
   const editorFile = useChatStore((s) => s.editorFile)
   const closeEditor = useChatStore((s) => s.closeEditor)
   const open = editorFile !== null
@@ -76,6 +77,9 @@ export function FileEditorPanel() {
   const [saving, setSaving] = useState(false)
   const [undoId, setUndoId] = useState<string | null>(null)
   const [undoBusy, setUndoBusy] = useState(false)
+  // [P1]外部修改检测:保存前读磁盘比对基线,不一致则拦截并提示(防 AI/外部改动被静默覆盖)
+  const [extChanged, setExtChanged] = useState<string | null>(null)
+  const skipExtCheckRef = useRef(false)
   // 跟踪当前加载的 path,避免 editorFile 引用变化(同 path 重复 open)触发重读
   const loadedPathRef = useRef<string | null>(null)
   // Monaco 深浅主题跟随 html.dark(globals.css 的主题类),MutationObserver 感知切换
@@ -98,6 +102,7 @@ export function FileEditorPanel() {
     setLoad({ kind: 'loading' })
     setDirty(false)
     setUndoId(null)
+    setExtChanged(null)
     setValue('')
     let cancelled = false
     void (async () => {
@@ -148,17 +153,27 @@ export function FileEditorPanel() {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, requestClose])
 
-  // 保存:整文件覆盖写入(lf_write_file 自动快照);成功后磁盘内容同步,diff 审查视角跟随
+  // 保存:整文件覆盖写入(lf_write_file 自动快照);成功后磁盘内容同步,diff 审查视角跟随。
+  // [P1]写前先读磁盘比对载入基线:被 AI/外部改过则拦截,提示加载新版或确认覆盖
   const save = useCallback(async () => {
     if (!editorFile || saving) return
     if (load.kind !== 'ready') return
     setSaving(true)
     try {
+      if (!skipExtCheckRef.current) {
+        const cur = await readFullFile(editorFile.path)
+        if (cur.ok && typeof cur.content === 'string' && cur.content !== load.disk) {
+          setExtChanged(cur.content)
+          return
+        }
+      }
+      skipExtCheckRef.current = false
       const w = await writeFile(editorFile.path, value)
       if (w.ok) {
         setDirty(false)
         setUndoId(w.undoId ?? null)
         setLoad({ ...load, disk: value })
+        setExtChanged(null)
         toast.success(`已保存 ${editorFile.path}`, { title: '快照已生成,可撤销' })
       } else {
         toast.error(w.error || '保存失败')
@@ -201,16 +216,51 @@ export function FileEditorPanel() {
   const lines = value ? value.split('\n').length : 0
   const canUndo = !!undoId && !dirty
 
-  return (
-    <aside
-      aria-hidden={!open}
-      className={`fixed inset-y-0 right-0 z-[80] w-full md:w-[min(46vw,720px)] flex flex-col
-        bg-surface border-l border-line shadow-2xl
-        transition-transform duration-300 ease-out
-        ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}
-    >
-      {/* 面板头:文件标签 + 撤销/保存/关闭 */}
-      <div className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line">
+  const warnBar = extChanged !== null && (
+    <div className="shrink-0 flex items-center gap-2 border-b border-line bg-amber-500/10 px-3 py-2 text-[11.5px] text-amber-600 dark:text-amber-400">
+      <TriangleAlert className="w-3.5 h-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        磁盘上的文件已被外部修改（可能是 AI）—— 直接保存会覆盖它
+      </span>
+      <div className="flex shrink-0 gap-1.5">
+        <button
+          type="button"
+          onClick={() => {
+            if (load.kind !== 'ready') return
+            setLoad({ ...load, disk: extChanged })
+            setValue(extChanged)
+            setDirty(false)
+            setExtChanged(null)
+            toast.info('已加载磁盘最新版本')
+          }}
+          className="rounded-md border border-amber-500/40 bg-surface px-2 py-1 transition-colors hover:bg-amber-500/10"
+        >
+          加载新版
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            skipExtCheckRef.current = true
+            setExtChanged(null)
+            void saveRef.current()
+          }}
+          className="rounded-md border border-amber-500/40 bg-surface px-2 py-1 font-medium transition-colors hover:bg-amber-500/10"
+        >
+          仍要覆盖
+        </button>
+      </div>
+    </div>
+  )
+
+  const body = (
+    <>
+      {/* 面板头:文件标签 + 撤销/保存/关闭
+          (data-tauri-drag-region="deep":客户端下即面板「标题栏」,整块按下都能拖窗、
+          双击转最大化;右侧按钮由 Tauri 脚本自动排除,照旧可点) */}
+      <div
+        data-tauri-drag-region="deep"
+        className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line"
+      >
         <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
           <FileCode2 className="w-3.5 h-3.5 text-accent" />
         </div>
@@ -287,6 +337,8 @@ export function FileEditorPanel() {
         )}
       </div>
 
+      {warnBar}
+
       {/* 编辑器区 */}
       <div className="flex-1 min-h-0 px-3 pb-3">
         <div className="relative h-full rounded-lg border border-line overflow-hidden bg-surface">
@@ -344,7 +396,21 @@ export function FileEditorPanel() {
         <div className="flex-1" />
         <span>UTF-8</span>
       </div>
-    </aside>
+    </>
+  )
+
+  // [P1 改版]embedded = 挂进 WorkSidePane 的 tab 内容(无定位/滑出动画);独立覆盖面板兜底保留
+  const rootCls = embedded
+    ? 'h-full flex flex-col bg-surface'
+    : `fixed inset-y-0 right-0 z-[80] w-full md:w-[min(46vw,720px)] flex flex-col
+        bg-surface border-l border-line shadow-2xl
+        transition-transform duration-300 ease-out
+        ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`
+
+  return (
+    <div aria-hidden={!open} className={rootCls}>
+      {body}
+    </div>
   )
 }
 

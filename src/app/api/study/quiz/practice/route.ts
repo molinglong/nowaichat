@@ -1,17 +1,12 @@
 /**
  * POST /api/study/quiz/practice - 题库练习结果回传(做错 → 转错题本)
  * body: { questionId, result: 'wrong'|'right', userAnswer? }
- * - wrong: 由 Question 同步建 StudyNote(FSRS newCardFields,dueAt=now 立即进今日队列);
- *   同题已有错题卡则幂等返回既有 noteId,不重复建卡。
- *   学科/考点直接继承 Question(超出 NOTE_SUBJECTS 降级 other),不走 AI 打标 —— 同步快速路径。
- * - right: 仅返回 ok(MVP 不回写题库统计)。
+ * 落库核心与对话练题(record_practice 工具)共用 lib/study/question-bank.ts，
+ * 保证两条路径同口径:wrong → StudyNote(FSRS)幂等建卡;right → 仅返回 ok。
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { prisma } from '@/lib/db'
-import { newCardFields } from '@/lib/study/fsrs'
-import { NOTE_SUBJECTS } from '@/lib/study/tagging'
-import { monitor } from '@/lib/monitor'
+import { recordPracticeAttempt } from '@/lib/study/question-bank'
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -29,57 +24,21 @@ export async function POST(req: NextRequest) {
   if (!body.questionId?.trim()) {
     return NextResponse.json({ error: '缺少 questionId' }, { status: 400 })
   }
-  const userAnswer = (body.userAnswer ?? '').trim().slice(0, 2000)
+  const result = body.result === 'wrong' ? 'wrong' : 'right'
 
   try {
-    // 归属校验:非本人题目视为不存在
-    const question = await prisma.question.findFirst({
-      where: { id: body.questionId.trim(), userId },
-    })
-    if (!question) {
+    const r = await recordPracticeAttempt(userId, body.questionId.trim(), result, body.userAnswer)
+    // 归属校验:非本人题目视为不存在(核心内按 notfound 处理)
+    if (r.outcome === 'notfound') {
       return NextResponse.json({ error: 'Not Found' }, { status: 404 })
     }
-
-    if (body.result !== 'wrong') {
+    if (r.outcome === 'ok') {
       return NextResponse.json({ ok: true })
     }
-
-    // 幂等:同题已建过错题卡直接复用,防重复刷题堆卡
-    const existing = await prisma.studyNote.findFirst({
-      where: { userId, sourceQuestionId: question.id },
-      select: { id: true },
-      orderBy: { createdAt: 'desc' },
-    })
-    if (existing) {
-      monitor('practice_idempotent_reuse', { questionId: question.id, noteId: existing.id })
-      return NextResponse.json({ noteId: existing.id, existing: true })
+    if (r.outcome === 'card-existing') {
+      return NextResponse.json({ noteId: r.noteId, existing: true })
     }
-
-    const card = newCardFields()
-    const row = await prisma.studyNote.create({
-      data: {
-        userId,
-        sourceQuestionId: question.id,
-        subject: (NOTE_SUBJECTS as readonly string[]).includes(question.subject)
-          ? question.subject
-          : 'other',
-        topic: question.topic,
-        title: question.stem.replace(/\s+/g, ' ').trim().slice(0, 40) || '错题',
-        content: question.stem + (userAnswer ? `\n\n我的答案:${userAnswer}` : ''),
-        analysis: question.answer + (question.sourceRef ? `\n\n> 出处:${question.sourceRef}` : ''),
-        mastery: 0,
-        stability: card.stability,
-        difficulty: card.difficulty,
-        state: card.state,
-        dueAt: card.dueAt,
-        reps: card.reps,
-        lapses: card.lapses,
-      },
-      select: { id: true, title: true, createdAt: true },
-    })
-    monitor('practice_card_created', { questionId: question.id, noteId: row.id })
-
-    return NextResponse.json({ noteId: row.id, existing: false }, { status: 201 })
+    return NextResponse.json({ noteId: r.noteId, existing: false }, { status: 201 })
   } catch (err) {
     console.error('[study/quiz/practice] failed:', err)
     return NextResponse.json({ error: '练习结果处理失败' }, { status: 500 })

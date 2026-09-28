@@ -27,18 +27,36 @@ import { useTypewriter } from '@/lib/useTypewriter'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { ChartCard } from './ChartCard'
 import { ToolCallCard, extractToolCallViews } from './ToolCallCard'
+import { TurnFileSummary } from './TurnFileSummary'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { toast } from '@/lib/toast'
 import { useChatStore } from '@/store/chat-store'
 import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
+import {
+  estimatePlaceholderHeight,
+  messageHeightStore,
+  observeMessageHeight,
+  unobserveMessageHeight,
+} from './chat-list-bridge'
 import type { UIMessage } from 'ai'
 import type { Attachment } from '@/lib/attachment-types'
 
-// 长会话性能优化:视口外的消息跳过排版与绘制(DOM 保留,复制/滚动定位等交互不受影响)。
-// containIntrinsicSize 的 'auto' 让浏览器记住真实高度,首渲前用 180px 估算占位。
-const MSG_WRAPPER_STYLE: CSSProperties = {
-  contentVisibility: 'auto',
-  containIntrinsicSize: 'auto 180px',
+/**
+ * 去噪：推理模型每步思考开头常复述用户原话（如"帮我评价一下这个项目"），
+ * 多步工具循环下逐轮复现，造成重复输出。展示前剥离与最近一条用户消息一致的前缀。
+ */
+function stripLeadingEcho(text: string, echo: string | null | undefined): string {
+  const src = echo?.trim()
+  if (!src) return text
+  const t = text.trimStart()
+  if (t === src) return ''
+  if (!t.startsWith(src)) return text
+  const after = t.slice(src.length)
+  // 复述后紧跟换行/标点，视为整段复述，一并剥掉，保留后面的实质内容
+  if (/^[\s,，。；、！？!?：:]/.test(after)) {
+    return after.replace(/^[\s,，。；、！？!?：:]+/, '')
+  }
+  return text
 }
 
 /**
@@ -287,6 +305,11 @@ interface MessageBubbleProps {
   onOpenEditor?: (path: string) => void
   /** 澄清问答:该消息之后是否已有 user 消息(已答则卡片锁定为摘要行) */
   clarifyAnswered?: boolean
+  /**
+   * 关闭本消息的 content-visibility 裁剪。虚拟化列表用:屏外 item 已被虚拟化卸载,
+   * 若再叠加 CV 跳过,overscan 项会以占位尺寸喂给 measureElement 造成测量反馈循环。
+   */
+  contentVisibilityOff?: boolean
 }
 
 function MessageBubbleInner({
@@ -304,6 +327,7 @@ function MessageBubbleInner({
   onLocalFileDecision,
   onOpenEditor,
   clarifyAnswered,
+  contentVisibilityOff,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
@@ -413,6 +437,48 @@ function MessageBubbleInner({
     [message, isAssistant]
   )
 
+  // content-visibility 裁剪:屏外消息跳过布局/绘制,是长会话滚动性能的基石。
+  // 占位尺寸优先用真实测量值(chat-list-bridge 缓存,下方 RO 回填),估算值只兜首帧 ——
+  // 此前对"工具卡消息 / 估算 >2600px"的豁免已移除:最重的消息恰恰最需要裁剪,
+  // 估算不准的跳变由测量回填 + Chromium last-remembered size 消化。
+  // 虚拟化模式传 contentVisibilityOff 关闭(测量职责归 measureElement,避免反馈循环)。
+  const wrapperStyle: CSSProperties | undefined = useMemo(() => {
+    if (contentVisibilityOff) return undefined
+    const estimated = estimatePlaceholderHeight(text, reasoningText, attachments.length)
+    const px = messageHeightStore.get(message.id) ?? estimated
+    return { contentVisibility: 'auto', containIntrinsicSize: `auto ${px}px` }
+  }, [contentVisibilityOff, text, reasoningText, attachments.length, message.id])
+
+  // wrapper 挂载时挂到共享 ResizeObserver 上:测得的真实高度写入 bridge 缓存,
+  // 并直接内联到 containIntrinsicSize(绕过 React 状态 —— 流式期间尺寸逐帧变化,
+  // 走 setState 会翻倍重渲染;内联值对可见元素无效果,不会被 React 样式 diff 覆盖,
+  // 因为 wrapperStyle memo 的值不随之变化)。
+  const wrapperElRef = useRef<HTMLDivElement | null>(null)
+  const wrapperPropRef = useRef(wrapperRef)
+  const messageIdRef = useRef(message.id)
+  useEffect(() => {
+    wrapperPropRef.current = wrapperRef
+  }, [wrapperRef])
+  useEffect(() => {
+    messageIdRef.current = message.id
+  }, [message.id])
+  const setWrapperRef = useCallback((el: HTMLDivElement | null) => {
+    const prev = wrapperElRef.current
+    if (prev === el) return
+    if (prev) unobserveMessageHeight(prev)
+    wrapperElRef.current = el
+    if (el) {
+      observeMessageHeight(el, (px) => {
+        const id = messageIdRef.current
+        messageHeightStore.set(id, px)
+        // content-visibility 生效期间才需要回填占位尺寸;虚拟化模式(无 CV)跳过
+        if (el.style.contentVisibility === 'auto') {
+          el.style.containIntrinsicSize = `auto ${Math.max(1, Math.round(px))}px`
+        }
+      })
+    }
+  }, [])
+
   // 兜底:模型偶发把全部内容(含最终答案)都放进 <think> 标签,导致正文为空。
   // 流式期间也尝试拆分(只要看到明确标记就立即切分),避免用户看到空白几秒到几十秒。
   // 用正则限定只切分明确标记,避免误切普通的"答案"二字。
@@ -451,11 +517,16 @@ function MessageBubbleInner({
       toast.error('存入失败,请重试', { title: '错题本' })
     }
   }, [studySaveState, isUser, isAssistant, bodyText, prevUserContent, message.id])
-  const displayReasoningText = bodySplit ? bodySplit.head : reasoningText
+  // 去噪：剥离思考开头对用户原话的复述（见 stripLeadingEcho）
+  const displayReasoningText = stripLeadingEcho(
+    bodySplit ? bodySplit.head : reasoningText,
+    prevUserContent
+  )
 
   // 思考框自动折叠(设置中可关):思考进行中默认展开,"思考完毕"自动收起让视野回到正文。
   // 完毕判定用 isThinkingActive(生成中且正文未出现)而非 reasoning part 的 state:
-  // 流式恢复轮询构造的快照 parts 恒为 state:'done',用 state 判定会把还在思考的消息误折叠。
+  // 流式恢复轮询构造的快照 parts 曾恒为 state:'done'(现按 stillStreaming 标注),
+  // 不依赖 part state 的判定对轮询间隙与历史回放都更稳。
   // 用户手动点过按钮后以用户选择为准,新一轮思考开始时重置回自动接管。
   const isThinkingActive = Boolean(isAssistant && isStreaming && !bodyText.trim())
   // 思考中→展开;完毕(正文开始/生成结束/历史消息)→折叠成标题条;开关关闭则始终展开(旧行为)
@@ -466,6 +537,14 @@ function MessageBubbleInner({
       setUserShowReasoning(null)
     }
     prevThinkingActiveRef.current = isThinkingActive
+  }, [isThinkingActive])
+
+  // 本次挂载内是否出现过"思考中":流式期间思考框走 grid-rows 过渡分支的前提,
+  // 折叠(思考完毕收起)才能平滑塌缩而非瞬间跳变。历史消息(从未思考中)走静态
+  // 分支,折叠的推理文本不常驻 DOM,不给长会话的滚动帧率加负担
+  const [thinkingThisMount, setThinkingThisMount] = useState(false)
+  useEffect(() => {
+    if (isThinkingActive) setThinkingThisMount(true)
   }, [isThinkingActive])
 
   // Typewriter effect: only for live streaming, not for historical messages
@@ -764,8 +843,8 @@ function MessageBubbleInner({
   if (isSummaryCard && summaryMeta) {
     return (
       <div
-        ref={wrapperRef}
-        style={MSG_WRAPPER_STYLE}
+        ref={setWrapperRef}
+        style={wrapperStyle}
         data-message-id={message.id}
         className={cn(
           'flex justify-start px-4 py-2 transition-colors group relative',
@@ -784,7 +863,7 @@ function MessageBubbleInner({
     return (
       <div className="flex justify-end px-4 py-2">
         <div className="max-w-[80%] w-full">
-          <div className="rounded-lg bg-accent rounded-br-sm overflow-hidden">
+          <div className="rounded-lg bg-accent overflow-hidden">
             <textarea
               ref={textareaRef}
               value={editValue}
@@ -826,8 +905,8 @@ function MessageBubbleInner({
 
   return (
     <div
-      ref={wrapperRef}
-      style={MSG_WRAPPER_STYLE}
+      ref={setWrapperRef}
+      style={wrapperStyle}
       data-message-id={message.id}
       onContextMenu={handleMessageContextMenu}
       className={cn(
@@ -866,16 +945,34 @@ function MessageBubbleInner({
                   <span>{showReasoning ? '思考过程' : '已深度思考 · 点击回看'}</span>
                   <ChevronDown className={cn('w-3 h-3 transition-transform', showReasoning ? '' : '-rotate-90')} />
                 </button>
-                {showReasoning && (
+                {isStreaming && thinkingThisMount ? (
+                  // 流式期间: grid-rows 1fr/0fr 过渡,思考完毕自动收起时平滑塌缩。
+                  // 内容保持挂载(0fr 收起);仅"本条在生成"的消息如此,历史消息走下面
+                  // 静态分支,避免长会话里几十条折叠推理文本常驻布局
+                  <div
+                    className={cn(
+                      'grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none',
+                      showReasoning ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                    )}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="mt-1.5 pl-3 border-l-2 border-line-strong/60">
+                        <p className="text-xs text-content-secondary whitespace-pre-wrap break-words leading-relaxed">
+                          {displayReasoningText}
+                          {isReasoningStreaming && (
+                            <span className="inline-block w-1 h-3 ml-0.5 bg-accent animate-pulse align-middle" />
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : showReasoning ? (
                   <div className="mt-1.5 pl-3 border-l-2 border-line-strong/60">
                     <p className="text-xs text-content-secondary whitespace-pre-wrap break-words leading-relaxed">
                       {displayReasoningText}
-                      {isReasoningStreaming && (
-                        <span className="inline-block w-1 h-3 ml-0.5 bg-accent animate-pulse align-middle" />
-                      )}
                     </p>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
             {/* Main response */}
@@ -894,9 +991,14 @@ function MessageBubbleInner({
                 ))}
               </div>
             )}
+            {/* 回合变更摘要条(P1):聚合本条消息里 local_file 的文件变更,可展开逐文件撤销 */}
+            <TurnFileSummary message={message} />
             {displayText ? (
               <div className="relative text-sm text-content-primary leading-relaxed">
-                <MarkdownRenderer content={displayText} messageId={message.id} rich={isAssistant && !showCursor} />
+                {/* rich 以「整条消息是否在生成」为粒度,不跟单个 text part 的 state 翻转:
+                    工具轮次间隙最后 text part 是 done 而 isStreaming 仍 true,若用
+                    !showCursor 判定,每轮工具调用都会 plain↔rich 反复横跳(闪烁主源) */}
+                <MarkdownRenderer content={displayText} messageId={message.id} rich={isAssistant && !isStreaming && !isTyping} />
                 {showCursor && (
                   <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-content-secondary animate-pulse align-middle" />
                 )}
@@ -970,7 +1072,7 @@ function MessageBubbleInner({
                 )}
               </div>
             )}
-            <div className="rounded-lg bg-accent px-3 py-1.5 rounded-br-sm">
+            <div className="rounded-lg bg-accent px-3 py-1.5">
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-accent-foreground">{text}</p>
             </div>
           </div>
@@ -1188,7 +1290,7 @@ function MessageBubbleInner({
  *
  * 关键点:
  * - message.id 不变 → 同一条消息
- * - message.parts 序列化字符串(strip text 后)变化 → 必须重渲(流式追加)
+ * - message.parts 的 state 或文本长度变化 → 必须重渲(流式追加)
  * - message.role 不变 → 同角色
  * - isStreaming 变化 → 必须重渲(切换流式/静态视觉)
  * - isLastAssistant 变化 → 切换按钮可见性
@@ -1209,6 +1311,7 @@ function areMessageBubblePropsEqual(
   if (prev.onEdit !== next.onEdit) return false
   if (prev.isFocused !== next.isFocused) return false
   if (prev.prevUserContent !== next.prevUserContent) return false
+  if (prev.contentVisibilityOff !== next.contentVisibilityOff) return false
   // wrapperRef 不必比较(它只用来滚动,变化不影响渲染结果)
 
   // 附件挂载由异步 effect 注入(引用变化): 不比较会导致文件卡片永远不出现。
@@ -1222,7 +1325,19 @@ function areMessageBubblePropsEqual(
     }
   }
 
-  // 关键: parts 的"形状指纹" —— 流式追加时 text 变化不算(我们靠 state 字段触发重渲)
+  // metadata 引用比对: onFinish 内容同步 / 后端写 chart 卡片时该对象会被替换。
+  // 若只靠下面的 parts 指纹,「文本等长替换」会漏渲(如服务端兜底拆分后总长恰好不变)
+  if (
+    (prev.message as { metadata?: unknown }).metadata !==
+    (next.message as { metadata?: unknown }).metadata
+  ) {
+    return false
+  }
+
+  // 关键: parts 的"形状+体量指纹" —— state 切换或文本长度变化才重渲。
+  // 流式追加时长度必然增长,而打字机依赖气泡重渲才能把新 fullText 送进
+  // useTypewriter —— 只比长度不比内容,O(1) 且足以覆盖"追加"这一唯一常态;
+  // 引用稳定的回调(onEdit 已收敛到 ref)让历史气泡在这里直接 bail out
   const pa = prev.message.parts
   const pb = next.message.parts
   if (pa.length !== pb.length) return false
@@ -1230,11 +1345,15 @@ function areMessageBubblePropsEqual(
     const a = pa[i]
     const b = pb[i]
     if (a.type !== b.type) return false
-    // 同一个 type 的 part,只在 state 切换或类型变化时重渲
-    // text 字段变化由父级用 useState/useRef 收敛,这里跳过 text 直接比对
+    // 同一个 type 的 part,只在 state 切换、文本长度变化或类型变化时重渲
     const aState = (a as { state?: string }).state
     const bState = (b as { state?: string }).state
     if (aState !== bState) return false
+    const aText = (a as { text?: unknown }).text
+    const bText = (b as { text?: unknown }).text
+    const aLen = typeof aText === 'string' ? aText.length : 0
+    const bLen = typeof bText === 'string' ? bText.length : 0
+    if (aLen !== bLen) return false
   }
   return true
 }

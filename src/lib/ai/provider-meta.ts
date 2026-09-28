@@ -11,7 +11,6 @@ export const PROVIDER_DOT: Record<string, string> = {
   moonshot: 'bg-indigo-500',
   zhipu: 'bg-cyan-500',
   doubao: 'bg-teal-500',
-  yi: 'bg-fuchsia-500',
   custom: 'bg-gray-400',
 }
 
@@ -28,6 +27,5 @@ export const PROVIDER_NAMES: Record<string, string> = {
   moonshot: 'Moonshot (Kimi)',
   zhipu: '智谱 GLM',
   doubao: '字节豆包',
-  yi: '零一万物 Yi',
   custom: '自定义',
 }

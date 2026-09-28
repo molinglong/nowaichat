@@ -8,16 +8,20 @@ import {
   type BuiltinImageModel,
   type ImageProvider,
   type ImageAdapter,
+  normalizeImageModelId,
 } from "./image-models.config"
 
 // 兼容旧调用方
 export const BUILTIN_MODELS = BUILTIN_IMAGE_MODELS
+// 路由层读出/校验用户存档模型 ID 时也要做下线别名归一化
+export { normalizeImageModelId } from "./image-models.config"
 
 export type BuiltinModelId = string
 export type { BuiltinImageModel, ImageProvider }
 
 export function getBuiltinModel(id: string): BuiltinImageModel | undefined {
-  return BUILTIN_IMAGE_MODELS.find((m) => m.id === id)
+  // 别名归一化:老账号存的 builtin:dall-e-* 等已下线 ID 映射到替代模型
+  return BUILTIN_IMAGE_MODELS.find((m) => m.id === normalizeImageModelId(id))
 }
 
 export const IMG_MARKER_REGEX = /\[IMG:([^\]]+)\]/g

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-move-buddy-window"
+description = "Enables the move_buddy_window command without any pre-configured scope."
+commands.allow = ["move_buddy_window"]
+
+[[permission]]
+identifier = "deny-move-buddy-window"
+description = "Denies the move_buddy_window command without any pre-configured scope."
+commands.deny = ["move_buddy_window"]

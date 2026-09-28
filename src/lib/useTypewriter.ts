@@ -81,9 +81,12 @@ function tick(entry: StoreEntry) {
     return
   }
 
-  // 推进一帧
+  // 推进一帧: 步长随差距按比例缩放(比例追近)。旧版 `gap > 30 ? 8 : 1` 让速度在
+  // 60 与 480 字符/秒之间硬切跳变,观感"一顿一顿";比例追近在差距大时快追、
+  // 接近时自然减速,速度连续。上限 24 字符/帧 ≈ 1440 字符/秒,兜住远程轮询
+  // 每 1.2s 整段补进的追赶场景
   const gap = target - current
-  const step = gap > 30 ? 8 : 1
+  const step = Math.max(1, Math.min(24, Math.round(gap / 12)))
   entry.revealedLength = Math.min(current + step, target)
 
   // 通知 React (通过 useSyncExternalStore listener)

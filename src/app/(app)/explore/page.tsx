@@ -136,8 +136,8 @@ function ExploreContent() {
     staleTime: STALE.customModels,
   })
 
-  const userModelFromList = builtinModels[0]?.id || customModels[0]?.id || 'gpt-4o'
-  const opponentModelFromList = builtinModels[1]?.id || customModels[0]?.id || 'claude-3-5-sonnet'
+  const userModelFromList = builtinModels[0]?.id || customModels[0]?.id || 'gpt-5.4-mini'
+  const opponentModelFromList = builtinModels[1]?.id || customModels[0]?.id || 'claude-sonnet-4-6'
   const [userModel, setUserModel] = useState(userModelFromList)
   const [opponentModel, setOpponentModel] = useState(opponentModelFromList)
   const [assistantModel, setAssistantModel] = useState(userModelFromList)
@@ -148,13 +148,13 @@ function ExploreContent() {
     const all = [...builtinModels, ...customModels]
     if (all.length === 0) return
     if (!all.some((m) => m.id === userModel)) {
-      setUserModel(all[0]?.id ?? 'gpt-4o')
+      setUserModel(all[0]?.id ?? 'gpt-5.4-mini')
     }
     if (!all.some((m) => m.id === opponentModel)) {
-      setOpponentModel(all[1]?.id ?? all[0]?.id ?? 'claude-3-5-sonnet')
+      setOpponentModel(all[1]?.id ?? all[0]?.id ?? 'claude-sonnet-4-6')
     }
     if (!all.some((m) => m.id === assistantModel)) {
-      setAssistantModel(all[0]?.id ?? 'gpt-4o')
+      setAssistantModel(all[0]?.id ?? 'gpt-5.4-mini')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [builtinModels, customModels])
@@ -570,8 +570,13 @@ function ExploreContent() {
   // 辩论主界面
   return (
     <div className="h-full flex flex-col">
-      {/* 顶部栏 */}
-      <div className="shrink-0 px-4 py-2 border-b border-line/60 flex items-center justify-between">
+      {/* 顶部栏(data-tauri-drag-region="deep":客户端下即本页「标题栏」,
+          deep = 整块(含标题文字/图标)按下都能拖窗,双击转最大化;
+          右侧按钮等可点元素由 Tauri 脚本自动排除,照旧可点) */}
+      <div
+        data-tauri-drag-region="deep"
+        className="shrink-0 px-4 py-2 border-b border-line/60 flex items-center justify-between"
+      >
         <div className="flex items-center gap-3">
           <Scale className="w-4 h-4 text-accent" />
           <div>

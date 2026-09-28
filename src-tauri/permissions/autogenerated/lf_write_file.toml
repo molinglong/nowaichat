@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-write-file"
+description = "Enables the lf_write_file command without any pre-configured scope."
+commands.allow = ["lf_write_file"]
+
+[[permission]]
+identifier = "deny-lf-write-file"
+description = "Denies the lf_write_file command without any pre-configured scope."
+commands.deny = ["lf_write_file"]

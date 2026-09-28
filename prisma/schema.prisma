@@ -54,6 +54,7 @@ model User {
   questions      Question[]
   todos         Todo[]
   writeDocs     WriteDoc[]
+  works         Work[]
   codeDocs      CodeDoc[]
   amapKey       AmapKey?
   apiTokens     ApiToken[]
@@ -604,12 +605,58 @@ model WriteDoc {
   title     String   @default("未命名")
   content   String   @default("")
   charCount Int      @default(0)
+  /// 所属作品(可空):归属后可吃作品设定;不归属时行为与旧版一致。
+  /// 作品删除时置空(文档保留),避免误删作品连带删掉正文章节
+  workId    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  work Work? @relation(fields: [workId], references: [id], onDelete: SetNull)
 
   @@index([userId, updatedAt])
+  @@index([workId, updatedAt])
+}
+
+// ===================== 写作作品(Work)与设定集(WorkSetting) =====================
+// 长篇写作的上下文容器:设定条目挂作品层,作品下归属多篇文档(章节)。
+// 生成时把启用的条目按预算注入 system prompt,解跨章"吃书"(人物漂移/伏笔丢失)。
+// 注入策略见 src/lib/write/work-settings.ts(画布全量 / 聊天命中式)。
+model Work {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String   @default("未命名作品")
+  description String   @default("")
+  /// 作品级设定注入总开关:关掉后画布与聊天两条链路都不注入
+  settingsEnabled Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  settings WorkSetting[]
+  docs     WriteDoc[]
+
+  @@index([userId, updatedAt])
+}
+
+// 设定条目:分类 + 标题 + 别名(英文逗号分隔,聊天链路按此在最近消息/正文里命中) + 正文。
+// content 用模板引导自由撰写(人物卡:姓名/身份/外貌/说话习惯/关系),不设硬表单。
+model WorkSetting {
+  id       String  @id @default(cuid())
+  workId   String
+  /// 分类 key:outline/character/system/faction/place/item/other(见 lib/write/work-settings.ts 白名单)
+  category String  @default("other")
+  title    String
+  aliases  String  @default("")
+  content  String  @default("")
+  enabled  Boolean @default(true)
+  sort     Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  work Work @relation(fields: [workId], references: [id], onDelete: Cascade)
+
+  @@index([workId, sort])
 }
 
 // ===================== 代码编辑器(CodeDoc) =====================

@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>布料模拟 - Verlet 积分</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            background: #fff;
+            box-shadow: 0 10px 50px rgba(0,0,0,0.3);
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        .info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="info">
+        布料模拟 (Verlet 积分)<br>
+        左键拖拽布料<br>
+        拖拽力度过大会撕裂
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = 800;
+        canvas.height = 600;
+
+        const COLS = 25;
+        const ROWS = 18;
+        const SPACING = 15;
+        const GRAVITY = 0.5;
+        const DAMPING = 0.99;
+        const CONSTRAINT_ITERATIONS = 5;
+        const TEAR_DISTANCE = 35;
+        const MOUSE_INFLUENCE = 50;
+        const MOUSE_CUT_DISTANCE = 80;
+
+        class Point {
+            constructor(x, y, pinned = false) {
+                this.x = x;
+                this.y = y;
+                this.px = x;
+                this.py = y;
+                this.pinned = pinned;
+                this.vx = 0;
+                this.vy = 0;
+            }
+
+            update(dt) {
+                if (this.pinned) return;
+
+                const vx = (this.x - this.px) * DAMPING;
+                const vy = (this.y - this.py) * DAMPING;
+
+                this.px = this.x;
+                this.py = this.y;
+
+                this.x += vx;
+                this.y += vy;
+                this.y += GRAVITY * dt * dt;
+
+                if (this.x < 0) {
+                    this.x = 0;
+                    this.px = this.x;
+                }
+                if (this.x > canvas.width) {
+                    this.x = canvas.width;
+                    this.px = this.x;
+                }
+                if (this.y < 0) {
+                    this.y = 0;
+                    this.py = this.y;
+                }
+                if (this.y > canvas.height) {
+                    this.y = canvas.height;
+                    this.py = this.y;
+                }
+            }
+
+            applyForce(fx, fy) {
+                if (this.pinned) return;
+                this.x += fx;
+                this.y += fy;
+            }
+        }
+
+        class Constraint {
+            constructor(p1, p2) {
+                this.p1 = p1;
+                this.p2 = p2;
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                this.restLength = Math.sqrt(dx * dx + dy * dy);
+                this.torn = false;
+            }
+
+            solve() {
+                if (this.torn) return;
+
+                const dx = this.p2.x - this.p1.x;
+                const dy = this.p2.y - this.p1.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < 0.0001) return;
+
+                if (dist > TEAR_DISTANCE) {
+                    this.torn = true;
+                    return;
+                }
+
+                const diff = (this.restLength - dist) / dist;
+                const offsetX = dx * diff * 0.5;
+                const offsetY = dy * diff * 0.5;
+
+                if (!this.p1.pinned) {
+                    this.p1.x -= offsetX;
+                    this.p1.y -= offsetY;
+                }
+                if (!this.p2.pinned) {
+                    this.p2.x += offsetX;
+                    this.p2.y += offsetY;
+                }
+            }
+        }
+
+        class Cloth {
+            constructor() {
+                this.points = [];
+                this.constraints = [];
+                this.initPoints();
+                this.initConstraints();
+            }
+
+            initPoints() {
+                const startX = (canvas.width - (COLS - 1) * SPACING) / 2;
+                const startY = 50;
+
+                for (let y = 0; y < ROWS; y++) {
+                    for (let x = 0; x < COLS; x++) {
+                        const px = startX + x * SPACING;
+                        const py = startY + y * SPACING;
+                        
+                        let pinned = false;
+                        if (y === 0) {
+                            if (x === 0 || x === COLS - 1) {
+                                pinned = true;
+                            } else if (x % 5 === 0) {
+                                pinned = true;
+                            }
+                        }
+
+                        this.points.push(new Point(px, py, pinned));
+                    }
+                }
+            }
+
+            initConstraints() {
+                for (let y = 0; y < ROWS; y++) {
+                    for (let x = 0; x < COLS; x++) {
+                        const index = y * COLS + x;
+
+                        if (x < COLS - 1) {
+                            this.constraints.push(
+                                new Constraint(this.points[index], this.points[index + 1])
+                            );
+                        }
+
+                        if (y < ROWS - 1) {
+                            this.constraints.push(
+                                new Constraint(this.points[index], this.points[index + COLS])
+                            );
+                        }
+
+                        if (x < COLS - 1 && y < ROWS - 1) {
+                            this.constraints.push(
+                                new Constraint(this.points[index], this.points[index + COLS + 1])
+                            );
+                        }
+
+                        if (x > 0 && y < ROWS - 1) {
+                            this.constraints.push(
+                                new Constraint(this.points[index], this.points[index + COLS - 1])
+                            );
+                        }
+                    }
+                }
+            }
+
+            update(dt) {
+                for (let point of this.points) {
+                    point.update(dt);
+                }
+
+                for (let i = 0; i < CONSTRAINT_ITERATIONS; i++) {
+                    for (let constraint of this.constraints) {
+                        constraint.solve();
+                    }
+                }
+            }
+
+            draw() {
+                ctx.strokeStyle = '#3498db';
+                ctx.lineWidth = 1;
+
+                for (let constraint of this.constraints) {
+                    if (constraint.torn) continue;
+
+                    ctx.beginPath();
+                    ctx.moveTo(constraint.p1.x, constraint.p1.y);
+                    ctx.lineTo(constraint.p2.x, constraint.p2.y);
+                    ctx.stroke();
+                }
+
+                for (let point of this.points) {
+                    if (point.pinned) {
+                        ctx.fillStyle = '#e74c3c';
+                        ctx.beginPath();
+                        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+
+            getNearestPoint(mx, my) {
+                let nearest = null;
+                let minDist = MOUSE_INFLUENCE;
+
+                for (let point of this.points) {
+                    if (point.pinned) continue;
+                    const dx = point.x - mx;
+                    const dy = point.y - my;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        nearest = point;
+                    }
+                }
+
+                return nearest;
+            }
+
+            applyMouseForce(mx, my, pmx, pmy) {
+                const dx = mx - pmx;
+                const dy = my - pmy;
+                const forceDist = Math.sqrt(dx * dx + dy * dy);
+
+                for (let point of this.points) {
+                    if (point.pinned) continue;
+
+                    const pdx = point.x - mx;
+                    const pdy = point.y - my;
+                    const dist = Math.sqrt(pdx * pdx + pdy * pdy);
+
+                    if (dist < MOUSE_INFLUENCE) {
+                        const force = 1 - dist / MOUSE_INFLUENCE;
+                        point.applyForce(dx * force * 0.8, dy * force * 0.8);
+
+                        if (forceDist > MOUSE_CUT_DISTANCE) {
+                            for (let constraint of this.constraints) {
+                                if ((constraint.p1 === point || constraint.p2 === point) && !constraint.torn) {
+                                    const cdx = constraint.p2.x - constraint.p1.x;
+                                    const cdy = constraint.p2.y - constraint.p1.y;
+                                    const cdist = Math.sqrt(cdx * cdx + cdy * cdy);
+                                    if (cdist > constraint.restLength * 2) {
+                                        constraint.torn = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        const cloth = new Cloth();
+
+        let mouseDown = false;
+        let mouseX = 0;
+        let mouseY = 0;
+        let prevMouseX = 0;
+        let prevMouseY = 0;
+        let draggedPoint = null;
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+            prevMouseX = mouseX;
+            prevMouseY = mouseY;
+            mouseDown = true;
+            draggedPoint = cloth.getNearestPoint(mouseX, mouseY);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!mouseDown) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            prevMouseX = mouseX;
+            prevMouseY = mouseY;
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+
+            if (draggedPoint) {
+                const dx = mouseX - prevMouseX;
+                const dy = mouseY - prevMouseY;
+                draggedPoint.x = mouseX;
+                draggedPoint.y = mouseY;
+                draggedPoint.px = mouseX - dx;
+                draggedPoint.py = mouseY - dy;
+            }
+
+            cloth.applyMouseForce(mouseX, mouseY, prevMouseX, prevMouseY);
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            mouseDown = false;
+            draggedPoint = null;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            mouseDown = false;
+            draggedPoint = null;
+        });
+
+        let lastTime = performance.now();
+        const targetDt = 1 / 60;
+
+        function animate() {
+            const currentTime = performance.now();
+            const elapsed = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            const dt = Math.min(elapsed, targetDt * 2);
+
+            cloth.update(dt);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            cloth.draw();
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

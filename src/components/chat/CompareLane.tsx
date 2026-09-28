@@ -329,7 +329,9 @@ export function CompareLane({
       )}
 
       {/* Lane messages (对比模式内禁用编辑用户消息) */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+      {/* md:pt-12: 桌面端浮动工具簇无底板悬在右上,泳道首条消息须让位;
+          padding 放滚动容器内,滚动时随内容移出 —— 裁切线保持 y=0,TopFade 渐隐行为不变 */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 md:pt-12">
         <MessageList
           messages={messages}
           isStreaming={isLoading}

@@ -10,7 +10,6 @@ import { zhipuProvider } from "./providers/zhipu"
 import { mistralProvider } from "./providers/mistral"
 import { xaiProvider } from "./providers/xai"
 import { doubaoProvider } from "./providers/doubao"
-import { yiProvider } from "./providers/yi"
 import { groqProvider } from "./providers/groq"
 import { prisma } from "@/lib/db"
 
@@ -30,7 +29,7 @@ export const providers: Record<string, ProviderDefinition> = {
   moonshot: moonshotProvider,
   zhipu: zhipuProvider,
   doubao: doubaoProvider,
-  yi: yiProvider,
+  // 零一万物 Yi:开放平台已于 2026-09-03 停止 API 服务,整体下线(见 LEGACY_MODEL_ALIASES 末尾注释)
 }
 
 // =================== 同步（仅硬编码内置模型）===================
@@ -41,13 +40,55 @@ export function getAllModels(): ModelDefinition[] {
   return Object.values(providers).flatMap(p => p.models)
 }
 
-// DeepSeek 旧模型名归一化:V3 时代的 chat/reasoner/coder 已并入 deepseek-flash,
-// 思考与否改由 thinking 请求参数控制(见 chat 路由)。老会话 model 字段存的旧 id
-// 在 getModel/getEffectiveModel 查找时统一映射,老对话无需迁移即可继续使用。
+// 已下线模型名归一化。查找时统一映射到当前主力模型,老对话无需迁移即可继续使用
+// (见错误分支:查不到定义会直接 400 Unknown model,所以删除前必须先在这里补映射)。
+// 维护规则:只有当某 id 被官方确认**已下线/已停用**时才删除并在此登记;
+// 仅是"已出新一代但仍可调用"的旧模型请留在清单里标 tier: "legacy",不要删。
 const LEGACY_MODEL_ALIASES: Record<string, string> = {
+  // DeepSeek:V3 时代的 chat/reasoner/coder 已并入 deepseek-flash,
+  // 思考与否改由 thinking 请求参数控制(见 chat 路由)。
   "deepseek-chat": "deepseek-flash",
   "deepseek-reasoner": "deepseek-flash",
   "deepseek-coder": "deepseek-flash",
+  // Anthropic:Claude 4 / 3.x 已于 2026-06-15 退市
+  "claude-opus-4-20250514": "claude-opus-4-7",
+  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+  "claude-3-7-sonnet-20250219": "claude-sonnet-4-6",
+  "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
+  "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
+  "claude-3-opus-20240229": "claude-opus-4-7",
+  "claude-3-haiku-20240307": "claude-haiku-4-5-20251001",
+  // Google:Gemini 2.0 系已关停,1.5 系与 3 Pro 预览端点已下线
+  "gemini-2.0-flash": "gemini-3.5-flash",
+  "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
+  "gemini-1.5-pro": "gemini-3.1-pro-preview",
+  "gemini-1.5-flash": "gemini-3.5-flash",
+  "gemini-1.5-flash-8b": "gemini-3.5-flash-lite",
+  "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+  // 文心:ERNIE 4.0 / 3.5 / Speed / Tiny 已不在在售清单
+  "ernie-4.0-8k": "ernie-5.1",
+  "ernie-4.0-turbo-8k": "ernie-5.1",
+  "ernie-4.0-8k-latest": "ernie-5.1",
+  "ernie-3.5-8k": "ernie-5.1",
+  "ernie-3.5-8k-latest": "ernie-5.1",
+  "ernie-speed-8k": "ernie-5.1",
+  "ernie-speed-128k": "ernie-5.1",
+  "ernie-tiny-8k": "ernie-5.1",
+  // Kimi:moonshot-v1 全系与 kimi-latest 已下线
+  "kimi-latest": "kimi-k3",
+  "kimi-k2-0905-preview": "kimi-k2.6",
+  "moonshot-v1-8k": "kimi-k2.6",
+  "moonshot-v1-32k": "kimi-k2.6",
+  "moonshot-v1-128k": "kimi-k2.6",
+  "moonshot-v1-vision-preview": "kimi-k3",
+  // 豆包:doubao-pro / doubao-lite 一代已不在在售清单
+  "doubao-pro-32k": "doubao-seed-2-1-pro-260915",
+  "doubao-pro-256k": "doubao-seed-2-1-pro-260915",
+  "doubao-lite-32k": "doubao-seed-2-1-lite-260915",
+  "doubao-lite-128k": "doubao-seed-2-1-lite-260915",
+  "doubao-vision-pro-32k": "doubao-seed-2-1-pro-260915",
+  // 注:零一万物 Yi 开放平台已于 2026-09-03 停止 API 服务,provider 已整体移除,
+  // 无同类可替代模型,故不设别名;命中 yi-* 的老会话会明确报 Unknown model。
 }
 
 export function normalizeModelId(modelId: string): string {

@@ -96,13 +96,13 @@ interface ToastOptions {
 
 /**
  * 语义点缀色: 只用于 SVG 图标着色,不再染色底/标题/竖条/进度条。
- * info 用系统灰 #8e8e93 —— 与项目"单一中灰强调色"体系一致。
+ * info 用系统灰 --content-muted —— 与项目"单一中灰强调色"体系一致。
  */
 const KIND_CONFIG: Record<ToastKind, { accent: string }> = {
   error: { accent: '#ef4444' },
   success: { accent: '#10b981' },
   warning: { accent: '#f59e0b' },
-  info: { accent: '#8e8e93' },
+  info: { accent: 'rgb(var(--content-muted))' },
 }
 
 /**
@@ -133,32 +133,33 @@ interface ToastPalette {
 }
 
 /**
- * 跟随主题材质的毛玻璃配色(macOS 通知式):
- * 浅色模式=白玻璃深字,夜间模式=深玻璃白字,色值取自 globals.css 的配色体系。
+ * 跟随主题材质的毛玻璃配色(macOS 通知式): 浅色=白玻璃深字,夜间=深玻璃白字。
+ * 色值全部引用 globals.css 的 token —— 内联样式里的 var() 会实时解析,
+ * 深浅两套与任意配色(如月白·桂花金)自动跟随,不再有硬编码色值露馅。
  * show 时实时读取 <html>.dark,与 layout.tsx 的主题同步逻辑保持一致。
  */
 function palette(): ToastPalette {
   const isDark = document.documentElement.classList.contains('dark')
   if (isDark) {
-    // 夜间: 页面底 #0c0c0d / 面板 #1c1c1e,toast 取更亮一档的深灰玻璃浮起
+    // 夜间: toast 取比面板更亮一档的玻璃浮起
     return {
-      background: 'rgba(38,38,40,0.78)',
-      border: 'rgba(255,255,255,0.1)',
-      titleColor: '#f5f5f7',
-      messageColor: 'rgba(255,255,255,0.68)',
+      background: 'rgb(var(--surface-muted) / 0.78)',
+      border: 'rgb(var(--foreground) / 0.1)',
+      titleColor: 'rgb(var(--content-primary))',
+      messageColor: 'rgb(var(--content-primary) / 0.68)',
       shadow: '0 12px 32px rgba(0,0,0,0.5)',
-      progressBar: 'rgba(255,255,255,0.22)',
+      progressBar: 'rgb(var(--content-primary) / 0.22)',
       invertClose: true,
     }
   }
-  // 浅色: 页面底 #f5f5f7 / 面板 #fff,toast 取白玻璃与浅色界面同族
+  // 浅色: 白玻璃与浅色界面同族
   return {
-    background: 'rgba(255,255,255,0.72)',
-    border: 'rgba(0,0,0,0.08)',
-    titleColor: '#1d1d1f',
-    messageColor: 'rgba(0,0,0,0.6)',
+    background: 'rgb(var(--surface-glass) / 0.72)',
+    border: 'rgb(var(--foreground) / 0.08)',
+    titleColor: 'rgb(var(--content-primary))',
+    messageColor: 'rgb(var(--content-primary) / 0.6)',
     shadow: '0 12px 32px rgba(0,0,0,0.18)',
-    progressBar: 'rgba(0,0,0,0.15)',
+    progressBar: 'rgb(var(--content-primary) / 0.15)',
     invertClose: false,
   }
 }

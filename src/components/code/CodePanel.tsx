@@ -34,7 +34,7 @@ const LANG_EXT: Record<string, string> = {
   yaml: 'yml', php: 'php', ruby: 'rb', swift: 'swift', kotlin: 'kt', plaintext: 'txt',
 }
 
-export function CodePanel() {
+export function CodePanel({ embedded = false }: { embedded?: boolean }) {
   const codePanelOpen = useChatStore((s) => s.codePanelOpen)
   const codePanelDocId = useChatStore((s) => s.codePanelDocId)
   const openCodePanel = useChatStore((s) => s.openCodePanel)
@@ -126,16 +126,22 @@ export function CodePanel() {
     }
   }
 
-  return (
-    <aside
-      aria-hidden={!open}
-      className={`fixed inset-y-0 right-0 z-[80] w-full md:w-[min(60vw,960px)] flex flex-col
+  // [P1 改版]embedded = 挂进 WorkSidePane 的 tab 内容(无定位/滑出动画);独立覆盖面板兜底保留
+  const rootCls = embedded
+    ? 'h-full flex flex-col bg-surface'
+    : `fixed inset-y-0 right-0 z-[80] w-full md:w-[min(60vw,960px)] flex flex-col
         bg-surface border-l border-line shadow-2xl
         transition-transform duration-300 ease-out
-        ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}
-    >
-      {/* 面板头 */}
-      <div className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line">
+        ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`
+
+  return (
+    <div aria-hidden={!open} className={rootCls}>
+      {/* 面板头(data-tauri-drag-region="deep":客户端下即面板「标题栏」,
+          整块按下都能拖窗、双击转最大化;右侧按钮由 Tauri 脚本自动排除) */}
+      <div
+        data-tauri-drag-region="deep"
+        className="shrink-0 flex items-center gap-2 h-12 px-3 border-b border-line"
+      >
         <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
           <FileCode2 className="w-3.5 h-3.5 text-accent" />
         </div>
@@ -203,6 +209,6 @@ export function CodePanel() {
           </div>
         </div>
       )}
-    </aside>
+    </div>
   )
 }

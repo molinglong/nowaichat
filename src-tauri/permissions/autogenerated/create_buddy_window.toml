@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-buddy-window"
+description = "Enables the create_buddy_window command without any pre-configured scope."
+commands.allow = ["create_buddy_window"]
+
+[[permission]]
+identifier = "deny-create-buddy-window"
+description = "Denies the create_buddy_window command without any pre-configured scope."
+commands.deny = ["create_buddy_window"]

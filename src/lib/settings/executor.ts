@@ -1,5 +1,6 @@
 import { useChatStore } from '@/store/chat-store'
 import { toast } from '@/lib/toast'
+import { setThemeMode, type ThemeMode } from '@/lib/theme'
 import {
   getSettingDef,
   isAllowedValue,
@@ -42,16 +43,10 @@ export interface SettingsOpResult {
 
 /** 单条 op 的执行器：与 SettingsModal 手动操作的写法保持一致 */
 const APPLY: Partial<Record<SettingKey, (value: string) => void | Promise<void>>> = {
-  // 照抄 SettingsModal.handleThemeChange:system 移除显式选择跟随系统,其余写 localStorage+DOM
+  // 只改「明暗」这一维(配色与格子不在 AI 白名单内)。
+  // 月白·桂花金仅深色: 若当前配色是桂花金而 AI 把它设成浅色,setThemeMode 会连带回落黑白基线
   theme: (value) => {
-    if (value === 'system') {
-      localStorage.removeItem('theme')
-      const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      document.documentElement.classList.toggle('dark', dark)
-    } else {
-      localStorage.setItem('theme', value)
-      document.documentElement.classList.toggle('dark', value === 'dark')
-    }
+    setThemeMode(value as ThemeMode)
   },
   sidebar: (value) => {
     useChatStore.getState().setSidebarOpen(value === 'open')
@@ -110,17 +105,71 @@ const APPLY: Partial<Record<SettingKey, (value: string) => void | Promise<void>>
   },
 }
 
+/** 每次 AI 设置改动的原值日志：toolCallId → (key → 改动前的值)。仅当轮会话内存内有效 */
+const settingsEditLog = new Map<string, Map<string, string>>()
+
+/** 前端能读到改动前原值、因此可撤销的客户端设置项（DB 项与动作型 open_settings 不可回退） */
+const REVERTABLE_KEYS = new Set<string>(['theme', 'sidebar', 'search_engine', 'style_preset', 'mask'])
+
+function ensureEditLog(toolCallId: string): Map<string, string> {
+  let m = settingsEditLog.get(toolCallId)
+  if (!m) {
+    m = new Map()
+    settingsEditLog.set(toolCallId, m)
+  }
+  return m
+}
+
+/** 读某设置项当前值（注册表 value 形式）；DB 项 / 动作型读不到时返回 undefined */
+function readCurrentValue(key: string): string | undefined {
+  if (key === 'theme') return localStorage.getItem('theme') ?? undefined
+  const s = useChatStore.getState()
+  switch (key) {
+    case 'sidebar':
+      return s.sidebarOpen ? 'open' : 'close'
+    case 'search_engine':
+      return s.searchEngine
+    case 'style_preset':
+      return s.conversationStylePreset
+    case 'mask':
+      return s.conversationMaskId ?? 'off'
+  }
+  return undefined
+}
+
+/** 该设置项是否支持前端撤销（有前端可见的原值） */
+export function isRevertableSetting(key: string): boolean {
+  return REVERTABLE_KEYS.has(key)
+}
+
+/** 撤销单条设置：回到 AI 改动前的原值；非可回退项或记录缺失时返回 false */
+export function revertSettingsOp(toolCallId: string, key: string): boolean {
+  if (!REVERTABLE_KEYS.has(key)) return false
+  const prev = settingsEditLog.get(toolCallId)?.get(key)
+  if (prev === undefined) return false
+  const applyFn = APPLY[key as SettingKey]
+  if (!applyFn) return false
+  try {
+    void applyFn(prev)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * 执行一轮 update_settings 的全部操作。
  * 幂等（同值重复设置无害）+ toolCallId 由调用方去重，多泳道重复调用安全。
  * 返回逐条结果并统一 toast。
  */
 export async function executeSettingsOps(
-  input: unknown
+  input: unknown,
+  toolCallId?: string
 ): Promise<SettingsOpResult[]> {
   const ops = (input as { operations?: unknown } | null | undefined)?.operations
   if (!Array.isArray(ops)) return []
 
+  const log = toolCallId ? ensureEditLog(toolCallId) : undefined
   const results: SettingsOpResult[] = []
   for (const op of ops) {
     const key = (op as { key?: unknown } | null | undefined)?.key
@@ -143,6 +192,11 @@ export async function executeSettingsOps(
     }
 
     try {
+      // 记录改动前原值，供后续撤销该条时回退（只记前端可读的客户端项）
+      if (log && isRevertableSetting(key)) {
+        const prev = readCurrentValue(key)
+        if (prev !== undefined) log.set(key, prev)
+      }
       await applyFn(value)
       results.push({ key, value, ok: true })
     } catch (err) {

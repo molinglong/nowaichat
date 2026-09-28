@@ -10,6 +10,8 @@ import {
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import type { ModelDefinition } from "@/lib/ai/types"
 import { monitor } from "@/lib/monitor"
+import { DEAI_WRITING_DISCIPLINE } from "@/lib/text/deai"
+import { buildFullSettingsBlock } from "@/lib/write/work-settings"
 
 /**
  * 写作画布流式生成端点 —— /api/write/generate。
@@ -48,6 +50,8 @@ const CRAFT_DISCIPLINE: string = [
   "2. 不要反问、不要给建议、不要总结你的写作思路",
   "3. 使用中文,叙事连贯,段落之间用空行分隔",
   "4. 保持人称、时态与文风一致",
+  "",
+  DEAI_WRITING_DISCIPLINE,
 ].join("\n")
 
 /** 提取错误对象的可读信息(兼容 Error / APICallError / 未知形状) */
@@ -125,6 +129,8 @@ function buildSystem(
     "- 只输出改写后的选区文字本身,不要输出上下文、引号或任何解释",
     "- 保持与上下文一致的人称、时态和文风",
     "- 除任务要求外,不改变情节事实与人物设定",
+    "",
+    DEAI_WRITING_DISCIPLINE,
   ].join("\n")
 }
 
@@ -153,7 +159,7 @@ export async function POST(req: Request) {
   if (action === "rewrite" && (!selection.trim() || !instruction)) {
     return Response.json({ error: "改写需要选区与任务说明" }, { status: 400 })
   }
-if (action === "insert" && !selection.trim()) {
+  if (action === "insert" && !selection.trim()) {
     return Response.json({ error: "添加内容需要先选中一段文字" }, { status: 400 })
   }
 
@@ -161,6 +167,7 @@ if (action === "insert" && !selection.trim()) {
   let anchor = ""
   let before = ""
   let after = ""
+  let docWorkId: string | null = null
   if (action === "continue" || action === "insert" || action === "rewrite") {
     const docId = typeof body.docId === "string" ? body.docId : ""
     if (!docId) {
@@ -168,11 +175,12 @@ if (action === "insert" && !selection.trim()) {
     }
     const doc = await prisma.writeDoc.findFirst({
       where: { id: docId, userId },
-      select: { content: true },
+      select: { content: true, workId: true },
     })
     if (!doc) {
       return Response.json({ error: "文档不存在" }, { status: 404 })
     }
+    docWorkId = doc.workId
     if (action === "continue") {
       if (!doc.content.trim()) {
         return Response.json({ error: "正文为空,请先用「生成」写个开头" }, { status: 400 })
@@ -184,6 +192,34 @@ if (action === "insert" && !selection.trim()) {
       before = idx > 0 ? doc.content.slice(Math.max(0, idx - CONTEXT_BEFORE), idx) : ""
       const afterStart = idx < 0 ? -1 : idx + selection.length
       after = afterStart >= 0 ? doc.content.slice(afterStart, afterStart + CONTEXT_AFTER) : ""
+    }
+  }
+
+  // 作品设定注入(全量档):continue/insert 取文档归属作品,create 用 body.workId(画布接入时);
+  // rewrite 只改表达不吃设定,跳过省 token —— 策略细节见 lib/write/work-settings.ts。
+  // 注入在模型解析之前完成,便于无 token 冒烟(坏 model 请求也能从日志核验注入结果)
+  let workBlock = ""
+  if (action !== "rewrite") {
+    const workId = docWorkId ?? (typeof body.workId === "string" ? body.workId : null)
+    if (workId) {
+      const work = await prisma.work.findFirst({
+        where: { id: workId, userId },
+        select: { id: true, title: true, description: true, settingsEnabled: true },
+      })
+      if (work?.settingsEnabled) {
+        const entries = await prisma.workSetting.findMany({
+          where: { workId: work.id, enabled: true },
+          select: { id: true, category: true, title: true, aliases: true, content: true, enabled: true },
+          orderBy: { sort: "asc" },
+        })
+        const block = buildFullSettingsBlock(work, entries)
+        if (block.text) {
+          workBlock = block.text
+          console.log(
+            `[write-generate] work settings injected: work=${work.id} entries=${block.included}/${block.total} chars=${block.chars}`
+          )
+        }
+      }
     }
   }
 
@@ -203,7 +239,7 @@ if (action === "insert" && !selection.trim()) {
         break
       }
     }
-    if (!modelId) modelId = models[0]?.id || "gpt-4o"
+    if (!modelId) modelId = models[0]?.id || "gpt-5.4-mini"
   }
 
   let modelDef: ModelDefinition
@@ -258,9 +294,11 @@ if (action === "insert" && !selection.trim()) {
   }
 
   try {
+    // 作品设定块拼在任务 prompt 之后:任务在前、设定在后,模型先看到"要写什么"再对照一致性约束
+    const systemPrompt = buildSystem(action, { instruction, anchor, before, after, selection })
     const result = streamText({
       model: provider(realModelId),
-      system: buildSystem(action, { instruction, anchor, before, after, selection }),
+      system: workBlock ? `${systemPrompt}\n\n${workBlock}` : systemPrompt,
       messages: [
         {
           role: "user" as const,

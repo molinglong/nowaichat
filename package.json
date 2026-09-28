@@ -34,6 +34,7 @@
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.9.1",
     "@tanstack/react-query": "^5.102.8",
+    "@tanstack/react-virtual": "^3.14.13",
     "ai": "^7.0.77",
     "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
@@ -43,6 +44,8 @@
     "katex": "^0.18.7",
     "lucide-react": "^1.33.0",
     "mammoth": "^1.12.3",
+    "markmap-common": "^0.18.9",
+    "markmap-view": "^0.18.10",
     "nanoid": "^6.0.1",
     "next": "14.2.35",
     "next-auth": "^5.0.0-beta.32",
@@ -60,6 +63,7 @@
     "tailwind-merge": "^3.6.0",
     "ts-fsrs": "^5.4.2",
     "turndown": "^7.2.4",
+    "typescript": "^5.9.3",
     "unpdf": "^1.8.1",
     "xlsx": "^0.18.5",
     "zod": "^4.4.3",
@@ -82,7 +86,6 @@
     "monaco-editor": "^0.56.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5",
     "vercel": "^59.5.0"
   },
   "allowScripts": {

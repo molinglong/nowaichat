@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作区改版预览 · aichatt</title>
+<style>
+  :root {
+    --side-w: 430px;
+    --bg: #ececef;
+    --panel: #ffffff;
+    --pane-bg: #fbfbfc;
+    --line: #e8e8ec;
+    --line-strong: #d9d9df;
+    --ink: #1c1c1f;
+    --ink-2: #66666f;
+    --ink-3: #9a9aa3;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --green: #16a34a;
+    --green-soft: #f0fdf4;
+    --red: #dc2626;
+    --red-soft: #fef2f2;
+    --amber: #b45309;
+    --amber-soft: #fffbeb;
+    --r-xl: 16px;   /* 外层面板 */
+    --r-lg: 11px;   /* 卡片/输入 */
+    --r-md: 8px;    /* 控件/按钮 */
+    --r-sm: 6px;    /* 徽标/kbd */
+    --sh-sm: 0 1px 2px rgba(16,18,24,.06);
+    --sh-md: 0 4px 16px rgba(16,18,24,.09);
+    --sh-lg: 0 16px 48px rgba(16,18,24,.22);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--ink); font-size: 13px;
+    overflow: hidden; -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #d4d4da; border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #bdbdc6; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ============ 布局:三块浮动圆角面板 ============ */
+  .app { display: flex; height: 100vh; padding: 10px; gap: 0; }
+  .rail {
+    width: 56px; flex: none; background: #1d1d21; color: #8a8a93;
+    display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px;
+    border-radius: var(--r-xl); box-shadow: var(--sh-md);
+  }
+  .rail .logo { color: #fff; font-weight: 700; font-size: 15px; margin-bottom: 14px; }
+  .rail .icon {
+    width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center;
+    font-size: 16px; margin-bottom: 4px; transition: background .15s, color .15s;
+  }
+  .rail .icon:hover { background: #2b2b31; color: #d5d5dc; }
+  .rail .icon.active { background: #3a3a41; color: #fff; box-shadow: inset 0 0 0 1px #4a4a52; }
+  .chat-col {
+    flex: 1; min-width: 380px; display: flex; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-xl); box-shadow: var(--sh-sm);
+    position: relative; overflow: hidden;
+  }
+  .divider { width: 14px; flex: none; cursor: col-resize; position: relative; }
+  .divider::after {
+    content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 3px; height: 34px; border-radius: 99px; background: transparent; transition: background .15s, height .15s;
+  }
+  .divider:hover::after, .divider.dragging::after { background: var(--accent); height: 52px; }
+  .pane {
+    width: var(--side-w); min-width: 300px; max-width: 660px; flex: none;
+    background: var(--pane-bg); border: 1px solid var(--line);
+    border-radius: var(--r-xl); box-shadow: var(--sh-sm);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ============ 聊天列 ============ */
+  .chat-head {
+    height: 48px; flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; border-bottom: 1px solid var(--line); background: #fdfdfe;
+  }
+  .chat-head .title { font-weight: 650; }
+  .chat-head .conv-switch { display: flex; background: #f0f0f3; border-radius: 10px; padding: 3px; margin-left: auto; }
+  .chat-head .conv-switch button { padding: 4px 13px; border-radius: 8px; color: var(--ink-2); transition: all .15s; }
+  .chat-head .conv-switch button.on { background: #fff; color: var(--ink); box-shadow: var(--sh-sm); font-weight: 600; }
+  .kbd {
+    font-size: 10px; border: 1px solid var(--line-strong); border-bottom-width: 2px;
+    border-radius: var(--r-sm); padding: 1px 5px; color: var(--ink-3); font-family: Consolas, monospace;
+  }
+  .msgs { flex: 1; overflow-y: auto; padding: 18px 22px 12px; scroll-behavior: smooth; }
+  .msg { max-width: 720px; margin: 0 auto 16px; display: flex; gap: 10px; }
+  .msg .avatar {
+    width: 26px; height: 26px; flex: none; border-radius: 9px; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; color: #fff;
+  }
+  .msg.user { flex-direction: row-reverse; }
+  .msg.user .avatar { background: linear-gradient(135deg, #22c55e, #16a34a); border-radius: 9px 9px 3px 9px; }
+  .msg.ai .avatar { background: linear-gradient(135deg, #33333a, #17171b); border-radius: 9px 9px 9px 3px; }
+  .bubble { background: #f4f4f6; border-radius: 14px 14px 4px 14px; padding: 9px 13px; line-height: 1.65; }
+  .msg.user .bubble { background: var(--accent-soft); border-radius: 14px 14px 14px 4px; }
+  .ai-block { min-width: 0; flex: 1; }
+  .ai-block .txt { line-height: 1.7; margin-bottom: 10px; }
+
+  /* ---- 工具卡通用 ---- */
+  .tool-card {
+    border: 1px solid var(--line); border-radius: var(--r-lg); background: #fff;
+    margin: 8px 0; overflow: hidden; box-shadow: var(--sh-sm);
+  }
+  .tool-head {
+    display: flex; align-items: center; gap: 8px; padding: 9px 13px; font-size: 12px; color: var(--ink-2);
+  }
+  .tool-head .t-ico { font-size: 13px; }
+  .tool-head .t-name { font-weight: 600; color: var(--ink); }
+  .tool-head .t-state { margin-left: auto; font-size: 11px; }
+  .st-ok { color: var(--green); } .st-err { color: var(--red); } .st-wait { color: var(--amber); }
+  .tool-body { padding: 0 13px 11px; font-size: 12px; color: var(--ink-2); }
+
+  .mono { font-family: Consolas, "JetBrains Mono", monospace; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; background: #f4f4f6; border: 1px solid var(--line);
+    border-radius: 7px; padding: 2px 9px; font-size: 11px; margin-right: 6px;
+  }
+
+  /* exec 输出 */
+  .exec-out {
+    background: #16181d; color: #c9d1d9; border-radius: var(--r-md); padding: 8px 10px;
+    height: 118px; overflow-y: auto; font-size: 11px; line-height: 1.7; position: relative;
+  }
+  .exec-out::-webkit-scrollbar-thumb { background: #33383f; border: 2px solid transparent; background-clip: content-box; }
+  .exec-out .follow-tip {
+    position: sticky; top: 0; float: right; background: #2d333b; color: #9aa4b2;
+    border-radius: 99px; padding: 1px 8px; font-size: 10px; display: none;
+  }
+  .exec-out.frozen .follow-tip { display: block; }
+
+  /* 覆盖确认卡 */
+  .approve-card {
+    border: 1px solid #f0dcae; background: linear-gradient(180deg, #fffdf6, var(--amber-soft));
+    border-radius: var(--r-lg); margin: 8px 0; overflow: hidden; box-shadow: var(--sh-sm);
+  }
+  .approve-head { display: flex; align-items: center; gap: 8px; padding: 10px 13px; font-weight: 600; font-size: 12.5px; color: var(--amber); }
+  .approve-head .pill { margin-left: auto; font-size: 10px; background: #fdf1d5; color: var(--amber); border-radius: 99px; padding: 2px 10px; font-weight: 500; }
+  .approve-body { padding: 0 13px 12px; font-size: 12px; }
+  .approve-body .path { color: var(--ink-2); margin-bottom: 7px; }
+  .write-preview { background: #fff; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; margin-bottom: 9px; }
+  .write-preview .wp-head { padding: 5px 11px; font-size: 11px; color: var(--ink-2); border-bottom: 1px solid var(--line); background: #fafafa; }
+  .write-preview pre { max-height: 130px; overflow: auto; padding: 9px 12px; font-size: 11px; line-height: 1.6; font-family: Consolas, monospace; color: #333; }
+  .del-line { background: #fdecec; color: #b91c1c; display: block; padding: 0 5px; border-radius: 4px; }
+  .add-line { background: #e8f7ee; color: #15803d; display: block; padding: 0 5px; border-radius: 4px; }
+  .approve-note { font-size: 11px; color: var(--ink-3); margin-bottom: 9px; }
+  .approve-note b { color: var(--green); font-weight: 600; }
+  .btn {
+    border-radius: var(--r-md); padding: 6px 15px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    transition: all .15s; box-shadow: var(--sh-sm);
+  }
+  .btn:hover { background: #f4f4f6; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #1d4fd8; box-shadow: 0 3px 10px rgba(37,99,235,.3); }
+  .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+  .btn.danger:hover { box-shadow: 0 3px 10px rgba(220,38,38,.3); }
+  .approve-actions { display: flex; gap: 8px; align-items: center; }
+  .approve-actions .hint-key { margin-left: auto; font-size: 10px; color: var(--ink-3); }
+  .approve-card.done { border-color: #bfe5cd; background: linear-gradient(180deg, #f7fdf9, var(--green-soft)); }
+  .approve-card.done .approve-head { color: var(--green); }
+
+  /* diff 卡 */
+  .diff-stat { font-size: 11px; margin-left: auto; }
+  .diff-stat .plus { color: var(--green); font-weight: 600; }
+  .diff-stat .minus { color: var(--red); font-weight: 600; }
+  .diff-box { background: #fff; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; margin-bottom: 8px; }
+  .diff-box pre { max-height: 120px; overflow: auto; padding: 8px 11px; font-size: 11px; line-height: 1.65; font-family: Consolas, monospace; color: #333; }
+
+  /* 回合变更摘要 */
+  .turn-summary {
+    max-width: 720px; margin: 6px auto 18px; border: 1px solid var(--line); border-radius: var(--r-lg);
+    background: #fafafc; overflow: hidden; box-shadow: var(--sh-sm);
+  }
+  .ts-head { display: flex; align-items: center; gap: 9px; padding: 9px 13px; cursor: pointer; user-select: none; }
+  .ts-head:hover { background: #f5f5f8; }
+  .ts-head .arrow { color: var(--ink-3); transition: transform .18s; font-size: 10px; }
+  .turn-summary.open .ts-head .arrow { transform: rotate(90deg); }
+  .ts-head .t { font-size: 12px; font-weight: 600; }
+  .ts-head .stat { font-size: 11px; color: var(--ink-2); }
+  .ts-head .stat .plus { color: var(--green); font-weight: 600; }
+  .ts-head .stat .minus { color: var(--red); font-weight: 600; }
+  .ts-head .undo-btn { margin-left: auto; font-size: 11px; color: var(--ink-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px 11px; background: #fff; transition: all .15s; }
+  .ts-head .undo-btn:hover { color: var(--red); border-color: #f3c1c1; background: var(--red-soft); }
+  .ts-body { display: none; border-top: 1px solid var(--line); }
+  .turn-summary.open .ts-body { display: block; }
+  .ts-file { display: flex; align-items: center; gap: 8px; padding: 8px 13px; font-size: 12px; border-bottom: 1px dashed var(--line); }
+  .ts-file:last-child { border-bottom: none; }
+  .ts-file:hover { background: #f7f7fa; }
+  .ts-file .fname { font-weight: 500; }
+  .ts-file .fpath { color: var(--ink-3); font-size: 11px; }
+  .ts-file .delta { margin-left: auto; font-size: 11px; font-family: Consolas, monospace; }
+  .ts-file .review { font-size: 11px; color: var(--accent); }
+  .badge-changed { font-size: 9px; background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 1px 7px; font-weight: 600; }
+
+  /* 待批准钉住横幅 */
+  .pin-banner {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 78px; z-index: 30;
+    display: flex; align-items: center; gap: 10px; background: #1d1d21; color: #fff;
+    border-radius: 99px; padding: 8px 17px; font-size: 12.5px; box-shadow: 0 8px 26px rgba(0,0,0,.3);
+    animation: floatUp .3s ease; cursor: pointer; transition: transform .15s;
+  }
+  .pin-banner:hover { transform: translateX(-50%) translateY(-2px); }
+  @keyframes floatUp { from { opacity: 0; transform: translate(-50%, 8px); } }
+  .pin-banner .dot { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .pin-banner .go { color: #93c5fd; font-weight: 500; }
+
+  .input-bar { flex: none; padding: 10px 22px 16px; }
+  .input-box {
+    max-width: 720px; margin: 0 auto; border: 1px solid var(--line-strong); border-radius: 16px;
+    padding: 11px 15px; display: flex; align-items: center; gap: 10px; background: #fff;
+    box-shadow: var(--sh-sm); transition: border-color .15s, box-shadow .15s;
+  }
+  .input-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+  .input-box .ph { color: var(--ink-3); flex: 1; }
+  .send-btn { width: 30px; height: 30px; border-radius: 10px; background: #e8e8ec; display: grid; place-items: center; color: var(--ink-3); }
+
+  /* ============ Side Pane ============ */
+  .tabbar {
+    flex: none; display: flex; align-items: flex-end; gap: 3px; padding: 8px 10px 0;
+    border-bottom: 1px solid var(--line); background: #f4f4f6;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: 9px 9px 0 0;
+    font-size: 12px; color: var(--ink-2); border: 1px solid transparent; border-bottom: none;
+    position: relative; top: 1px; cursor: pointer; white-space: nowrap; transition: all .15s;
+  }
+  .tab:hover { color: var(--ink); background: #ebebee; }
+  .tab.on { background: var(--pane-bg); border-color: var(--line); color: var(--ink); font-weight: 600; box-shadow: 0 -2px 6px rgba(16,18,24,.04); }
+  .tab .close { font-size: 11px; color: var(--ink-3); width: 15px; height: 15px; border-radius: 5px; display: none; place-items: center; }
+  .tab:hover .close { display: grid; }
+  .tab .close:hover { background: #dddde3; color: var(--ink); }
+  .tab-plus { margin-left: auto; width: 28px; height: 28px; border-radius: var(--r-md); display: grid; place-items: center; color: var(--ink-3); margin-bottom: 3px; transition: all .15s; }
+  .tab-plus:hover { background: #e9e9ed; color: var(--ink); }
+  .tabpanes { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .tp { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .tp.on { display: flex; }
+
+  /* 预览 tab */
+  .preview-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 13px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-2); }
+  .err-badge {
+    display: inline-flex; align-items: center; gap: 5px; color: var(--red); font-weight: 600; font-size: 11px;
+    background: var(--red-soft); border: 1px solid #f3c1c1; border-radius: 99px; padding: 2px 10px;
+  }
+  .feed-btn { margin-left: auto; font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 99px; padding: 3px 11px; font-weight: 500; transition: all .15s; }
+  .feed-btn:hover { background: #dfe9ff; }
+  .preview-body { flex: 1; min-height: 0; overflow: auto; background: #f1f1f4; padding: 12px; }
+  .mini-page {
+    padding: 26px 30px; font-family: -apple-system, "Segoe UI", sans-serif;
+    background: #fff; border-radius: var(--r-lg); border: 1px solid var(--line); box-shadow: var(--sh-sm);
+    min-height: 100%;
+  }
+  .mini-page h1 { font-size: 22px; margin-bottom: 6px; }
+  .mini-page p { color: #666; font-size: 12px; line-height: 1.7; }
+  .mini-page .hero { background: linear-gradient(135deg, #4f46e5, #9333ea); color: #fff; border-radius: 13px; padding: 26px; margin-bottom: 16px; box-shadow: 0 6px 18px rgba(79,70,229,.25); }
+  .mini-page .hero h2 { font-size: 19px; margin-bottom: 6px; }
+  .mini-page .cards { display: flex; gap: 10px; }
+  .mini-page .card { flex: 1; border: 1px solid #eee; border-radius: 11px; padding: 12px; transition: all .15s; }
+  .mini-page .card:hover { border-color: #d5d5ff; box-shadow: 0 3px 12px rgba(79,70,229,.1); }
+  .mini-page .card b { display: block; margin-bottom: 4px; font-size: 13px; }
+
+  /* 文件树 tab */
+  .tree-tools { flex: none; padding: 9px 11px; border-bottom: 1px solid var(--line); }
+  .tree-tools input {
+    width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); padding: 7px 12px;
+    font: inherit; font-size: 12px; background: #fff; outline: none; transition: all .15s;
+  }
+  .tree-tools input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+  .tree { flex: 1; overflow: auto; padding: 7px 7px 12px; }
+  .row {
+    display: flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: var(--r-md);
+    cursor: default; user-select: none; position: relative; transition: background .12s;
+  }
+  .row:hover { background: #eff0f3; }
+  .row.sel { background: var(--accent-soft); }
+  .row .tw { width: 12px; text-align: center; color: var(--ink-3); font-size: 9px; flex: none; }
+  .row .f-ico { width: 15px; text-align: center; flex: none; font-size: 12px; }
+  .row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .sz { color: var(--ink-3); font-size: 10px; flex: none; }
+  .row .edit-ico {
+    flex: none; width: 21px; height: 21px; border-radius: 6px; display: grid; place-items: center;
+    color: var(--ink-3); opacity: .55; font-size: 11px; transition: all .12s;
+  }
+  .row .edit-ico:hover { background: #fff; color: var(--accent); box-shadow: var(--sh-md); opacity: 1; }
+  .row .dot-changed { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; box-shadow: 0 0 0 3px rgba(37,99,235,.14); }
+  .indent { padding-left: 24px; }
+  .indent2 { padding-left: 46px; }
+  .dir-flatten { color: var(--ink-3); font-size: 10px; }
+  .tree-foot { flex: none; padding: 8px 13px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--ink-3); display: flex; gap: 12px; background: #fafafa; }
+  .tree-foot .k { color: var(--ink-2); }
+
+  /* 编辑器 tab */
+  .ed-status { flex: none; display: flex; align-items: center; gap: 9px; padding: 8px 13px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-2); background: #fafafa; }
+  .ext-warn { background: var(--amber-soft); border-bottom: 1px solid #f0dcae; padding: 9px 13px; font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 8px; }
+  .ext-warn button { font-size: 11px; border-radius: var(--r-sm); padding: 3px 10px; border: 1px solid #ecd9a0; background: #fff; color: var(--amber); font-weight: 500; transition: all .15s; }
+  .ext-warn button:hover { background: #fdf4dd; }
+  .code-area {
+    flex: 1; min-height: 0; background: #16181d; margin: 12px; border-radius: var(--r-md);
+    padding: 12px 0; overflow: auto; font-family: Consolas, monospace; font-size: 11.5px; line-height: 1.75;
+    box-shadow: inset 0 0 0 1px #26292f;
+  }
+  .cl { display: flex; color: #c9d1d9; }
+  .cl .ln { width: 36px; flex: none; text-align: right; padding-right: 13px; color: #4b5260; user-select: none; }
+  .cl .lc { white-space: pre; padding-right: 14px; }
+  .cl.add { background: rgba(46,160,67,.16); }
+  .cl.add .ln { color: #7ee787; }
+  .cl.del { background: rgba(248,81,73,.14); }
+  .cl.del .ln { color: #ff9b96; }
+  .kw { color: #ff7b72; } .str { color: #a5d6ff; } .fn { color: #d2a8ff; } .cm { color: #8b949e; }
+
+  /* 代码 tab */
+  .code-list { flex: none; border-bottom: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 7px; overflow-x: auto; background: #fafafa; }
+  .code-chip { font-size: 11px; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 4px 11px; white-space: nowrap; color: var(--ink-2); transition: all .15s; }
+  .code-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+  .code-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .diff-review { margin: 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: #fff; overflow: hidden; font-size: 11.5px; box-shadow: var(--sh-sm); }
+  .diff-review .dr-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .diff-review .dr-actions { margin-left: auto; display: flex; gap: 6px; }
+  .diff-review .dr-actions button { font-size: 11px; border-radius: var(--r-sm); padding: 3px 11px; border: 1px solid var(--line); background: #fff; transition: all .15s; }
+  .diff-review .dr-actions button:hover { background: #f4f4f6; }
+  .diff-review pre { max-height: 150px; overflow: auto; margin: 0; padding: 9px 12px; font-size: 11px; line-height: 1.65; font-family: Consolas, monospace; color: #333; }
+
+  /* ============ 右键菜单 / 弹窗 / toast ============ */
+  .ctx {
+    position: fixed; z-index: 90; background: #fff; border: 1px solid var(--line-strong); border-radius: 13px;
+    box-shadow: var(--sh-lg); padding: 6px; min-width: 200px; display: none;
+  }
+  .ctx.show { display: block; animation: popIn .12s ease; }
+  @keyframes popIn { from { opacity: 0; transform: scale(.96) translateY(-3px); } }
+  .ctx button { display: flex; width: 100%; align-items: center; gap: 9px; padding: 8px 11px; border-radius: var(--r-md); font-size: 12px; text-align: left; transition: background .12s; }
+  .ctx button:hover { background: #f2f2f5; }
+  .ctx .sep { height: 1px; background: var(--line); margin: 5px 8px; }
+
+  .modal-mask { position: fixed; inset: 0; background: rgba(20,20,24,.42); z-index: 100; display: none; align-items: center; justify-content: center; backdrop-filter: blur(3px); }
+  .modal-mask.show { display: flex; }
+  .modal { width: 450px; background: #fff; border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,.32); overflow: hidden; animation: popIn .16s ease; }
+  .modal .m-head { padding: 17px 19px 4px; font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .modal .m-sub { padding: 0 19px 10px; font-size: 12px; color: var(--ink-2); }
+  .modal .m-body { padding: 0 19px 6px; max-height: 300px; overflow: auto; }
+  .m-group { font-size: 11px; font-weight: 700; margin: 11px 0 5px; }
+  .m-group.safe { color: var(--green); } .m-group.warn { color: var(--amber); }
+  .m-file { display: flex; gap: 8px; align-items: center; padding: 6px 0; font-size: 12px; border-bottom: 1px dashed var(--line); }
+  .m-file:last-child { border-bottom: none; }
+  .m-file .why { margin-left: auto; color: var(--ink-3); font-size: 10.5px; }
+  .modal .m-foot { padding: 13px 19px 17px; display: flex; gap: 9px; justify-content: flex-end; }
+
+  .toasts { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); z-index: 120; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: #26262b; color: #fff; border-radius: 99px; padding: 8px 19px; font-size: 12px; box-shadow: var(--sh-lg); animation: floatUp .25s ease; }
+
+  /* ============ 改进标注 ============ */
+  .pin-tag {
+    display: none; position: absolute; z-index: 40; width: 19px; height: 19px; border-radius: 50%;
+    background: #f59e0b; color: #fff; font-size: 11px; font-weight: 700; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3); cursor: help; border: 2px solid #fff;
+  }
+  body.show-pins .pin-tag { display: inline-flex; }
+  .legend-toggle {
+    position: fixed; top: 16px; right: 18px; z-index: 130; background: #1d1d21; color: #fff;
+    border-radius: 99px; padding: 8px 17px; font-size: 12px; box-shadow: var(--sh-lg); transition: transform .15s;
+  }
+  .legend-toggle:hover { transform: translateY(-1px); }
+  .legend {
+    position: fixed; top: 56px; right: 18px; z-index: 129; width: 330px; max-height: calc(100vh - 84px); overflow: auto;
+    background: #fff; border: 1px solid var(--line-strong); border-radius: 15px; padding: 15px 17px;
+    box-shadow: var(--sh-lg); display: none; font-size: 12px;
+  }
+  body.show-pins .legend { display: block; animation: popIn .15s ease; }
+  .legend h3 { font-size: 13px; margin-bottom: 8px; }
+  .legend .lg-group { font-weight: 700; font-size: 11px; margin: 10px 0 4px; color: var(--accent); }
+  .legend .lg-item { display: flex; gap: 8px; padding: 3px 0; color: var(--ink-2); line-height: 1.5; }
+  .legend .n {
+    flex: none; width: 17px; height: 17px; border-radius: 50%; background: #f59e0b; color: #fff;
+    font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; margin-top: 1px;
+  }
+  .legend .old { color: var(--ink-3); }
+  .flash { animation: flashbg 1.6s ease; }
+  @keyframes flashbg { 0%, 60% { background: var(--amber-soft); } 100% { background: #fff; } }
+</style>
+</head>
+<body>
+
+<button class="legend-toggle" id="legendToggle">🏷 显示改进标注</button>
+
+<div class="legend" id="legend">
+  <h3>工作区改版 · 8 处改进</h3>
+  <div class="lg-group">P0 · 低成本高感知</div>
+  <div class="lg-item"><span class="n">1</span><span>待批准操作<b>钉住横幅</b>：不用再滚聊天流找卡片，点击一键定位</span></div>
+  <div class="lg-item"><span class="n">2</span><span>覆盖确认卡带<b>写入内容预览</b>（所见即所批），并如实说明可撤销</span></div>
+  <div class="lg-item"><span class="n">3</span><span>文件树点击文件<b>不再跳走</b>（在 tab 里打开），编辑按钮常显，支持右键菜单/搜索过滤</span></div>
+  <div class="lg-item"><span class="n">4</span><span>切会话自动重置工作区定位文件；<span class="kbd">Ctrl+E</span> 快捷开关工作态</span></div>
+  <div class="lg-group">P1 · 结构性改造</div>
+  <div class="lg-item"><span class="n">5</span><span>右侧改为<b>常驻 Side Pane + 多 tab</b>：预览 / 文件树 / 编辑器 / 代码并存，分隔条可拖宽度，收起不丢状态</span></div>
+  <div class="lg-item"><span class="n">6</span><span><b>回合变更摘要条</b>：AI 每轮动了哪些文件聚合成一条记录，一键撤销（先预检、分类说明原因）</span></div>
+  <div class="lg-item"><span class="n">7</span><span>编辑器<b>外部修改检测</b>：AI 改过磁盘文件时提示对比，不再静默覆盖</span></div>
+  <div class="lg-item"><span class="n">8</span><span>预览报错<b>一键回喂 AI</b>（与代码编辑器对齐）；命令输出吸底跟随、上滚冻结</span></div>
+  <div class="lg-group" style="color:var(--ink-3)">旧版痛点对照</div>
+  <div class="lg-item"><span class="old">五面板互斥叠加 → tab 并存；确认卡埋聊天流 → 钉住横幅；树只读点名器 → 浏览+引用+右键；AI 改盘编辑器失明 → 外部变更检测</span></div>
+</div>
+
+<div class="app">
+  <!-- 左侧栏 -->
+  <aside class="rail">
+    <div class="logo">a</div>
+    <div class="icon">💬</div>
+    <div class="icon active">🛠</div>
+    <div class="icon">🖼</div>
+    <div class="icon">📖</div>
+    <div style="flex:1"></div>
+    <div class="icon">⚙️</div>
+  </aside>
+
+  <!-- 聊天列 -->
+  <main class="chat-col">
+    <div class="chat-head">
+      <span class="title">帮我写个活动主页</span>
+      <span class="kbd">Ctrl+E</span>
+      <div class="conv-switch">
+        <button>聊天</button>
+        <button class="on">工作</button>
+      </div>
+    </div>
+
+    <div class="msgs" id="msgs">
+      <!-- 用户消息 -->
+      <div class="msg user">
+        <div class="avatar">W</div>
+        <div class="bubble">帮我在工作区写一个「校园二手书市集」的活动主页，再加个报名表格，样式好看点</div>
+      </div>
+
+      <!-- AI 回合 -->
+      <div class="msg ai">
+        <div class="avatar">a</div>
+        <div class="ai-block">
+          <div class="txt">好的，我来创建活动主页并渲染验证。</div>
+
+          <!-- write_code 卡 -->
+          <div class="tool-card">
+            <div class="tool-head"><span class="t-ico">📄</span><span class="t-name">write_code</span><span>book-market.html</span><span class="t-state st-ok">✓ 已创建 · 6.2KB</span></div>
+          </div>
+
+          <!-- preview_check 卡 -->
+          <div class="tool-card">
+            <div class="tool-head"><span class="t-ico">🔍</span><span class="t-name">preview_check</span><span class="t-state st-ok">✓ 预览验证通过，无脚本报错</span></div>
+          </div>
+
+          <!-- exec 卡:吸底跟随输出 -->
+          <div class="tool-card">
+            <div class="tool-head"><span class="t-ico">⌨️</span><span class="t-name mono">exec</span><span class="mono" style="font-size:11px">Get-ChildItem *.html</span><span class="t-state st-ok">✓ 0.4s · exit 0</span></div>
+            <div class="tool-body">
+              <div class="exec-out" id="execOut">
+                <span class="follow-tip">已暂停跟随 · 滚到底部恢复</span>
+                <div>    目录: D:\测试工作区</div>
+                <div>Mode      LastWriteTime      Length Name</div>
+                <div>----      -------------      ------ ----</div>
+                <div>-a---     2026/9/27  12:01   6284  book-market.html</div>
+                <div>-a---     2026/9/27  11:47   2341  style.css</div>
+                <div>-a---     2026/9/27  10:33   1187  index.html</div>
+                <div>-a---     2026/9/26  18:20  15372  报价单.xlsx</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 覆盖确认卡:所见即所批 -->
+          <div class="approve-card" id="approvalCard">
+            <div class="approve-head">⚠️ 覆盖写入确认 <span>index.html</span><span class="pill">等待你的批准</span></div>
+            <div class="approve-body">
+              <div class="path">目标已存在：工作区 \index.html（2,341 字节）—— 下方为将要写入的新内容</div>
+              <div class="write-preview">
+                <div class="wp-head">将写入的内容（新增 <b style="color:var(--green)">+18</b> 行 / 删除 <b style="color:var(--red)">-6</b> 行）</div>
+                <pre>&lt;!DOCTYPE html&gt;
+&lt;html lang="zh-CN"&gt;
+<span class="del-line">- &lt;title&gt;旧版首页&lt;/title&gt;</span>
++ &lt;title&gt;校园二手书市集 · 10月12日&lt;/title&gt;
++ &lt;section class="hero"&gt;
++   &lt;h2&gt;好书不走，只换个人&lt;/h2&gt;
++   &lt;p&gt;10月12日 · 操场东侧 · 9:00-17:00&lt;/p&gt;
+  &lt;form id="signup"&gt;
+    &lt;input name="name" placeholder="姓名"&gt;
+<span class="add-line">+   &lt;select name="grade"&gt;&lt;option&gt;大一&lt;/option&gt;…&lt;/select&gt;</span>
+  &lt;/form&gt;</pre>
+              </div>
+              <div class="approve-note">批准后写入磁盘；写前已自动快照，<b>可随时撤销</b>。拒绝则保持原文件不变。</div>
+              <div class="approve-actions">
+                <button class="btn" onclick="decide(false)">拒绝</button>
+                <button class="btn primary" onclick="decide(true)">批准写入</button>
+                <span class="hint-key">按 <span class="kbd">1</span> 拒绝 · <span class="kbd">2</span> 批准</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- edit diff 卡 -->
+          <div class="tool-card">
+            <div class="tool-head"><span class="t-ico">✏️</span><span class="t-name">edit</span><span class="chip">📖 book-market.html</span>
+              <span class="diff-stat"><span class="plus">+12</span> <span class="minus">-3</span></span>
+            </div>
+            <div class="tool-body">
+              <div class="diff-box"><pre>  &lt;div class="cards"&gt;
+-   &lt;div class="card"&gt;教辅五折&lt;/div&gt;
++   &lt;div class="card"&gt;📚 教辅五折起，四六级真题专场&lt;/div&gt;
++   &lt;div class="card"&gt;🎒 宿舍闲置置换角，带书即换&lt;/div&gt;
+    &lt;div class="card"&gt;☕ 旧书换咖啡券&lt;/div&gt;</pre></div>
+              <div>已写入工作区 \book-market.html，改动范围仅活动卡片一节。</div>
+            </div>
+          </div>
+
+          <div class="txt" style="margin-top:10px">主页已建好并通过渲染验证，报名表格加在了 Hero 下方。需要我起一份配套的招募文案吗？</div>
+        </div>
+      </div>
+
+      <!-- 回合变更摘要 -->
+      <div class="turn-summary" id="turnSummary">
+        <div class="ts-head" onclick="this.parentNode.classList.toggle('open')">
+          <span class="arrow">▶</span>
+          <span class="t">本回合变更</span>
+          <span class="stat"><b style="color:var(--ink)">3 files</b> <span class="plus">+86</span> <span class="minus">-12</span></span>
+          <button class="undo-btn" onclick="event.stopPropagation(); openRewind()">↩ 撤销</button>
+        </div>
+        <div class="ts-body">
+          <div class="ts-file"><span>📖</span><span class="fname">book-market.html</span><span class="badge-changed">AI 修改</span><span class="delta"><span style="color:var(--green)">+52</span> <span style="color:var(--red)">-8</span></span><span class="review">对比</span></div>
+          <div class="ts-file"><span>📄</span><span class="fname">index.html</span><span class="badge-changed">AI 覆盖</span><span class="delta"><span style="color:var(--green)">+18</span> <span style="color:var(--red)">-6</span></span><span class="review">对比</span></div>
+          <div class="ts-file"><span>📝</span><span class="fname">报名须知.md</span><span class="badge-changed">AI 新建</span><span class="delta"><span style="color:var(--green)">+16</span></span><span class="review">对比</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 待批准钉住横幅 -->
+    <div class="pin-banner" id="pinBanner" onclick="gotoApproval()">
+      <span class="dot"></span> 1 个操作待批准 · 覆盖写入 index.html <span class="go">定位 →</span>
+    </div>
+
+    <div class="input-bar">
+      <div class="input-box"><span class="ph">输入问题…</span><span class="kbd" style="font-size:10px">Ctrl+E</span><div class="send-btn">↑</div></div>
+    </div>
+  </main>
+
+  <!-- 拖拽分隔条 -->
+  <div class="divider" id="divider" title="拖拽调整宽度"></div>
+
+  <!-- Side Pane -->
+  <aside class="pane" id="pane">
+    <div class="tabbar">
+      <div class="tab on" data-tab="preview">🖼 预览</div>
+      <div class="tab" data-tab="tree">🗂 文件树</div>
+      <div class="tab" data-tab="editor">📝 编辑器<span class="close" title="关闭(可从 + 重新打开)">×</span></div>
+      <div class="tab" data-tab="code">&lt;/&gt; 代码<span class="close">×</span></div>
+      <button class="tab-plus" title="新开 tab（浏览器 / Git 审查 / 终端…）">＋</button>
+    </div>
+    <div class="tabpanes">
+
+      <!-- 预览 -->
+      <div class="tp on" data-pane="preview">
+        <div class="preview-head">
+          <span>📄 book-market.html · 沙箱隔离 · 编辑实时同步</span>
+          <span class="err-badge">⚠ 2 个报错</span>
+          <button class="feed-btn" onclick="toast('已把 2 个报错连同文件发给 AI（演示）')">把报错发给 AI</button>
+        </div>
+        <div class="preview-body">
+          <div class="mini-page">
+            <div class="hero"><h2>好书不走，只换个人</h2><p>校园二手书市集 · 10月12日 · 操场东侧 · 9:00-17:00</p></div>
+            <h1>怎么玩</h1>
+            <p>带书来，扫码登记，换市集币；市集币可淘全场，也可以换咖啡券。</p>
+            <div class="cards">
+              <div class="card"><b>📚 教辅五折起</b>四六级真题专场</div>
+              <div class="card"><b>🎒 闲置置换角</b>带书即换</div>
+              <div class="card"><b>☕ 换咖啡券</b>三本起换</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 文件树 -->
+      <div class="tp" data-pane="tree">
+        <div class="tree-tools"><input placeholder="搜索文件名…（支持路径片段）" id="treeSearch"></div>
+        <div class="tree" id="tree">
+          <div class="row" data-dir="1"><span class="tw">▼</span><span class="f-ico">📁</span><span class="nm">assets</span><span class="sz">3 项</span></div>
+          <div class="row indent"><span class="tw">·</span><span class="f-ico">🖼</span><span class="nm">banner.png</span><span class="sz">84 KB</span></div>
+          <div class="row indent"><span class="tw">·</span><span class="f-ico">🖼</span><span class="nm">poster.png</span><span class="sz">156 KB</span></div>
+          <div class="row indent2 dir-flatten"><span class="tw">·</span><span class="f-ico">📁</span><span class="nm">icons/small</span><span class="dir-flatten">（单链目录已压平）</span></div>
+          <div class="row" data-file="index.html"><span class="tw">·</span><span class="f-ico">📄</span><span class="nm">index.html</span><span class="dot-changed" title="本回合被 AI 覆盖"></span><span class="edit-ico" title="在编辑器中打开">✏️</span></div>
+          <div class="row" data-file="book-market.html"><span class="tw">·</span><span class="f-ico">📄</span><span class="nm">book-market.html</span><span class="dot-changed" title="本回合被 AI 修改"></span><span class="edit-ico">✏️</span></div>
+          <div class="row" data-file="style.css"><span class="tw">·</span><span class="f-ico">🎨</span><span class="nm">style.css</span><span class="sz">2.3 KB</span><span class="edit-ico">✏️</span></div>
+          <div class="row" data-file="报名须知.md"><span class="tw">·</span><span class="f-ico">📝</span><span class="nm">报名须知.md</span><span class="dot-changed" title="本回合被 AI 新建"></span><span class="edit-ico">✏️</span></div>
+          <div class="row" data-file="报价单.xlsx"><span class="tw">·</span><span class="f-ico">📊</span><span class="nm">报价单.xlsx</span><span class="sz">15 KB</span></div>
+        </div>
+        <div class="tree-foot">
+          <span><span class="k">右键</span> 更多操作</span>
+          <span><span class="k">双击</span> 在预览打开</span>
+          <span style="margin-left:auto">8 / 23 项</span>
+        </div>
+      </div>
+
+      <!-- 编辑器 -->
+      <div class="tp" data-pane="editor">
+        <div class="ed-status"><span>📝 style.css</span><span>· 已保存</span><span>· 2.3 KB</span><span style="margin-left:auto">UTF-8</span></div>
+        <div class="ext-warn">⚠ 磁盘上的文件刚被 AI 修改过（2 分钟前）
+          <button onclick="toast('已打开左右对比视图（演示）')">对比查看</button>
+          <button onclick="toast('已放弃我的缓冲，加载磁盘最新版（演示）')">加载新版</button>
+        </div>
+        <div class="code-area">
+          <div class="cl"><span class="ln">12</span><span class="lc"><span class="cm">/* 市集主视觉 */</span></span></div>
+          <div class="cl"><span class="ln">13</span><span class="lc">.hero {</span></div>
+          <div class="cl add"><span class="ln">14</span><span class="lc">  background: linear-gradient(135deg, #4f46e5, #9333ea);</span></div>
+          <div class="cl add"><span class="ln">15</span><span class="lc">  border-radius: 12px;</span></div>
+          <div class="cl"><span class="ln">16</span><span class="lc">  color: #fff;</span></div>
+          <div class="cl"><span class="ln">17</span><span class="lc">  padding: 26px;</span></div>
+          <div class="cl del"><span class="ln">18</span><span class="lc">  background: #2563eb;</span></div>
+          <div class="cl"><span class="ln">19</span><span class="lc">}</span></div>
+          <div class="cl"><span class="ln">20</span><span class="lc">.hero h2 { <span class="kw">font-size</span>: 19px; }</span></div>
+          <div class="cl"><span class="ln">21</span><span class="lc"><span class="fn">.card</span> { border: 1px solid #eee; }</span></div>
+        </div>
+      </div>
+
+      <!-- 代码 tab -->
+      <div class="tp" data-pane="code">
+        <div class="code-list">
+          <span class="code-chip on">📖 book-market.html</span>
+          <span class="code-chip">📖 index.html</span>
+          <span class="code-chip">+ 新建</span>
+        </div>
+        <div class="diff-review">
+          <div class="dr-head">🔍 AI 修改待审查<span class="dr-actions"><button>放弃</button><button style="background:var(--accent);color:#fff;border-color:var(--accent)">采纳</button></span></div>
+          <pre>  &lt;form id="signup"&gt;
++   &lt;select name="grade"&gt;&lt;option&gt;大一&lt;/option&gt;&lt;option&gt;大二&lt;/option&gt;&lt;/select&gt;
+    &lt;input name="name" placeholder="姓名"&gt;
++   &lt;button&gt;锁定摊位&lt;/button&gt;</pre>
+        </div>
+        <div class="code-area" style="flex:1">
+          <div class="cl"><span class="ln">28</span><span class="lc">&lt;form id=<span class="str">"signup"</span>&gt;</span></div>
+          <div class="cl add"><span class="ln">29</span><span class="lc">  &lt;select name=<span class="str">"grade"</span>&gt;…&lt;/select&gt;</span></div>
+          <div class="cl"><span class="ln">30</span><span class="lc">  &lt;input name=<span class="str">"name"</span>&gt;</span></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- 右键菜单 -->
+<div class="ctx" id="ctx">
+  <button onclick="ctxDo('在预览 tab 打开（树不动）')">🖼 打开预览</button>
+  <button onclick="ctxDo('已作为上下文添加到输入框（演示）')">💬 添加到对话</button>
+  <button onclick="ctxDo('在编辑器 tab 打开（演示）')">✏️ 在编辑器中打开</button>
+  <div class="sep"></div>
+  <button onclick="ctxDo('已复制相对路径')">📋 复制相对路径</button>
+  <button onclick="ctxDo('已复制绝对路径')">📋 复制绝对路径</button>
+  <div class="sep"></div>
+  <button onclick="ctxDo('已在资源管理器定位')">📁 在文件管理器中显示</button>
+</div>
+
+<!-- 撤销预检弹窗 -->
+<div class="modal-mask" id="rewindMask">
+  <div class="modal">
+    <div class="m-head">↩ 撤销本回合的文件变更</div>
+    <div class="m-sub">撤销前已预检：3 个文件中 2 个可安全恢复，1 个需要你注意。</div>
+    <div class="m-body">
+      <div class="m-group safe">✓ 可安全恢复（2）</div>
+      <div class="m-file"><span>📄</span><span class="fname">book-market.html</span><span class="why">编辑快照 · 1 次操作</span></div>
+      <div class="m-file"><span>📝</span><span class="fname">报名须知.md</span><span class="why">新建 · 移入回收站</span></div>
+      <div class="m-group warn">⚠ 恢复后需注意（1）</div>
+      <div class="m-file"><span>📄</span><span class="fname">index.html</span><span class="why">你在编辑器里又改过，恢复将先让你对比</span></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn" onclick="closeRewind()">取消</button>
+      <button class="btn danger" onclick="closeRewind(); toast('已撤销 2 个文件，index.html 待你对比确认（演示）')">确认撤销</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+  /* ---- tab 切换 ---- */
+  document.querySelectorAll('.tab[data-tab]').forEach(function (t) {
+    t.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('on') })
+      document.querySelectorAll('.tp').forEach(function (x) { x.classList.remove('on') })
+      t.classList.add('on')
+      document.querySelector('.tp[data-pane="' + t.dataset.tab + '"]').classList.add('on')
+    })
+  })
+
+  /* ---- 拖拽分隔条:只改 CSS 变量,pointerup 提交(ZCode 方案) ---- */
+  var dragging = false
+  var divider = document.getElementById('divider')
+  divider.addEventListener('pointerdown', function (e) {
+    dragging = true; divider.classList.add('dragging'); divider.setPointerCapture(e.pointerId)
+  })
+  divider.addEventListener('pointermove', function (e) {
+    if (!dragging) return
+    var w = Math.min(660, Math.max(300, window.innerWidth - e.clientX - 24))
+    document.documentElement.style.setProperty('--side-w', w + 'px')
+  })
+  divider.addEventListener('pointerup', function () { dragging = false; divider.classList.remove('dragging') })
+
+  /* ---- 待批准横幅定位 ---- */
+  function gotoApproval() {
+    var card = document.getElementById('approvalCard')
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash')
+  }
+
+  /* ---- 批准/拒绝 ---- */
+  function decide(ok) {
+    var card = document.getElementById('approvalCard')
+    card.classList.add('done')
+    card.querySelector('.approve-head').innerHTML = ok
+      ? '✅ 已批准并写入 <span>index.html</span><span class="pill" style="background:#dcfce7">已完成 · 可撤销</span>'
+      : '🚫 已拒绝 <span>index.html</span><span class="pill" style="background:#eee">保持原文件不变</span>'
+    card.querySelector('.approve-body').innerHTML = ok
+      ? '<div class="approve-note" style="margin:0">写入完成（快照已留）。AI 正在继续收尾。</div>'
+      : '<div class="approve-note" style="margin:0">原文件保持不变，AI 会改用其他方案。</div>'
+    document.getElementById('pinBanner').style.display = 'none'
+    toast(ok ? '已写入，AI 据结果续跑（演示）' : '已拒绝，结果回填给 AI（演示）')
+  }
+
+  /* ---- 文件树:点击不跳走 ---- */
+  document.querySelectorAll('#tree .row[data-file]').forEach(function (r) {
+    r.addEventListener('click', function (e) {
+      if (e.target.classList.contains('edit-ico')) return
+      document.querySelectorAll('#tree .row').forEach(function (x) { x.classList.remove('sel') })
+      r.classList.add('sel')
+      toast('「' + r.dataset.file + '」已在预览 tab 打开 —— 树没有跳走')
+    })
+    r.addEventListener('dblclick', function () {
+      switchTab('preview'); toast('双击 → 预览 tab 打开「' + r.dataset.file + '」')
+    })
+  })
+  document.querySelectorAll('#tree .edit-ico').forEach(function (b) {
+    b.addEventListener('click', function () { switchTab('editor'); toast('已在编辑器 tab 打开（演示）') })
+  })
+  document.querySelectorAll('#tree .row[data-dir]').forEach(function (d) {
+    d.addEventListener('click', function () {
+      var tw = d.querySelector('.tw'); tw.textContent = tw.textContent === '▼' ? '▶' : '▼'
+    })
+  })
+  /* 搜索过滤 */
+  document.getElementById('treeSearch').addEventListener('input', function () {
+    var q = this.value.trim().toLowerCase()
+    document.querySelectorAll('#tree .row[data-file], #tree .row[data-dir]').forEach(function (r) {
+      var nm = r.querySelector('.nm').textContent.toLowerCase()
+      r.style.display = !q || nm.indexOf(q) !== -1 ? '' : 'none'
+    })
+  })
+  function switchTab(name) {
+    document.querySelector('.tab[data-tab="' + name + '"]').click()
+  }
+
+  /* ---- 右键菜单 ---- */
+  var ctx = document.getElementById('ctx')
+  document.getElementById('tree').addEventListener('contextmenu', function (e) {
+    var row = e.target.closest('.row'); if (!row) return
+    e.preventDefault()
+    document.querySelectorAll('#tree .row').forEach(function (x) { x.classList.remove('sel') })
+    row.classList.add('sel')
+    ctx.style.left = Math.min(e.clientX, window.innerWidth - 220) + 'px'
+    ctx.style.top = Math.min(e.clientY, window.innerHeight - 250) + 'px'
+    ctx.classList.add('show')
+  })
+  document.addEventListener('click', function () { ctx.classList.remove('show') })
+  function ctxDo(msg) { toast(msg + '（演示）') }
+
+  /* ---- 撤销预检 ---- */
+  function openRewind() { document.getElementById('rewindMask').classList.add('show') }
+  function closeRewind() { document.getElementById('rewindMask').classList.remove('show') }
+  document.getElementById('rewindMask').addEventListener('click', function (e) {
+    if (e.target === this) closeRewind()
+  })
+
+  /* ---- exec 输出吸底跟随 + 上滚冻结 ---- */
+  var execOut = document.getElementById('execOut')
+  var frozen = false
+  execOut.addEventListener('scroll', function () {
+    var atBottom = execOut.scrollTop + execOut.clientHeight >= execOut.scrollHeight - 8
+    frozen = !atBottom
+    execOut.classList.toggle('frozen', frozen)
+  })
+  ;(function pushLine() {
+    setTimeout(function () {
+      if (!frozen) {
+        var d = document.createElement('div')
+        d.textContent = '-a---     2026/9/27  12:0' + Math.floor(Math.random() * 9) + '   ' + (1000 + Math.floor(Math.random() * 9000)) + '  摊位-' + Math.floor(Math.random() * 90 + 10) + '.html'
+        execOut.appendChild(d)
+        execOut.scrollTop = execOut.scrollHeight
+      }
+      pushLine()
+    }, 2200)
+  })()
+
+  /* ---- 标注开关 ---- */
+  var lt = document.getElementById('legendToggle')
+  lt.addEventListener('click', function () {
+    document.body.classList.toggle('show-pins')
+    lt.textContent = document.body.classList.contains('show-pins') ? '🏷 隐藏改进标注' : '🏷 显示改进标注'
+  })
+
+  /* ---- toast ---- */
+  function toast(msg) {
+    var t = document.createElement('div')
+    t.className = 'toast'; t.textContent = msg
+    document.getElementById('toasts').appendChild(t)
+    setTimeout(function () { t.style.opacity = '0'; t.style.transition = 'opacity .4s' }, 2400)
+    setTimeout(function () { t.remove() }, 2900)
+  }
+</script>
+</body>
+</html>

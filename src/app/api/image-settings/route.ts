@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
-import { BUILTIN_MODELS, getBuiltinModel } from "@/lib/ai/image"
+import { BUILTIN_MODELS, getBuiltinModel, normalizeImageModelId } from "@/lib/ai/image"
 import { encrypt } from "@/lib/crypto"
 import { IMAGE_SIZE_WHITELIST } from "@/lib/settings/registry"
 
@@ -35,7 +35,9 @@ export async function GET() {
 
   return NextResponse.json({
     settings: {
-      imageModel: user?.imageModel ?? "builtin:wanx2.1-t2i-turbo",
+      // 已下线的内置模型 ID(dall-e 系等)在读出时归一化为替代模型,
+      // 前端选中态/下拉随之自愈,下次保存会把新 ID 写回
+      imageModel: normalizeImageModelId(user?.imageModel ?? "builtin:wanx2.1-t2i-turbo"),
       imageSize: user?.imageSize ?? "1024*1024",
     },
     builtinModels: BUILTIN_MODELS,
@@ -93,16 +95,17 @@ export async function PATCH(req: NextRequest) {
     const data: { imageModel?: string; imageSize?: string } = {}
 
     if (body.settings.imageModel !== undefined) {
-      // 验证: 内置或自定义
-      const isBuiltin = BUILTIN_IDS.includes(body.settings.imageModel)
-      const isCustom = body.settings.imageModel.startsWith("custom:")
+      // 归一化后再校验:老客户端仍可能提交已下线的内置 ID(dall-e 系)
+      const normalizedModel = normalizeImageModelId(body.settings.imageModel)
+      const isBuiltin = BUILTIN_IDS.includes(normalizedModel)
+      const isCustom = normalizedModel.startsWith("custom:")
       if (!isBuiltin && !isCustom) {
         return NextResponse.json(
           { error: `无效的模型 ID: ${body.settings.imageModel}` },
           { status: 400 }
         )
       }
-      data.imageModel = body.settings.imageModel
+      data.imageModel = normalizedModel
     }
 
     if (body.settings.imageSize !== undefined) {
@@ -164,7 +167,11 @@ export async function PATCH(req: NextRequest) {
       if (fields.modelId !== undefined) updateData.modelId = fields.modelId.trim()
       if (fields.baseURL !== undefined) updateData.baseURL = fields.baseURL.trim()
       if (fields.apiKeySource !== undefined) updateData.apiKeySource = fields.apiKeySource
-      if (fields.apiKey !== undefined) updateData.apiKey = fields.apiKey ? encrypt(fields.apiKey) : null
+      // 空串 = 保持原 Key(编辑表单不回显 Key,留空提交是常态);
+      // 只有非空新值才覆盖,避免改个名字就把独立 Key 清空
+      if (typeof fields.apiKey === "string" && fields.apiKey.length > 0) {
+        updateData.apiKey = encrypt(fields.apiKey)
+      }
       if (fields.keyProvider !== undefined) updateData.keyProvider = fields.keyProvider || null
       if (fields.supportsSize !== undefined) updateData.supportsSize = fields.supportsSize
       if (fields.contextWindow !== undefined) updateData.contextWindow = fields.contextWindow

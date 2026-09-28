@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-reveal"
+description = "Enables the lf_reveal command without any pre-configured scope."
+commands.allow = ["lf_reveal"]
+
+[[permission]]
+identifier = "deny-lf-reveal"
+description = "Denies the lf_reveal command without any pre-configured scope."
+commands.deny = ["lf_reveal"]

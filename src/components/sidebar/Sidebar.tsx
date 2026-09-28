@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react'
 import type { CSSProperties } from 'react'
@@ -19,6 +19,7 @@ import { TrafficLights } from '@/components/TrafficLights'
 import { cn } from '@/lib/utils'
 import { ConversationItem } from './ConversationItem'
 import { SearchDialog } from './SearchDialog'
+import { SidebarNav } from './SidebarNav'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson, HttpError } from '@/lib/query/fetcher'
 
@@ -364,10 +365,19 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed top-1.5 bottom-1.5 left-1.5 z-50 w-56 flex flex-col',
+          // app-shell-sidebar: shell 层壁纸激活时由 globals.css :has 规则改半透明(毛玻璃透壁纸)
+          'app-shell-sidebar fixed top-1.5 bottom-1.5 left-1.5 z-50 w-56 flex flex-col',
           // pb-[var(--sab)]: PWA 全屏模式下列表底部让出 Home Indicator 安全区(浏览器内为 0)
           'pb-[var(--sab)]',
-          'bg-surface-glass backdrop-blur-xl text-content-primary',
+          // 侧栏材质 = 「次级面」: 底色走 --surface-muted(比内容区的 --surface 暗一档,
+          // 深色主题下反而亮一档),不再是纯白。
+          // 原先的 bg-surface-glass 是「72% 的白」,而它背后就是 .app-shell 的纯色
+          // bg-surface —— 同色叠同色、blur 在纯色上等于空转,侧栏因此是一块没有
+          // 材质的死白(格子主题下比暖纸底的页面还白)。backdrop-blur-xl 保留:
+          // 它让 aside 成为 fixed 后代的包含块(下方面具菜单的点击遮罩依赖这点)。
+          // sidebar-panel: 右端「入影」暗层(见 globals.css .sidebar-panel::after)。
+          // 铺在整个面板上而不是只铺会话列表容器 —— 否则列表顶边会多一条断层
+          'bg-surface-muted backdrop-blur-xl text-content-primary sidebar-panel',
           'rounded-xl border border-line/50 overflow-hidden',
           'transition-transform duration-300 ease-in-out',
           'm-1.5',
@@ -378,12 +388,19 @@ export function Sidebar() {
           !sidebarEffectiveOpen && 'md:w-12'
         )}
       >
+        {/* 侧栏材质层(B): 纯 CSS 装饰,只在「配色 = 格子」下渲染(见 .sidebar-material)。
+            三态共用同一套窗棂格影,只换光色与混合模式 —— 白天/暮色 multiply 压暗,
+            晚上 screen 提亮;与聊天区是同一扇窗。基线 / 月白·桂花金下这一层不渲染 */}
+        <div className="sidebar-material" aria-hidden="true" />
+
         <div
           className={cn(
             'flex items-center pt-3 pb-1.5',
             sidebarEffectiveOpen ? 'justify-between gap-2 px-3' : 'justify-center px-0'
           )}
-          {...(inTauri && sidebarEffectiveOpen
+          // 拖拽区两种状态都挂:折叠后顶栏带下线,侧栏头是窗口左上仅剩的拖拽点
+          // ([data-tauri] [data-tauri-drag-region] button 的自动隔离见 globals.css)
+          {...(inTauri
             ? {
                 'data-tauri-drag-region': '',
                 style: { WebkitAppRegion: 'drag' } as React.CSSProperties,
@@ -396,6 +413,9 @@ export function Sidebar() {
           {inTauri && sidebarEffectiveOpen && <TrafficLights />}
           {sidebarEffectiveOpen ? (
             <div className="flex items-center gap-2 min-w-0 flex-1">
+              {/* 品牌月相(F-4): 只在配色=月白·桂花金时显示 —— 该配色是月夜版,
+                  月符号与"格子/基线"的语境无关,由 .fest-night 整体隐藏,不占位、不留 gap */}
+              <span className="fest-night brand-moon" aria-hidden="true" />
               <h1 className="text-base font-semibold tracking-tight truncate">aichatt</h1>
             </div>
           ) : (
@@ -440,6 +460,18 @@ export function Sidebar() {
           </div>
         )}
 
+        {/* 页面导航(T-C 顶栏下沉):展开态首行「聊天」(客户端升级为「聊天 | 工作」切换条)
+            + 「更多功能」折叠组 —— 见 SidebarNav */}
+        {sidebarEffectiveOpen && <SidebarNav variant="list" />}
+
+        {/* 页面导航(C-1 常驻轨道):折叠后导航仍一击可及,与下方会话动作以分隔线断开 */}
+        {!sidebarEffectiveOpen && (
+          <>
+            <SidebarNav variant="rail" />
+            <div className="mx-auto w-6 border-t border-line/40" />
+          </>
+        )}
+
         {!sidebarEffectiveOpen && (
           <div className="flex flex-col items-center gap-1 pt-2">
             <button
@@ -475,11 +507,15 @@ export function Sidebar() {
         {sidebarEffectiveOpen && (
           <div className="px-2 pt-1.5 pb-3 relative">
             <div className="flex items-center gap-1.5">
+              {/* 新对话: 底色不再用 bg-surface(255 纯白) —— 侧栏底已是近白的
+                  --surface-muted,再叠一层纯白会在面板里多出一块死白(与刚撤掉的
+                  左缘白层是同一个病),故改为近乎不加填充 + 描边。
+                  h-8 与原 py-1.5 算出来的 32px 等高,加边框不会撑高这一行 */}
               <button
                 onClick={handleNewConversation}
-                className="flex-1 flex items-center justify-start gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
-                  bg-surface-subtle text-content-primary
-                  hover:bg-surface-muted transition-all active:scale-[0.98] touch-manipulation"
+                className="flex-1 flex h-8 items-center justify-start gap-1.5 px-3 rounded-lg text-sm font-medium
+                  border border-line/40 bg-surface-muted/60 text-content-primary
+                  hover:bg-surface-subtle transition-all active:scale-[0.98] touch-manipulation"
                 style={{ WebkitTapHighlightColor: 'transparent' }}
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -487,10 +523,10 @@ export function Sidebar() {
               </button>
               <button
                 onClick={() => setMaskMenuOpen((v) => !v)}
-                className={`flex h-8 items-center justify-center px-2 rounded-lg transition-all active:scale-[0.98] touch-manipulation
+                className={`flex h-8 items-center justify-center px-2 rounded-lg border border-line/40 transition-all active:scale-[0.98] touch-manipulation
                   ${maskMenuOpen || conversationMaskId
-                    ? 'bg-surface-muted text-content-primary'
-                    : 'bg-surface-subtle text-content-secondary hover:bg-surface-muted hover:text-content-primary'}`}
+                    ? 'bg-surface-subtle text-content-primary'
+                    : 'bg-surface-muted/60 text-content-secondary hover:bg-surface-subtle hover:text-content-primary'}`}
                 aria-label="用面具开新对话"
                 title="用面具开新对话"
                 aria-expanded={maskMenuOpen}

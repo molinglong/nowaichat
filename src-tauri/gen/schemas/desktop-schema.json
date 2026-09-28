@@ -177,6 +177,366 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the close_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-window",
+          "markdownDescription": "Enables the close_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-buddy-window",
+          "markdownDescription": "Enables the create_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the focus_main_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-focus-main-window",
+          "markdownDescription": "Enables the focus_main_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_buddy_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-buddy-position",
+          "markdownDescription": "Enables the get_buddy_position command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_screen_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-screen-size",
+          "markdownDescription": "Enables the get_screen_size command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_window_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-window-state",
+          "markdownDescription": "Enables the get_window_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hide_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hide-buddy-window",
+          "markdownDescription": "Enables the hide_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_delete_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-delete-file",
+          "markdownDescription": "Enables the lf_delete_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_edit_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-edit-file",
+          "markdownDescription": "Enables the lf_edit_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-exec",
+          "markdownDescription": "Enables the lf_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-exists",
+          "markdownDescription": "Enables the lf_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_get_base command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-get-base",
+          "markdownDescription": "Enables the lf_get_base command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_list_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-list-dir",
+          "markdownDescription": "Enables the lf_list_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_move_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-move-file",
+          "markdownDescription": "Enables the lf_move_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_overview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-overview",
+          "markdownDescription": "Enables the lf_overview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_read_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-read-file",
+          "markdownDescription": "Enables the lf_read_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_read_full_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-read-full-file",
+          "markdownDescription": "Enables the lf_read_full_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_reveal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-reveal",
+          "markdownDescription": "Enables the lf_reveal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-search",
+          "markdownDescription": "Enables the lf_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_set_base command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-set-base",
+          "markdownDescription": "Enables the lf_set_base command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_undo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-undo",
+          "markdownDescription": "Enables the lf_undo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the lf_write_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-lf-write-file",
+          "markdownDescription": "Enables the lf_write_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the minimize_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-minimize-window",
+          "markdownDescription": "Enables the minimize_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the move_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-move-buddy-window",
+          "markdownDescription": "Enables the move_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_buddy_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-buddy-position",
+          "markdownDescription": "Enables the set_buddy_position command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-buddy-window",
+          "markdownDescription": "Enables the show_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-settings-window",
+          "markdownDescription": "Enables the show_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-buddy-window",
+          "markdownDescription": "Enables the toggle_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_fullscreen command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-fullscreen",
+          "markdownDescription": "Enables the toggle_fullscreen command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-maximize",
+          "markdownDescription": "Enables the toggle_maximize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-window",
+          "markdownDescription": "Denies the close_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-buddy-window",
+          "markdownDescription": "Denies the create_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the focus_main_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-focus-main-window",
+          "markdownDescription": "Denies the focus_main_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_buddy_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-buddy-position",
+          "markdownDescription": "Denies the get_buddy_position command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_screen_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-screen-size",
+          "markdownDescription": "Denies the get_screen_size command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_window_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-window-state",
+          "markdownDescription": "Denies the get_window_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hide_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hide-buddy-window",
+          "markdownDescription": "Denies the hide_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_delete_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-delete-file",
+          "markdownDescription": "Denies the lf_delete_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_edit_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-edit-file",
+          "markdownDescription": "Denies the lf_edit_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-exec",
+          "markdownDescription": "Denies the lf_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-exists",
+          "markdownDescription": "Denies the lf_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_get_base command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-get-base",
+          "markdownDescription": "Denies the lf_get_base command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_list_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-list-dir",
+          "markdownDescription": "Denies the lf_list_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_move_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-move-file",
+          "markdownDescription": "Denies the lf_move_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_overview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-overview",
+          "markdownDescription": "Denies the lf_overview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_read_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-read-file",
+          "markdownDescription": "Denies the lf_read_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_read_full_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-read-full-file",
+          "markdownDescription": "Denies the lf_read_full_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_reveal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-reveal",
+          "markdownDescription": "Denies the lf_reveal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-search",
+          "markdownDescription": "Denies the lf_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_set_base command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-set-base",
+          "markdownDescription": "Denies the lf_set_base command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_undo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-undo",
+          "markdownDescription": "Denies the lf_undo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the lf_write_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-lf-write-file",
+          "markdownDescription": "Denies the lf_write_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the minimize_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-minimize-window",
+          "markdownDescription": "Denies the minimize_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the move_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-move-buddy-window",
+          "markdownDescription": "Denies the move_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_buddy_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-buddy-position",
+          "markdownDescription": "Denies the set_buddy_position command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-buddy-window",
+          "markdownDescription": "Denies the show_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-settings-window",
+          "markdownDescription": "Denies the show_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_buddy_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-buddy-window",
+          "markdownDescription": "Denies the toggle_buddy_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_fullscreen command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-fullscreen",
+          "markdownDescription": "Denies the toggle_fullscreen command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-maximize",
+          "markdownDescription": "Denies the toggle_maximize command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

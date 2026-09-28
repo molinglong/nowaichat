@@ -1,7 +1,5 @@
 use serde::{Serialize, Deserialize};
 use tauri::{Manager, WebviewWindow, WebviewUrl, PhysicalPosition};
-#[cfg(target_os = "windows")]
-use window_vibrancy::{apply_mica, apply_acrylic, clear_mica, clear_acrylic};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,44 +55,6 @@ fn toggle_maximize(window: WebviewWindow) -> Result<(), String> {
 
 /// 给窗口应用系统毛玻璃材质。优先 Mica(Win11,拖动不掉帧),
 /// 失败退 Acrylic(Win10);都失败静默跳过(保持不透明现状)。
-/// dark: 应用当前深浅色(Some 同步给 Mica/Acrylic 着色),None 跟随系统。
-#[cfg(target_os = "windows")]
-fn apply_glass(window: &WebviewWindow, dark: Option<bool>) {
-    if apply_mica(window, dark).is_ok() {
-        return;
-    }
-    // Acrylic(Win10) 兜底:第二参是染色 RGBA,按应用深浅色给中性灰调
-    let tint = if dark.unwrap_or(false) {
-        (30, 30, 32, 200)
-    } else {
-        (245, 245, 247, 200)
-    };
-    let _ = apply_acrylic(window, Some(tint));
-}
-
-/// 运行时开关毛玻璃(设置弹窗「系统毛玻璃」切换)。
-/// 仅允许主窗口调用:设置子窗口/搭子窗口保持自己的背景,不受玻璃模式影响。
-#[tauri::command]
-fn set_glass_effect(window: WebviewWindow, enabled: bool, dark: Option<bool>) -> Result<(), String> {
-    if window.label() != "main" {
-        return Ok(());
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // 先清掉现有材质,避免 Mica/Acrylic 叠加
-        let _ = clear_mica(&window);
-        let _ = clear_acrylic(&window);
-        if enabled {
-            apply_glass(&window, dark);
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (enabled, dark);
-    }
-    Ok(())
-}
-
 // ============ 设置子窗口管理 ============
 
 /// 打开设置子窗口:窗口常驻保活,但 WebView 可能被留在别的页面(如服务异常时
@@ -1246,12 +1206,18 @@ fn lf_undo(app: tauri::AppHandle, undo_id: String) -> Result<(), String> {
     }
 }
 
-/// exec 输出读取上限:256KB(超限继续丢弃读保持管道畅通,靠超时兕底)。
+/// exec 输出读取上限:256KB(超限继续丢弃读保持管道畅通,靠超时兜底)。
 const LF_EXEC_READ_CAP: usize = 256 * 1024;
-/// exec 回传输出上限:8KB(超出按 UTF-8 字符边界截断)。
+/// 紧凑文本回传上限:8KB —— overview 目录树 / search 命中列表的截断口径
+/// (天然紧凑,放大无收益)。
 const LF_EXEC_MAX: usize = 8 * 1024;
-/// exec 超时:30s,超时 taskkill /T 连子进程树一起强杀。
+/// exec 专用回传上限:32KB —— 构建/测试日志常超 8KB,截断会丢掉报错关键段。
+const LF_EXEC_OUTPUT_MAX: usize = 32 * 1024;
+/// exec 默认超时:30s(维持既有习惯);模型可按需传 timeout_ms 跑长任务。
 const LF_EXEC_TIMEOUT_MS: u64 = 30_000;
+/// timeout_ms 允许范围:1s ~ 600s(与 ZCode Bash 上限一致;范围外钳制)。
+const LF_EXEC_TIMEOUT_MIN_MS: u64 = 1_000;
+const LF_EXEC_TIMEOUT_MAX_MS: u64 = 600_000;
 
 /// exec 结果:退出码 + 合并输出 + 截断标记 + 耗时。
 #[derive(Serialize)]
@@ -1265,16 +1231,23 @@ struct LfExecResult {
 
 /// 在工作区内执行 PowerShell 命令(cwd=工作区根):
 /// - 强制 UTF-8 输出(PS5 默认 GBK 是 mojibake 重灾区),2>&1 合并 stderr;
-/// - 30s 超时 taskkill /T 强杀进程树;输出超 8KB 截断;
+/// - 超时(默认 30s,timeout_ms 可调 1~600s)taskkill /T 强杀进程树;输出超 32KB 截断;
 /// - 是否执行由前端白名单/确认卡决定,Rust 只负责受控执行本体。
 #[cfg(windows)]
-fn lf_exec_impl(app: &tauri::AppHandle, command: &str) -> Result<LfExecResult, String> {
+fn lf_exec_impl(
+    app: &tauri::AppHandle,
+    command: &str,
+    timeout_ms: Option<u64>,
+) -> Result<LfExecResult, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let base = lf_read_base(app).ok_or("尚未授权工作区,请先在设置中选择文件夹")?;
     if command.trim().is_empty() {
         return Err("命令为空".into());
     }
+    let timeout_ms = timeout_ms
+        .unwrap_or(LF_EXEC_TIMEOUT_MS)
+        .clamp(LF_EXEC_TIMEOUT_MIN_MS, LF_EXEC_TIMEOUT_MAX_MS);
     // & { } 包裹隔离用户命令 + 2>&1 合并 stderr,确保单管道可读
     let script = format!(
         "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; & {{ {} }} 2>&1",
@@ -1308,7 +1281,7 @@ fn lf_exec_impl(app: &tauri::AppHandle, command: &str) -> Result<LfExecResult, S
         }
         buf
     });
-    let deadline = started + std::time::Duration::from_millis(LF_EXEC_TIMEOUT_MS);
+    let deadline = started + std::time::Duration::from_millis(timeout_ms);
     let mut timed_out = false;
     let status = loop {
         match child.try_wait() {
@@ -1330,12 +1303,12 @@ fn lf_exec_impl(app: &tauri::AppHandle, command: &str) -> Result<LfExecResult, S
     let raw = reader.join().map_err(|_| "读取输出线程失败".to_string())?;
     let mut output = String::from_utf8_lossy(&raw).to_string();
     let mut truncated = raw.len() >= LF_EXEC_READ_CAP;
-    if output.len() > LF_EXEC_MAX {
+    if output.len() > LF_EXEC_OUTPUT_MAX {
         // 头 2/3 + 尾 1/3 保留:命令横幅在头、最终结果常在尾,中段省略价值最低。
         // 尾部起点需对齐 UTF-8 字符边界
         let ob = output.as_bytes();
-        let head_end = LF_EXEC_MAX * 2 / 3;
-        let mut tail_start = output.len() - LF_EXEC_MAX / 3;
+        let head_end = LF_EXEC_OUTPUT_MAX * 2 / 3;
+        let mut tail_start = output.len() - LF_EXEC_OUTPUT_MAX / 3;
         while tail_start < ob.len() && (ob[tail_start] & 0xC0) == 0x80 {
             tail_start += 1;
         }
@@ -1348,7 +1321,11 @@ fn lf_exec_impl(app: &tauri::AppHandle, command: &str) -> Result<LfExecResult, S
         truncated = true;
     }
     if timed_out {
-        output.push_str("\n[命令超时(30 秒),已强制终止]");
+        let secs = timeout_ms / 1000;
+        output.push_str(&format!(
+            "\n[命令超时({} 秒),已强制终止。长任务可在 exec 时传更大的 timeout_ms 参数(1~600 秒)重试]",
+            secs
+        ));
     }
     Ok(LfExecResult {
         exit_code: if timed_out { -1 } else { status.code().unwrap_or(-1) },
@@ -1360,13 +1337,21 @@ fn lf_exec_impl(app: &tauri::AppHandle, command: &str) -> Result<LfExecResult, S
 
 /// 非 Windows 平台:命令执行仅支持 Windows 桌面端(保持全平台可编译)。
 #[cfg(not(windows))]
-fn lf_exec_impl(_app: &tauri::AppHandle, _command: &str) -> Result<LfExecResult, String> {
+fn lf_exec_impl(
+    _app: &tauri::AppHandle,
+    _command: &str,
+    _timeout_ms: Option<u64>,
+) -> Result<LfExecResult, String> {
     Err("命令执行仅支持 Windows 桌面端".into())
 }
 
 #[tauri::command]
-fn lf_exec(app: tauri::AppHandle, command: String) -> Result<LfExecResult, String> {
-    lf_exec_impl(&app, &command)
+fn lf_exec(
+    app: tauri::AppHandle,
+    command: String,
+    timeout_ms: Option<u64>,
+) -> Result<LfExecResult, String> {
+    lf_exec_impl(&app, &command, timeout_ms)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1411,12 +1396,8 @@ pub fn run() {
             //     }
             // }
 
-            // 客户端专属:启动即应用系统毛玻璃(前端 hydrate 后会带主题参数重同步)
+            // 监听主窗口关闭 → 关闭搭子
             if let Some(main) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                apply_glass(&main, None);
-
-                // 监听主窗口关闭 → 关闭搭子
                 let app_handle = app.handle().clone();
                 main.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {
@@ -1435,7 +1416,6 @@ pub fn run() {
             minimize_window,
             close_window,
             toggle_maximize,
-            set_glass_effect,
             show_buddy_window,
             hide_buddy_window,
             toggle_buddy_window,

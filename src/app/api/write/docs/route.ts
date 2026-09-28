@@ -17,19 +17,24 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // 列表不取 content(可能是几万字的长文),字数看冗余的 charCount
-  const docs = await prisma.writeDoc.findMany({
+  // 列表不取 content(可能是几万字的长文),字数看冗余的 charCount;
+  // workId/workTitle 供列表作品标识与设定面板联动(未归属作品时为 null)
+  const rows = await prisma.writeDoc.findMany({
     where: { userId },
     select: {
       id: true,
       title: true,
       charCount: true,
+      workId: true,
+      work: { select: { title: true } },
       createdAt: true,
       updatedAt: true,
     },
     orderBy: { updatedAt: "desc" },
     take: 200,
   })
+
+  const docs = rows.map(({ work, ...d }) => ({ ...d, workTitle: work?.title ?? null }))
 
   return NextResponse.json({ docs })
 }
@@ -51,18 +56,33 @@ export async function POST(req: Request) {
     content = c
   }
 
+  // 可选归属作品(在作品下新建章节):校验归属,防挂到他人作品
+  let workId: string | null = null
+  if (typeof body.workId === "string" && body.workId) {
+    const work = await prisma.work.findFirst({
+      where: { id: body.workId, userId },
+      select: { id: true },
+    })
+    if (!work) {
+      return NextResponse.json({ error: "作品不存在" }, { status: 400 })
+    }
+    workId = work.id
+  }
+
   const doc = await prisma.writeDoc.create({
     data: {
       userId,
       title: normalizeWriteTitle(body.title),
       content,
       charCount: content.length,
+      workId,
     },
     // 新建后前端立即进入编辑器,列表项用不到全文
     select: {
       id: true,
       title: true,
       charCount: true,
+      workId: true,
       createdAt: true,
       updatedAt: true,
     },

@@ -11,7 +11,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
-    serverComponentsExternalPackages: ['shiki', '@prisma/client', 'bcryptjs', '@auth/prisma-adapter', '@prisma/adapter-pg'],
+    serverComponentsExternalPackages: ['shiki', '@prisma/client', 'bcryptjs', '@auth/prisma-adapter', '@prisma/adapter-pg', 'typescript'],
     esmExternals: true,
     // Next.js 14 standalone 默认只追踪 import 链路上的文件。
     // 但 @prisma/adapter-pg / pg 是通过 client.ts -> runtime/client.js 这种动态 ESM 入口加载,

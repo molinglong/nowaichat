@@ -34,6 +34,9 @@ export function ModelSelector({
   // visible 控制 opacity 动画:false=0, true=1
   const [dropdownVisible, setDropdownVisible] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  // 「显示旧版」:默认只列出 tier=mainstream 的模型,legacy 需手动展开。
+  // 搜索时视为显式意图,自动纳入旧版(否则搜不到曾经用过的旧模型会很困惑)。
+  const [showLegacy, setShowLegacy] = useState(false)
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set())
   const searchInputRef = useRef<HTMLInputElement>(null)
   const dropdownMenuRef = useRef<HTMLDivElement>(null)
@@ -133,11 +136,15 @@ export function ModelSelector({
     }
   }, [isOpen])
 
-  // 收敛 grouped —— models / configuredProviders 不变时不再重算
+  // 收敛 grouped —— models / configuredProviders / showLegacy 不变时不再重算
   const grouped = useMemo(() => {
+    const includeLegacy = showLegacy || searchQuery.trim().length > 0
     return models.reduce<Record<string, { providerName: string; models: ModelDefinition[] }>>(
       (acc, model) => {
         if (!configuredProviders.has(model.provider) && model.provider !== 'custom') return acc
+        // 旧版模型默认不出现在「全部模型」里,避免把已经被新一代取代的条目当成可选主力;
+        // 但当前选中的那个例外,否则选中态在列表里会凭空消失
+        if (!includeLegacy && model.tier === 'legacy' && model.id !== selectedModel) return acc
         if (!acc[model.provider]) {
           acc[model.provider] = {
             providerName: PROVIDER_NAMES[model.provider] || model.provider,
@@ -149,7 +156,7 @@ export function ModelSelector({
       },
       {}
     )
-  }, [models, configuredProviders])
+  }, [models, configuredProviders, showLegacy, searchQuery, selectedModel])
 
   // 搜索过滤 + 折叠状态综合后的可见模型
   const visibleGrouped = useMemo(() => {
@@ -294,6 +301,23 @@ export function ModelSelector({
                   'transition-colors'
                 )}
               />
+            </div>
+            <div className="flex items-center justify-between mt-1.5 px-0.5">
+              <span className="text-[10px] text-content-muted">
+                {showLegacy ? '已含旧版模型' : '仅显示当前主力'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowLegacy((v) => !v)}
+                className={cn(
+                  'text-[10px] px-1.5 py-0.5 rounded transition-colors',
+                  showLegacy
+                    ? 'bg-accent-soft text-content-primary'
+                    : 'text-content-muted hover:text-content-secondary'
+                )}
+              >
+                {showLegacy ? '隐藏旧版' : '显示旧版'}
+              </button>
             </div>
           </div>
 

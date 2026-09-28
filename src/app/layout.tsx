@@ -80,12 +80,45 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               (function() {
-                // 1. 主题同步
+                // 1. 外观同步(与 src/lib/theme.ts 的 readAppearance/applyAppearance 等价)
                 try {
-                  var theme = localStorage.getItem('theme');
-                  if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                    document.documentElement.classList.add('dark');
+                  var pal = localStorage.getItem('palette');
+                  if (pal === 'dusk') pal = 'grid';          // 废弃配色,并入格子
+                  if (pal === 'grid') {
+                    // 四个光态里只有「晚上」是深底: 它是格子下唯一写 .dark 的态
+                    // (日出/白天/暮色都是浅底,一律不写)
+                    // (下游组件靠 .dark 判明暗),深底 token 由
+                    // [data-pal="grid"][data-grid-tone="night"] 压制 .dark。
+                    // 取值白名单与 theme.ts 的 readAppearance 保持一致(逐个列出),
+                    // 漏写新光态会让它首帧回落成白天、闪一次。
+                    // 'auto' = 智能选择: 这里必须把时段表照抄一遍(首帧脚本不能 import
+                    // theme.ts 的 resolveAutoTone),改动务必同步两处。
+                    var t = localStorage.getItem('gridTone');
+                    var tone;
+                    if (t === 'auto') {
+                      var d = new Date(), hh = d.getHours() + d.getMinutes() / 60;
+                      tone = hh >= 5 && hh < 8 ? 'dawn'
+                           : hh >= 8 && hh < 17 ? 'day'
+                           : hh >= 17 && hh < 19.5 ? 'dusk'
+                           : 'night';
+                    } else {
+                      tone = (t === 'dawn' || t === 'dusk' || t === 'night') ? t : 'day';
+                    }
+                    document.documentElement.setAttribute('data-grid-tone', tone);
+                    if (tone === 'night') document.documentElement.classList.add('dark');
+                  } else {
+                    var theme = localStorage.getItem('theme');
+                    if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                      document.documentElement.classList.add('dark');
+                    }
+                    if (pal === 'guihua') { if (theme !== 'dark') pal = 'base'; }  // 桂花金仅深色
+                    else pal = 'base';                                            // 未知值回落
                   }
+                  // 配色属性必须赶在首次绘制前写好: 配色 token 与主题专属元素
+                  // (.fest-only/.fest-night/.grid-dawn/.grid-day/.grid-night/
+                  //  .grid-nightfall)的显隐全由它驱动,
+                  // 晚一拍会看到基线配色闪一下。
+                  document.documentElement.setAttribute('data-pal', pal);
                 } catch (e) {}
 
                 // 2. Tauri 环境检测 + 手动注入 data-tauri 属性

@@ -17,6 +17,12 @@ import { draftKeyFor, setDraft as persistDraft } from '@/lib/draft-storage'
 import { INPUT_INSERT_EVENT } from '@/lib/input-bridge'
 import type { ModelDefinition } from '@/lib/ai/types'
 
+/** 中秋桂花散点坐标(百分比,定稿自 preview-midautumn-themes F-3): 落点避开中心内容带 */
+const OSMANTHUS_PTS: [number, number][] = [
+  [6, 12], [14, 74], [9, 88], [23, 8], [27, 30], [31, 92], [44, 84], [52, 4],
+  [58, 16], [66, 90], [73, 10], [79, 78], [86, 22], [90, 62], [12, 40], [88, 40],
+]
+
 export interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => void
   onStop: () => void
@@ -109,6 +115,9 @@ export function ChatInput({
   // 引用回复状态
   const replyingTo = useChatStore((s) => s.replyingTo)
   const setReplyingTo = useChatStore((s) => s.setReplyingTo)
+
+  // 内置壁纸模式(背景=图片):开启时欢迎页收起点阵/光效装饰,壁纸在 shell 层渲染
+  const wallpaperOn = useChatStore((s) => s.backdropMode === 'image')
 
   // ── 草稿自动保存 ──────────────────────────────────────────────────────────
   // 用 store 里的 currentConversationId 作为 key 维度;空会话用 '__new__'
@@ -574,7 +583,11 @@ export function ChatInput({
   // ============= WELCOME VARIANT =============
   if (variant === 'welcome') {
     return (
+      // data-tauri-drag-region:新对话页除中间输入卡片外整片都是空白(装饰层已
+      // pointer-events:none),客户端下正是最顺手的抓窗区;只挂属性、不写
+      // -webkit-app-region,子元素不继承拖拽区,卡片内控件点击/选词照旧。
       <div
+        data-tauri-drag-region=""
         className={cn('relative flex-1 w-full flex flex-col justify-center px-4', className)}
         style={{
           // 键盘弹出时让内容贴底(否则依旧被键盘遮住);
@@ -584,8 +597,60 @@ export function ChatInput({
           paddingBottom: 'max(var(--keyboard-height, 0px), var(--sab, 0px))',
         }}
       >
+        {/* 壁纸图与可读性蒙版都合成在 shell 层(WelcomeWallpaperLayer);
+            这里只在壁纸关闭时渲染点阵/月盘/光效装饰 —— 开图后纹理会与它们打架 */}
+        {!wallpaperOn && (
+          <>
         {/* 点阵背景: 中心(内容区)淡出、四周渐显,纯装饰 */}
         <div className="dot-grid" aria-hidden="true" />
+
+        {/* 月夜层(仅配色=月白·桂花金, 见 globals.css 的 .fest-night 门控):
+            右上角月盘。该配色只有深色一态,故与白天语境不冲突 */}
+        <div className="fest-night moon-corner" aria-hidden="true" />
+        {/* 晨光-格子(配色=格子 且 光态=日出, 见 .grid-dawn 门控):
+            一天的第一缕光 —— 光在右上画外低角(蜜桃粉光斑从右上溢入) + 全屏薄雾,
+            窗棂格影朝**左下**,与暮色"光在左下/影朝右上"成镜像。不画天体 */}
+        <div className="grid-dawn light-layer" aria-hidden="true">
+          <div className="dawn-glow" />
+          <div className="dawn-haze" />
+          <div className="dawn-mullion" />
+        </div>
+        {/* 正午-格子(配色=格子 且 光态=白天, 见 .grid-day 门控):
+            窗外天光 = 顶边过曝带 + 窗棂格影 + 玻璃斜光。光源在画面外,
+            不画圆盘(白天在角落放"太阳"会被读成凭空一个发光的球) */}
+        <div className="grid-day light-layer" aria-hidden="true">
+          <div className="daylight-skyfall" />
+          <div className="daylight-mullion" />
+          <div className="daylight-sheen" />
+        </div>
+        {/* 日落-格子(配色=格子 且 光态=暮色, 见 .grid-night 门控):
+            日头贴到地平线 —— 地平线暖带 + 左下外溢柔光 + 水平云条 +
+            暖调玻璃斜光 + 被低角度光拉长的窗棂格影(同一扇窗,同源不同形) */}
+        <div className="grid-night light-layer" aria-hidden="true">
+          <div className="dusk-horizon" />
+          <div className="dusk-spill" />
+          <div className="dusk-cloudband">
+            <i />
+            <i />
+            <i />
+          </div>
+          <div className="dusk-mullion" />
+          <div className="dusk-sheen" />
+        </div>
+        {/* 深夜-格子(配色=格子 且 光态=晚上, 见 .grid-nightfall 门控):
+            这一态**没有光** —— 按定稿"删光",右上那团镜面高光整个去掉
+            (高光泽反射是金属感的来源)。画面只剩一层冷月白的窗棂格影,
+            深底上走 screen 提亮;不画天体,与月白·桂花金一眼可分 */}
+        <div className="grid-nightfall light-layer" aria-hidden="true">
+          <div className="nightfall-mullion" />
+        </div>
+        <div className="osmanthus-layer osmanthus" aria-hidden="true">
+          {OSMANTHUS_PTS.map(([x, y]) => (
+            <i key={`${x}-${y}`} style={{ left: `${x}%`, top: `${y}%` }} />
+          ))}
+        </div>
+          </>
+        )}
 
         <div className="relative w-full max-w-2xl mx-auto -translate-y-[6vh] md:-translate-y-[8vh]">
           {/* 可选问候语(slot); 整体上移 6vh(移动)/8vh(桌面),视觉重心中间偏上 */}

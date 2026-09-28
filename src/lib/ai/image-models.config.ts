@@ -42,6 +42,14 @@ export interface BuiltinImageModel {
   supportsEdit?: boolean
 }
 
+// 2026-09 刷新说明：
+// - OpenAI：dall-e-3 / dall-e-2 已于 2026-05-12 从 API 移除，换成 gpt-image 世代。
+//   gpt-image-* 走 OpenAI 兼容接口，generateOpenAICompatible 已按 size 字段处理。
+//   尺寸沿用 sizeMap 已有键，避免改动 image.ts 的白名单。
+// TODO(2026-09)：万相 wanx2.1 与 qwen-image-edit 仍在售但已被 wan2.7-image* /
+//   qwen-image-3.0* 取代；Stability 的 stable-diffusion-xl-1024-v1-0 已属 Legacy
+//   （v1 端点弃用，官方转向 /v2beta/stable-image 与 sd3.5-*）。这两处换 ID 需要先改
+//   generateWanx / generateStability 的调用协议，故本轮只标注不动。
 export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
   {
     id: "builtin:wanx2.1-t2i-turbo",
@@ -66,27 +74,27 @@ export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
     badge: "plus",
   },
   {
-    id: "builtin:dall-e-3",
-    name: "DALL·E 3",
+    id: "builtin:gpt-image-2.5-sunburst",
+    name: "GPT Image 2.5",
     provider: "openai",
     adapter: "openai",
-    modelId: "dall-e-3",
+    modelId: "gpt-image-2.5-sunburst",
     baseURL: "https://api.openai.com/v1",
     sizes: ["1024*1024", "1024x1792", "1792x1024"],
     supportsSize: true,
-    desc: "OpenAI 最新图像生成",
+    desc: "OpenAI 最新图像生成，编辑精度最高",
     badge: "openai",
   },
   {
-    id: "builtin:dall-e-2",
-    name: "DALL·E 2",
+    id: "builtin:gpt-image-2",
+    name: "GPT Image 2",
     provider: "openai",
     adapter: "openai",
-    modelId: "dall-e-2",
+    modelId: "gpt-image-2",
     baseURL: "https://api.openai.com/v1",
-    sizes: ["256x256", "512x512", "1024*1024"],
+    sizes: ["1024*1024", "1024x1792", "1792x1024"],
     supportsSize: true,
-    desc: "经典图像生成模型",
+    desc: "OpenAI 上一代图像生成，GA 稳定版",
     badge: "openai",
   },
   {
@@ -97,7 +105,7 @@ export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
     modelId: "stable-diffusion-xl-1024-v1-0",
     sizes: ["1024*1024", "1152x896", "1216x832", "1344x768", "1536x640"],
     supportsSize: true,
-    desc: "Stability AI 开源模型",
+    desc: "Stability AI 开源模型（v1 端点已弃用，待换 sd3.5）",
     badge: "stability",
   },
   {
@@ -116,7 +124,21 @@ export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
   },
 ]
 
-/** 通过 ID 查模型(内部使用) */
+// 已下线内置生图模型 ID 归一化。用户库里的 imageModel/历史会话仍存着旧 ID,
+// 查找时统一映射到替代模型,否则生成会直接报「未知的内置模型」。
+// 维护规则同 chat 的 LEGACY_MODEL_ALIASES:只有官方确认**已下线/已移除**的 ID 才登记。
+const LEGACY_IMAGE_MODEL_ALIASES: Record<string, string> = {
+  // OpenAI:dall-e-2 / dall-e-3 已于 2026-05-12 从 API 移除,由 gpt-image 世代接替
+  "builtin:dall-e-3": "builtin:gpt-image-2.5-sunburst",
+  "builtin:dall-e-2": "builtin:gpt-image-2",
+}
+
+/** 旧版内置模型 ID → 当前替代模型;未知 ID 原样返回 */
+export function normalizeImageModelId(modelId: string): string {
+  return LEGACY_IMAGE_MODEL_ALIASES[modelId] ?? modelId
+}
+
+/** 通过 ID 查模型(内部使用);命中 legacy 别名时返回替代模型 */
 export function findBuiltinModel(id: string): BuiltinImageModel | undefined {
-  return BUILTIN_IMAGE_MODELS.find((m) => m.id === id)
+  return BUILTIN_IMAGE_MODELS.find((m) => m.id === normalizeImageModelId(id))
 }

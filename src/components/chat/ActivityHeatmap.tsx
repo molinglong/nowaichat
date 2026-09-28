@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 interface DayStat {
   date: string
@@ -18,7 +18,7 @@ export interface ActivityGridProps {
   weeks?: number
 }
 
-/** 活跃度分级(0-4): 空心 / 15% / 35% / 60% / 90%(走 CSS 变量,明暗主题自动适配) */
+/** 活跃度分级(0-4): 空档 / 15% / 35% / 60% / 90%(走 CSS 变量,明暗主题自动适配) */
 function getLevel(count: number): number {
   if (count === 0) return 0
   if (count <= 3) return 1
@@ -28,7 +28,7 @@ function getLevel(count: number): number {
 }
 
 const LEVEL_CLASSES = [
-  'bg-surface-subtle border border-line',
+  'bg-[rgb(var(--surface-subtle)_/_80%)]',
   'bg-[rgb(var(--content-muted)_/_15%)] border border-transparent',
   'bg-[rgb(var(--content-muted)_/_35%)] border border-transparent',
   'bg-[rgb(var(--content-muted)_/_60%)] border border-transparent',
@@ -48,6 +48,8 @@ const LABEL_H = 14
 export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<ActivityStatsResponse | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [availW, setAvailW] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -67,11 +69,22 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
     }
   }, [weeks])
 
+  // 测量容器宽度供格子满宽伸缩;数据到位后滚动容器才挂载,故依赖 loading/data
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const measure = () => setAvailW(el.clientWidth)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [loading, data])
+
   if (loading) {
     return (
       <div className="flex justify-center" role="status" aria-live="off">
-        {/* 与成品等高(月份行 14 + 网格 7×10+6×2 = 96 + 间隙),避免加载时跳动 */}
-        <div className="h-[100px] w-full rounded-lg bg-surface-subtle animate-pulse" />
+        {/* 与玻璃卡成品等高(网格 96 + 底行 14 + 间距 8 + 内边距 24),避免加载完成时跳动 */}
+        <div className="h-[142px] w-full rounded-2xl border border-line/60 bg-[rgb(var(--surface-glass)_/_72%)] backdrop-blur-xl animate-pulse" />
       </div>
     )
   }
@@ -95,6 +108,10 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
   ]
   const numCols = Math.ceil(cells.length / 7)
 
+  // ── 流式满宽:格子尺寸随容器宽度伸缩,铺满欢迎页栏宽(未测得时回落 GitHub 规格 10px)──
+  // 总宽 = 星期标签列(宽=格子) + 4px 列距 + numCols 列格 + (numCols-1)×GAP → 反解单格尺寸
+  const cellSize = availW > 0 ? Math.max(6, (availW - 4 - (numCols - 1) * GAP) / (numCols + 1)) : CELL
+
   // ── 月份标签: 每列第一个有效日期的月份变化时标注;相邻标签至少隔 3 列,防止挤压重叠 ──
   const monthLabels: Array<string | null> = []
   let lastMonth = -1
@@ -117,31 +134,18 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
   }
 
   return (
-    <div className="flex justify-center">
-      {/* 移动端横向滚动,滚动条隐藏;桌面端 622px 恰好一屏放不下也不出滚动条 */}
-      <div className="overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex flex-col gap-1">
-          {/* 顶行: 左标题(总活跃天数/连续) + 右图例(少→多) */}
-          <div className="flex items-center justify-between" style={{ height: LABEL_H }}>
-            <span className="text-[10px] text-content-secondary whitespace-nowrap">
-              {isYear ? '过去一年' : `近 ${weeks} 周`} · {data.totalDays} 天活跃{streakStr}
-            </span>
-            <span className="flex items-center gap-1 text-[9px] text-content-muted whitespace-nowrap">
-              少
-              {LEVEL_CLASSES.map((cls, i) => (
-                <span key={i} className={`inline-block w-2 h-2 rounded-[2px] ${cls}`} />
-              ))}
-              多
-            </span>
-          </div>
-
+    <div className="w-full">
+      {/* 玻璃承托卡(方案A,定稿自 preview-heatmap-wallpaper): 与输入框同一套玻璃语言,不再裸压壁纸 */}
+      <div className="flex w-full flex-col gap-2 px-4 py-3 rounded-2xl border border-line/60 bg-[rgb(var(--surface-glass)_/_72%)] backdrop-blur-xl shadow-[0_8px_28px_rgb(0_0_0_/_9%)]">
+        {/* 满宽铺满欢迎页栏;极窄屏格子已随宽收缩,仍溢出时横向滚动(滚动条隐藏) */}
+        <div ref={scrollRef} className="overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           <div className="flex items-start gap-1">
             {/* 左侧星期标签列(行1=周日...行7=周六,标一/三/五) */}
-            <div className="flex flex-col shrink-0">
+            <div className="flex flex-col shrink-0" style={{ width: cellSize }}>
               <div style={{ height: LABEL_H }} />
               <div
                 className="grid"
-                style={{ gridTemplateRows: `repeat(7, ${CELL}px)`, gap: GAP }}
+                style={{ gridTemplateRows: `repeat(7, ${cellSize}px)`, gap: GAP }}
               >
                 {[2, 4, 6].map((row, i) => (
                   <span
@@ -160,7 +164,7 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
               <div
                 className="grid"
                 style={{
-                  gridTemplateColumns: `repeat(${numCols}, ${CELL}px)`,
+                  gridTemplateColumns: `repeat(${numCols}, ${cellSize}px)`,
                   gap: GAP,
                   height: LABEL_H,
                 }}
@@ -179,9 +183,9 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
               <div
                 className="grid"
                 style={{
-                  gridTemplateRows: `repeat(7, ${CELL}px)`,
+                  gridTemplateRows: `repeat(7, ${cellSize}px)`,
                   gridAutoFlow: 'column',
-                  gridAutoColumns: `${CELL}px`,
+                  gridAutoColumns: `${cellSize}px`,
                   gap: GAP,
                 }}
                 role="img"
@@ -198,7 +202,8 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
                     <div
                       key={cell.date}
                       title={cell.count > 0 ? `${cell.date} · ${cell.count} 次提问` : `${cell.date} · 无提问`}
-                      className={`w-[10px] h-[10px] rounded-[2px] cursor-help transition-transform hover:scale-125 ${LEVEL_CLASSES[level]}${
+                      style={{ width: cellSize, height: cellSize }}
+                      className={`rounded-[2px] cursor-help transition-transform hover:scale-125 ${LEVEL_CLASSES[level]}${
                         isToday ? ' ring-1 ring-inset ring-[rgb(var(--content-secondary))]' : ''
                       }`}
                     />
@@ -207,6 +212,20 @@ export function ActivityHeatmap({ weeks = 52 }: ActivityGridProps) {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* 底行: 左标题(总活跃天数/连续) + 右图例(少→多);移出滚动区,横向滚动时保持固定 */}
+        <div className="flex items-center justify-between" style={{ height: LABEL_H }}>
+          <span className="text-[10px] text-content-secondary whitespace-nowrap">
+            {isYear ? '过去一年' : `近 ${weeks} 周`} · {data.totalDays} 天活跃{streakStr}
+          </span>
+          <span className="flex items-center gap-1 text-[9px] text-content-muted whitespace-nowrap">
+            少
+            {LEVEL_CLASSES.map((cls, i) => (
+              <span key={i} className={`inline-block w-2 h-2 rounded-[2px] ${cls}`} />
+            ))}
+            多
+          </span>
         </div>
       </div>
     </div>

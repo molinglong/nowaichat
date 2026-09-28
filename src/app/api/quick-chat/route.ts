@@ -109,7 +109,7 @@ export async function POST(req: Request) {
         break
       }
     }
-    if (!modelId) modelId = models[0]?.id || "gpt-4o" // 全无 Key:保留原行为,由下方分支给出明确报错
+    if (!modelId) modelId = models[0]?.id || "gpt-5.4-mini" // 全无 Key:保留原行为,由下方分支给出明确报错
   }
 
   let modelDef: ModelDefinition

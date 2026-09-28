@@ -45,9 +45,9 @@ export const writeCodeToolSchema = z.object({
     .describe("完整、可直接运行的代码正文；不要包含 Markdown 代码围栏（```），不要包含任何解释文字"),
 })
 
-/** 工具输出（卡片据 ok 分支渲染成功/失败） */
+/** 工具输出（卡片据 ok 分支渲染成功/失败）；warnings 为语法检查的软警告（不阻塞落库） */
 export type WriteCodeToolOutput =
-  | { ok: true; docId: string; title: string; language: string; charCount: number }
+  | { ok: true; docId: string; title: string; language: string; charCount: number; warnings?: string[] }
   | { ok: false; message: string }
 
 /** 未知形状收窄：卡片/历史回放时判断 output 是否为成功的代码文档创建结果 */
@@ -70,4 +70,6 @@ export const WRITE_CODE_TOOL_PROMPT: string = [
   "- 「人读的文字成品」（小说/故事/作文/演讲稿/公众号文章/小红书笔记）走写作画布的 write_document，不要用本工具",
   "- 问答/解释里附带的几行示例代码片段直接聊天里用代码块回复即可，不必建文档；用户明确要一份可运行的完整代码时才调用",
   "- 需要把文件写入用户本地工作区磁盘时（桌面客户端），用 local_file 工具；本工具只创建编辑器文档（用户可在编辑器里导出到工作区），未打开代码面板时也照常调用，前端会自动打开面板",
+  "- 提交时服务端会做基础语法检查（TS/JS/JSON/HTML 等）：语法错误会被拒绝并附具体行列位置，收到此类失败请修正后重新调用本工具，不要改把代码贴进聊天正文；结果里带 warnings 时说明代码已保存但有可疑之处，可顺手修正",
+  "- 交付纪律：HTML 文档写完后先用 preview_check 验证再收尾（报错就修，修完复查）；桌面端 exec 可用时可运行代码自查。未验证前不要向用户声称「已完成且正常」，验证失败要如实说明",
 ].join("\n")

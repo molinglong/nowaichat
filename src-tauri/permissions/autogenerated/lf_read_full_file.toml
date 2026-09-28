@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lf-read-full-file"
+description = "Enables the lf_read_full_file command without any pre-configured scope."
+commands.allow = ["lf_read_full_file"]
+
+[[permission]]
+identifier = "deny-lf-read-full-file"
+description = "Denies the lf_read_full_file command without any pre-configured scope."
+commands.deny = ["lf_read_full_file"]

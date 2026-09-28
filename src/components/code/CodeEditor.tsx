@@ -14,19 +14,24 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { Check, Eye, Loader2, Minus, Plus, Sparkles, X } from 'lucide-react'
+import { Check, CircleAlert, Eye, Loader2, Minus, Plus, Sparkles, X } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/query/fetcher'
 import { queryKeys } from '@/lib/query/keys'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
-import { useChatStore } from '@/store/chat-store'
+import { useChatStore, liveCodeDoc } from '@/store/chat-store'
 import {
   EDITOR_OPTIONS,
   defineThemes,
   AICHATT_LIGHT_THEME,
   AICHATT_DARK_THEME,
 } from '@/lib/monaco-shared'
+import {
+  buildPreviewSrcWithCapture,
+  PREVIEW_CAPTURE_SOURCE,
+  type PreviewCheckToolOutput,
+} from '@/lib/ai/preview-check-tool'
 import type { CodeDocFull, CodeDocSummary } from './types'
 
 /**
@@ -108,17 +113,19 @@ export function CodeEditor({ docId }: CodeEditorProps) {
   // 视图态仅内存,切走再切回回到代码视图(编辑器是主工作区)
   const [viewMode, setViewMode] = useState<'code' | 'preview'>('code')
   const [zoom, setZoom] = useState(1)
-  // 预览内容防抖跟随编辑器(400ms):打字不卡 iframe 重渲染,停手即见效果
+  // 预览内容防抖跟随编辑器(400ms):打字不卡 iframe 重渲染,停手即见效果。
+  // srcDoc 统一经 buildPreviewSrcWithCapture 包一层:注入 console/脚本错误捕获
+  // (postMessage 上报,父页面 pushPreviewError 入缓冲)——捕获是被动旁路,不改变页面逻辑
   const [previewSrc, setPreviewSrc] = useState('')
   useEffect(() => {
     if (viewMode !== 'preview') return
-    const t = setTimeout(() => setPreviewSrc(latestRef.current.content), 400)
+    const t = setTimeout(() => setPreviewSrc(buildPreviewSrcWithCapture(latestRef.current.content)), 400)
     return () => clearTimeout(t)
   }, [content, viewMode])
   // 切进预览或换文档时:立即取当前全文,并重置缩放(不同页面长宽差异大,残留易误判渲染异常)
   useEffect(() => {
     if (viewMode === 'preview') {
-      setPreviewSrc(latestRef.current.content)
+      setPreviewSrc(buildPreviewSrcWithCapture(latestRef.current.content))
       setZoom(1)
     }
   }, [viewMode, docId])
@@ -127,6 +134,79 @@ export function CodeEditor({ docId }: CodeEditorProps) {
   useEffect(() => {
     if (!previewable && viewMode === 'preview') setViewMode('code')
   }, [previewable, viewMode])
+
+  // ── 预览错误捕获(preview_check 验证 + 工具条错误角标共用)──
+  const previewErrors = useChatStore((s) => s.previewErrors)
+  const docPreviewErrors =
+    previewErrors && previewErrors.docId === docId ? previewErrors.items : null
+  // 父页面收口:iframe 内注入脚本经 postMessage 上报错误(sandbox 无 allow-same-origin,
+  // 子页面摸不到父页面,只能 postMessage;按 source 字段过滤无关 message)
+  const pushPreviewError = useChatStore((s) => s.pushPreviewError)
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      const d = e.data as { source?: unknown; text?: unknown } | null
+      if (!d || d.source !== PREVIEW_CAPTURE_SOURCE || typeof d.text !== 'string') return
+      pushPreviewError(latestRef.current.docId, d.text.slice(0, 500))
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [pushPreviewError])
+
+  // ── AI 预览检查(preview_check 工具的执行体)──
+  // ChatPanel.onToolCall 写入请求 → 这里认领:等文档就绪 → 切预览立即渲染 →
+  // 静默期收集错误(最少观察 3s,之后 2.5s 无新错误或总时长 8s 即收口) → resolve 回填
+  const previewCheckRequest = useChatStore((s) => s.previewCheckRequest)
+  useEffect(() => {
+    if (!previewCheckRequest || previewCheckRequest.docId !== docId) return
+    let cancelled = false
+    void (async () => {
+      const finish = (output: PreviewCheckToolOutput) => {
+        if (!cancelled) useChatStore.getState().finishPreviewCheck(output)
+      }
+      try {
+        if (!previewable) {
+          finish({
+            ok: false,
+            message: `该文档语言为 ${latestRef.current.language},暂不支持预览验证(仅 html 可渲染预览)`,
+          })
+          return
+        }
+        // 面板刚被拉起时 GET /api/code/docs/[id] 可能还在途中,等内容就绪(最多 5s)
+        for (let i = 0; i < 50; i++) {
+          if (cancelled || latestRef.current.content) break
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        if (cancelled) return
+        useChatStore.getState().clearPreviewErrors(docId)
+        setViewMode('preview')
+        // 立即渲染,不等 400ms 防抖(检查是同步节奏,慢渲染会吃掉观察窗口)
+        setPreviewSrc(buildPreviewSrcWithCapture(latestRef.current.content))
+        const start = Date.now()
+        let lastErrorAt = start
+        let items: string[] = []
+        while (!cancelled) {
+          await new Promise((r) => setTimeout(r, 250))
+          if (cancelled) return
+          const buf = useChatStore.getState().previewErrors
+          const now = Date.now()
+          if (buf && buf.docId === docId && buf.items.length > items.length) {
+            items = buf.items
+            lastErrorAt = now
+          }
+          const elapsed = now - start
+          if (elapsed >= 8_000) break
+          if (elapsed >= 3_000 && now - lastErrorAt >= 2_500) break
+        }
+        if (cancelled) return
+        finish({ ok: true, docId, errorCount: items.length, errors: items.slice(0, 20) })
+      } catch (err) {
+        finish({ ok: false, message: `预览检查执行失败:${String(err)}` })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [previewCheckRequest, docId, previewable])
 
   // Monaco 深浅主题跟随 html.dark(globals.css 主题类),MutationObserver 感知切换
   const [dark, setDark] = useState(false)
@@ -141,6 +221,9 @@ export function CodeEditor({ docId }: CodeEditorProps) {
 
   useEffect(() => {
     latestRef.current = { docId, title, content, language }
+    // 同步镜像给 code_edit 片段替换(拿含未保存改动的实时值;非响应式,不触发重渲染)
+    liveCodeDoc.docId = docId
+    liveCodeDoc.content = content
   }, [docId, title, content, language])
 
   // ── 保存 ──
@@ -276,8 +359,8 @@ export function CodeEditor({ docId }: CodeEditorProps) {
     toast.info('已放弃 AI 修改', { title: '代码编辑器' })
   }, [setCodePendingDiff])
 
-  /** 让 AI 改这段:取 Monaco 选区文本(无选区取全文),prompt 指令,派发事件给 ChatPanel */
-  const handleAskAi = useCallback(() => {
+  /** 派发「让 AI 改」请求(取 Monaco 选区文本,无选区取全文)。手动入口与预览报错回喂共用 */
+  const dispatchAskAi = useCallback((instruction: string) => {
     const editor = editorRef.current
     let selection = ''
     if (editor) {
@@ -286,19 +369,36 @@ export function CodeEditor({ docId }: CodeEditorProps) {
         selection = editor.getModel()?.getValueInRange(sel) ?? ''
       }
     }
-    const full = latestRef.current.content
-    const instruction = window.prompt('告诉 AI 怎么改这段代码（可指明选中区域要怎么处理）')
-    if (instruction === null) return
     const payload = {
       docId: latestRef.current.docId,
       language: latestRef.current.language,
-      code: full,
+      code: latestRef.current.content,
       selection: selection || '',
       instruction,
     }
     window.dispatchEvent(new CustomEvent('aichatt:code-ask-ai', { detail: payload }))
-    toast.info('已把代码交给 AI,修改建议出来后在此审查', { title: '代码编辑器' })
   }, [])
+
+  /** 让 AI 改这段:prompt 收指令,派发事件给 ChatPanel */
+  const handleAskAi = useCallback(() => {
+    const instruction = window.prompt('告诉 AI 怎么改这段代码（可指明选中区域要怎么处理）')
+    if (instruction === null) return
+    dispatchAskAi(instruction)
+    toast.info('已把代码交给 AI,修改建议出来后在此审查', { title: '代码编辑器' })
+  }, [dispatchAskAi])
+
+  /** 预览报错回喂:把捕获的错误清单作为指令发给 AI(复用 code-ask-ai 通道) */
+  const handleSendPreviewErrors = useCallback(() => {
+    const items = docPreviewErrors
+    if (!items || items.length === 0) return
+    dispatchAskAi(
+      `预览发现以下报错,请修复导致问题的部分(保持其余代码稳定):\n${items
+        .slice(0, 10)
+        .map((t, i) => `${i + 1}. ${t}`)
+        .join('\n')}`
+    )
+    toast.info('已把报错交给 AI,修复建议出来后在此审查采纳', { title: '代码编辑器' })
+  }, [docPreviewErrors, dispatchAskAi])
 
   // ── 加载/错误态 ──
   if (loadState === 'loading') {
@@ -436,11 +536,22 @@ export function CodeEditor({ docId }: CodeEditorProps) {
           />
         ) : viewMode === 'preview' && previewable ? (
           <div className="absolute inset-0 flex flex-col">
-            {/* 预览工具条:缩放(与 ChatPreviewPanel 同规格) */}
+            {/* 预览工具条:错误角标(点=回喂 AI 修复) + 缩放(与 ChatPreviewPanel 同规格) */}
             <div className="shrink-0 flex items-center gap-1.5 h-8 px-3 border-b border-line bg-surface-muted/40">
               <span className="text-[10px] text-content-muted font-mono select-none">
                 {PREVIEWABLE_LANGUAGES[language]} · 沙箱隔离 · 编辑实时同步
               </span>
+              {docPreviewErrors && docPreviewErrors.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSendPreviewErrors}
+                  title="把以下报错交给 AI 修复"
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-red-500 dark:text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <CircleAlert className="w-3 h-3" />
+                  {docPreviewErrors.length} 个报错
+                </button>
+              )}
               <div className="flex-1" />
               <button
                 type="button"
