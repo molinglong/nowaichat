@@ -88,7 +88,7 @@ export function getCustomModelProtocol(cm: Pick<CustomModelRow, "modelId" | "bas
   return "chat"
 }
 
-function normalizeCustomBaseURL(value: string | undefined) {
+export function normalizeCustomBaseURL(value: string | undefined) {
   if (!value || value.trim() === "") return undefined
   const input = value.trim().replace(/\/+$/, "")
   try {
