@@ -126,10 +126,13 @@ export async function middleware(req: NextRequest) {
   }
 
   // Public routes — always allow
+  // /api/v1/* = 对外模型网关(如 ACode),鉴权在路由内部用 x-api-key 令牌完成
+  // (机器对机器调用没有会话 cookie,走的是自己的令牌体系,不走 nextauth)
   const isPublic =
     pathname.startsWith("/login") ||
     pathname.startsWith("/register") ||
     pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/v1/") ||
     pathname === "/test-toast"
 
   if (isPublic) {
