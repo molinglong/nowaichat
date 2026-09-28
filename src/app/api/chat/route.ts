@@ -20,10 +20,14 @@ import { generateConversationTitle } from "@/lib/ai/title-generator"
 import { getStylePromptFromPreset, STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style"
 import { getMaskById } from '@/lib/ai/mask-resolve'
 import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
+import { buildMatchedSettingsBlock } from "@/lib/write/work-settings"
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
 import { KNOWLEDGE_TOOL_NAME, KNOWLEDGE_SUBJECT_LABELS } from "@/lib/ai/knowledge-tool"
 import { createKnowledgeTool, hasKnowledgeChunks } from "@/lib/ai/knowledge-tool-server"
+import { PRACTICE_TOOL_NAME, RECORD_TOOL_NAME } from "@/lib/ai/practice-tool"
+import { createPracticeTool, createRecordPracticeTool } from "@/lib/ai/practice-tool-server"
+import { hasQuestions } from "@/lib/study/question-bank"
 import { CLARIFY_TOOL_NAME, CLARIFY_TOOL_PROMPT, createClarifyTool } from "@/lib/ai/clarify"
 import {
   LOCAL_FILE_TOOL_NAME,
@@ -36,6 +40,16 @@ import {
   createCodeEditTool,
 } from "@/lib/ai/code-edit-tool"
 import {
+  PREVIEW_CHECK_TOOL_NAME,
+  PREVIEW_CHECK_TOOL_PROMPT,
+  createPreviewCheckTool,
+} from "@/lib/ai/preview-check-tool"
+import {
+  PROJECT_CHECK_TOOL_NAME,
+  PROJECT_CHECK_TOOL_PROMPT,
+  createProjectCheckTool,
+} from "@/lib/ai/project-check-tool"
+import {
   SETTINGS_TOOL_NAME,
   SETTINGS_TOOL_PROMPT,
   SETTINGS_DISABLED_PROMPT,
@@ -47,6 +61,11 @@ import {
   createProviderModelTool,
 } from "@/lib/ai/provider-model-tool"
 import { buildProviderModelSection } from "@/lib/ai/provider-model-tool.server"
+import {
+  ADD_CUSTOM_MODEL_TOOL_NAME,
+  createCustomModelTool,
+} from "@/lib/ai/custom-model-tool"
+import { buildCustomModelSection } from "@/lib/ai/custom-model-tool.server"
 import {
   MEMORY_TOOL_NAME,
   MEMORY_TOOL_PROMPT,
@@ -118,6 +137,7 @@ interface ChatRequestBody {
   settingsSnapshot?: Partial<Record<string, string>> // 客户端设置快照（AI 设置控制，executor.buildSettingsSnapshot 上报）
   currentWriteDocId?: string // 写作画布面板当前打开的文档 id（注入提示词与 append 续写）
   localFilesEnabled?: boolean // 客户端(Tauri)本地文件能力:仅桌面端且用户开关开启时上报 true,服务端据此注入 local_file 工具
+  workspaceContext?: string // 工作区快照(客户端组装:目录树+AGENT.md 约定,≤8KB):仅 local_file 注入时采纳,注入 system
   codePanelOpen?: boolean // 客户端上报:代码编辑器面板是否打开,服务端据此注入 code_edit 工具
 }
 
@@ -642,6 +662,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     // 服务商模型管理(添加/移除/隐藏模型):与设置控制同开关同三道闸门。
     // 只注入规则+快照,真实写入由前端确认卡片完成(见 ProviderModelCard)。
     systemParts.push(await buildProviderModelSection(userId))
+    // 中转站/自定义模型(add_custom_model):同开关同闸门;AI 只起草端点与模型名,
+    // API Key 由用户在确认卡片里粘贴——Key 不经过模型请求也不进聊天记录。
+    systemParts.push(await buildCustomModelSection(userId))
   } else if (!groupId && !isEphemeral) {
     systemParts.push(SETTINGS_DISABLED_PROMPT)
   }
@@ -665,15 +688,51 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 写作文档:非临时非对比模式注入(正文写库,写入受临时隔离);mask 无用户开关,
   // 模型仅在用户要求成篇幅正文时调用,产出进 WriteDoc 表与 /write 互通。
   if (!isEphemeral && !groupId) {
-    // 面板打开时附带当前文档(校验属主),AI 可用 append 动作续写这篇
+    // 面板打开时附带当前文档(校验属主),AI 可用 append 动作续写这篇;
+    // 文档归属作品时追加设定注入(命中式,见下)
     let currentDocHint = ""
     if (currentWriteDocId) {
+      const openDocId: string = currentWriteDocId
       const curDoc = await prisma.writeDoc.findFirst({
-        where: { id: currentWriteDocId, userId },
-        select: { title: true },
+        where: { id: openDocId, userId },
+        select: { title: true, workId: true },
       })
       if (curDoc) {
-        currentDocHint = `\n- 用户当前在写作画布打开的文档「${curDoc.title}」(id=${currentWriteDocId})。用户说续写/接着写,往这篇补充/修改这篇时，这是对该文档的编辑请求，必须调用 write_document 的 action=append 传该 id，content 只写新增正文(与原文自然衔接，不要重复原文)，不要把正文直接回复在聊天里；创作全新内容仍用 create`
+        currentDocHint = `\n- 用户当前在写作画布打开的文档「${curDoc.title}」(id=${openDocId})。用户说续写/接着写,往这篇补充/修改这篇时，这是对该文档的编辑请求，必须调用 write_document 的 action=append 传该 id，content 只写新增正文(与原文自然衔接，不要重复原文)，不要把正文直接回复在聊天里；创作全新内容仍用 create`
+      }
+
+      // 作品设定注入(聊天为「命中式」档):大纲恒注入 + 标题/别名命中最近消息或正文尾部的条目;
+      // 零命中只给一行条目索引,避免每轮无脑灌满预算 —— 策略细节见 lib/write/work-settings.ts
+      if (curDoc?.workId) {
+        const work = await prisma.work.findFirst({
+          where: { id: curDoc.workId, userId },
+          select: { id: true, title: true, description: true, settingsEnabled: true },
+        })
+        if (work?.settingsEnabled) {
+          const entries = await prisma.workSetting.findMany({
+            where: { workId: work.id, enabled: true },
+            select: { id: true, category: true, title: true, aliases: true, content: true, enabled: true },
+            orderBy: { sort: "asc" },
+          })
+          if (entries.length > 0) {
+            // 命中文本 = 最近 6 条消息 + 当前文档尾部(用户只说"继续写"时,人名多半只在正文里)
+            const docTail = await prisma.writeDoc.findFirst({
+              where: { id: openDocId, userId },
+              select: { content: true },
+            })
+            const recentText = Array.isArray(rawMessages)
+              ? (rawMessages as IncomingMessage[]).slice(-6).map(extractTextContent).join("\n")
+              : ""
+            const matchText = `${recentText}\n${(docTail?.content ?? "").slice(-1500)}`
+            const block = buildMatchedSettingsBlock(work, entries, matchText)
+            if (block.text) {
+              systemParts.push(block.text)
+              console.log(
+                `[chat] work settings injected: work=${work.id} entries=${block.included}/${block.total} chars=${block.chars}`
+              )
+            }
+          }
+        }
       }
     }
     systemParts.push(WRITE_DOC_TOOL_PROMPT + currentDocHint)
@@ -703,6 +762,21 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
   // Style prompt - 按 preset 渲染(新版)
   systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
+
+  // 公式书写规范: 全局生效——模型(尤其中文系)常用 Unicode 拼凑数学式(a^m·a^n、√2、≠),
+  // KaTeX 只认 LaTeX 定界符,这些写法被原样当字符显示,用户侧表现就是"公式全是乱码"。
+  // 约束源头优于前端兜底: 启发式转换会误伤 2^10 / C++ / 版本号等正文片段,且本渲染管线
+  // 已有定界符归一化 + 块级提升两层预处理,不宜再叠高误伤层。
+  systemParts.push([
+    '## 数学公式书写规范',
+    '界面会把 LaTeX 渲染成数学排版。所有数学表达式一律用 LaTeX 书写：',
+    '- 行内公式用 $...$；独立成行的公式用 $$...$$ 单独占行，如 $x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$',
+    '- 幂与下标用花括号包裹多字符内容：$a^{m+n}$、$a^{-n}$、$x_1$',
+    '- 乘号写 \\cdot 或 \\times，根号写 \\sqrt{}，分数写 \\frac{}{}，不等号写 \\neq、\\leq、\\geq、\\approx',
+    '- 多个公式并列时逐行呈现（每式单独一行或用列表），不要用空格挤在同一行',
+    '- 以下写法会被原样显示成乱码，禁止使用：a^m·a^n = a^(m+n)、√2、x≠0、1/a^n',
+    '- 代码块与代码示例保持原样，不套公式规范',
+  ].join('\n'))
 
   // Image generation — tell the model how to request images
   // 非视觉模型收到图片附件时移除生图能力提示,避免模型被"图片"字眼诱导误触发生成。
@@ -777,6 +851,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   const settingsTool = aiControlEnabled && !isEphemeral && !groupId ? createSettingsTool() : null
   const providerModelTool =
     aiControlEnabled && !isEphemeral && !groupId ? createProviderModelTool() : null
+  // 中转站/自定义模型:AI 只起草配置,Key 由用户在卡片粘贴(同设置控制开关)
+  const customModelTool =
+    aiControlEnabled && !isEphemeral && !groupId ? createCustomModelTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
@@ -807,6 +884,20 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   if (localFileTool) {
     systemParts.push(LOCAL_FILE_TOOL_PROMPT)
     console.log(`[chat] local_file tool attached (desktop client, user ${userId})`)
+    // 工作区快照(仿 settingsSnapshot 的客户端上报→服务端 buildSection 模式):
+    // 目录树 + AGENT.md 约定,模型省去每会话重复 overview。与 local_file 同源注入——
+    // 未授权工作区/网页端不传,快照可能滞后,注入段显式声明「改文件前先核实」。
+    const snapshot = body.workspaceContext
+    if (typeof snapshot === "string" && snapshot.trim()) {
+      const clamped = snapshot.length > 8192 ? snapshot.slice(0, 8192) + "\n…(已截断)" : snapshot
+      systemParts.push(
+        "## 工作区快照（客户端上报,可能滞后）\n" +
+          "以下是用户当前工作区的目录树与 AGENT.md 项目约定,供快速了解项目结构。注意:\n" +
+          "- 快照是最近一次上报,可能滞后于磁盘现状——引用具体文件内容前,先用 local_file 的 read/search 核实;\n" +
+          "- 用户尚未建立项目约定时,可建议把稳定的项目规范写入工作区根 AGENT.md(下次会话自动注入)。\n\n" +
+          clamped
+      )
+    }
   }
 
   // 代码编辑器工具(无 execute:操作的是 DB 里的 CodeDoc + 前端 Diff 审查,不碰磁盘)。
@@ -818,6 +909,24 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   if (codeEditTool) {
     systemParts.push(CODE_EDIT_TOOL_PROMPT)
     console.log(`[chat] code_edit tool attached (user ${userId})`)
+  }
+
+  // 预览验证工具(无 execute:前端渲染 iframe 预览收集 console/脚本错误回填)。
+  // 与 write_code 同闸门(普通聊天恒挂载)——它是 write_code 的验证闭环下半场:
+  // 模型写完 HTML 主动自查,报错回来自修。执行在前端(不依赖 Tauri,Web 端可用)。
+  const previewCheckTool = !isEphemeral && !groupId ? createPreviewCheckTool() : null
+  if (previewCheckTool) {
+    systemParts.push(PREVIEW_CHECK_TOOL_PROMPT)
+  }
+
+  // 项目检查工具(无 execute:前端经 Tauri lf_exec 在工作区根跑 tsc/eslint/测试并回填)。
+  // 闸门与 local_file 完全同源(依赖桌面端 lf_exec,Web 端无从执行)——直接复用其判据:
+  // 它是 local_file 写操作的"验收闭环下半场",模型改完工程文件必须跑绿才算完成;
+  // 配套收工验收门在 ChatPanel(verify-gate.ts),服务端只负责把工具和规则注入。
+  const projectCheckTool = localFileTool ? createProjectCheckTool() : null
+  if (projectCheckTool) {
+    systemParts.push(PROJECT_CHECK_TOOL_PROMPT)
+    console.log(`[chat] project_check tool attached (desktop client, user ${userId})`)
   }
 
   // 课本知识库检索:半绑定(用户名下有知识切块才注入,物理级闸门,无课本则工具不存在);
@@ -838,6 +947,24 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   } catch (err) {
     console.error("[chat] Failed to check knowledge chunks:", err)
   }
+
+  // 题库练题:双工具(practice_questions 抽题 / record_practice 判分回传)。
+  // 用户名下有题目才注入(物理级闸门);抽题只读但判分回传要写错题本(StudyNote),
+  // 故临时模式/对比模式整体不挂载(与其它写入类工具同闸门)。
+  let practiceTool: ReturnType<typeof createPracticeTool> | null = null
+  let recordPracticeTool: ReturnType<typeof createRecordPracticeTool> | null = null
+  if (!isEphemeral && !groupId) {
+    try {
+      if (await hasQuestions(userId)) {
+        practiceTool = createPracticeTool(userId)
+        recordPracticeTool = createRecordPracticeTool(userId)
+        console.log(`[chat] practice tools attached (user ${userId})`)
+      }
+    } catch (err) {
+      console.error("[chat] Failed to check question bank:", err)
+    }
+  }
+
   if (searchTool) {
     const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
@@ -863,6 +990,61 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       '- 给用户出题(练习/变式/测验)时输出试卷块协议(:::choice/:::question 题块+紧跟 :::answer 答案块,答案块以**答案：X**」开头,渲染时答案默认折叠,用户先做后看;出题前若知识库覆盖该学科,先检索相关章节的【例题】【练习】举一反三,题块首行写检索到的真实出处「参考教材 §x.x 例N·学科」;知识库没有该学科课本(如语文),出处改标课文篇目「参考篇目名·学科」,用你确知的教材篇目,不得编造章节号或篇名',
       `闲聊、翻译、写代码、通用常识不需要调用。${knowledgeSubjectHint}回答时优先引用课本原文并标注来源(书名+章节);课本原文与你的知识冲突时,以课本为准。`,
     ].join('\n'))
+  }
+
+  // 题库练题能力段:触发清单与流程纪律写在这里(模型自主决策依据);
+  // 「不提前给答案」在工具 note 里再强调一次(答案随工具结果进了模型上下文,防泄题)
+  if (practiceTool) {
+    systemParts.push([
+      '## 题库练题能力',
+      '你拥有 practice_questions(从题库抽题)与 record_practice(判分回传)工具。当用户想练题/刷题/被考时(如「练几道」「刷题」「考考我」「来几道选择题」「做做2022年的真题」),**主动调用 practice_questions** 从题库抽题,不要自己编题。',
+      '- 抽题条件按用户要求传:考点(topic)/年份(year)/难度(difficulty)/题型(kind)/数量(count,默认3最多5);用户没提的维度不传,让服务端随机。',
+      '- 抽到题后严格按工具 note 的呈现规范:逐字转写题干与选项、题块首行写出处行「参考 题库 …」;**绝不提前输出答案、解析或 :::answer 块**。',
+      '- 用户作答后逐题判分对照,再调用 record_practice 批量上报(questionId 原样用抽题返回的 id;答错的题必传 userAnswer)。答错的题会自动收进错题本。',
+      '- 上报后如实告知对错结果,并对每道错题给出正确解法讲解。',
+      '用户要你现场出新题(不是从题库抽题)时,仍走出题协议(:::choice/:::question+紧跟 :::answer),不用这两个工具;用户说「练几道」这类从题库练的语义才用。',
+    ].join('\n'))
+  }
+
+  // 历史回放兜底: 前端历史消息只重建 text/reasoning(工具明细在 metadata,见 toUIMessage),
+  // 刷新/切会话后再作答时模型看不到 practice_questions 的工具结果 → 拿不到题目 id,
+  // 判分回传会断。这里把「最近一条 assistant 消息」里的抽题明细重新注入 system,
+  // 保证「答错自动进错题本」不因回放而失效;只看最后一条,避免陈旧抽题记录长期占用上下文。
+  if (practiceTool) {
+    type ToolCallsMeta = { kind?: string; toolCalls?: Array<{ tool?: string; output?: unknown }> }
+    type PendingItem = { id: string; stem: string; answer: string }
+    let pending: PendingItem[] | null = null
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      const m = rawMessages[i]
+      if (m.role !== "assistant") continue
+      const meta = m.metadata as ToolCallsMeta | undefined
+      if (meta?.kind === "tool_calls" && Array.isArray(meta.toolCalls)) {
+        for (let j = meta.toolCalls.length - 1; j >= 0; j--) {
+          if (meta.toolCalls[j].tool !== PRACTICE_TOOL_NAME) continue
+          const items = (meta.toolCalls[j].output as { items?: Array<{ id?: unknown; stem?: unknown; answer?: unknown }> } | undefined)?.items
+          if (Array.isArray(items)) {
+            pending = items
+              .filter((it) => typeof it?.id === "string" && it.id)
+              .map((it) => ({
+                id: it.id as string,
+                stem: String(it.stem ?? "").replace(/\s+/g, " ").slice(0, 80),
+                answer: String(it.answer ?? "").replace(/\s+/g, " ").slice(0, 120),
+              }))
+          }
+          break
+        }
+      }
+      break
+    }
+    if (pending?.length) {
+      systemParts.push([
+        '## 上次题库抽题记录（判分回传用）',
+        '按时间顺序,最近一次 assistant 回合从题库抽出了以下题目(用户可能正在作答,或正在补充作答):',
+        ...pending.map((it, k) => `${k + 1}. id=${it.id} | 答案=${it.answer} | 题干:${it.stem}`),
+        '若用户本轮是在回答这些题目:判分后**必须**用上面的 id 调 record_practice 上报(原样使用,不得编造);若用户还没作答或聊的是别的,忽略本段即可。',
+      ].join('\n'))
+      console.log(`[chat] practice pending re-injected (${pending.length} items)`)
+    }
   }
   console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${engine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
 
@@ -1099,16 +1281,19 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     (cmSupportsReasoning || /dashscope\.aliyuncs\.com/i.test(cmBaseURL))
       ? { providerOptions: { openai: { reasoningEffort: "medium" } } }
       : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || providerModelTool || memoryTool || maskGeneratorTool || knowledgeTool || todoTool || writeDocTool || writeCodeTool || tripTool || localFileTool || mcpToolCount > 0)
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || providerModelTool || memoryTool || maskGeneratorTool || knowledgeTool || practiceTool || todoTool || writeDocTool || writeCodeTool || tripTool || localFileTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
             ...(mcpToolCount > 0 && mcp ? mcp.tools : {}),
             ...(urlReaderTool ? { [URL_READER_TOOL_NAME]: urlReaderTool } : {}),
             ...(knowledgeTool ? { [KNOWLEDGE_TOOL_NAME]: knowledgeTool } : {}),
+            ...(practiceTool ? { [PRACTICE_TOOL_NAME]: practiceTool } : {}),
+            ...(recordPracticeTool ? { [RECORD_TOOL_NAME]: recordPracticeTool } : {}),
             ...(clarifyTool ? { [CLARIFY_TOOL_NAME]: clarifyTool } : {}),
             ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
             ...(providerModelTool ? { [PROVIDER_MODEL_TOOL_NAME]: providerModelTool } : {}),
+            ...(customModelTool ? { [ADD_CUSTOM_MODEL_TOOL_NAME]: customModelTool } : {}),
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
@@ -1117,22 +1302,32 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(tripTool ? { [TRIP_TOOL_NAME]: tripTool } : {}),
             ...(localFileTool ? { [LOCAL_FILE_TOOL_NAME]: localFileTool } : {}),
             ...(codeEditTool ? { [CODE_EDIT_TOOL_NAME]: codeEditTool } : {}),
+            ...(previewCheckTool ? { [PREVIEW_CHECK_TOOL_NAME]: previewCheckTool } : {}),
           },
         }
       : {}),
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
-    // local_file 无服务端 execute(文件操作在用户本地机器):本步一旦发出 local_file 调用
-    // 立即停步,等前端(Tauri)执行回填后经 sendAutomaticallyWhen 续跑;否则多步循环会带着
-    // "悬空 tool-call"继续步进——与 MCP 等有 execute 工具混跑时,模型拿不到文件结果就给出
-    // 半截正文,前端回填后续跑判据又被正文挡住,流程死停(实测 hono 分析中途停)。
+    // local_file / code_edit / preview_check 均为无服务端 execute 的客户端工具(文件操作在
+    // 用户本地机器 / Diff 审查与预览验证在前端):本步一旦发出任一调用立即停步,等前端
+    // 执行回填后经 sendAutomaticallyWhen 续跑;否则多步循环会带着"悬空 tool-call"继续
+    // 步进——模型拿不到结果就给出半截正文,前端回填后续跑判据又被正文挡住,流程死停。
+    // 步数预算:编码场景(代码面板开/本地文件授权,典型链路"读→改→跑→修→验证")放宽到
+    // 10 步,普通对话维持 5 步(ZCode 经验:隔离边界给硬上限,主链路预算从宽)。
     stopWhen: ({ steps }) => {
-      if (steps.length >= 5) return true
+      const maxSteps =
+        body.codePanelOpen === true || body.localFilesEnabled === true ? 10 : 5
+      if (steps.length >= maxSteps) return true
       const last = steps[steps.length - 1]
       return !!last?.content?.some(
         (p) =>
           (p as { type?: string; toolName?: string }).type === "tool-call" &&
-          (p as { toolName?: string }).toolName === LOCAL_FILE_TOOL_NAME
+          [
+            LOCAL_FILE_TOOL_NAME,
+            CODE_EDIT_TOOL_NAME,
+            PREVIEW_CHECK_TOOL_NAME,
+            PROJECT_CHECK_TOOL_NAME,
+          ].includes((p as { toolName?: string }).toolName as string)
       )
     },
     // A 流式恢复: 累积快照文本并节流(600ms)写库。

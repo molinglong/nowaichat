@@ -68,8 +68,18 @@ export const localFileInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      "exec 时要执行的 PowerShell 命令(工作目录为工作区根,输出上限 8KB,超时 30 秒)。" +
+      "exec 时要执行的 PowerShell 命令(工作目录为工作区根,输出上限 32KB,超出截断)。" +
         "只读白名单命令会自动执行,其余命令会弹确认卡等待用户批准。其余 action 忽略此字段。"
+    ),
+  timeout_ms: z
+    .number()
+    .int()
+    .positive()
+    .max(600_000)
+    .optional()
+    .describe(
+      "exec 可选:超时毫秒数(范围 1000~600000,缺省 30000)。构建/安装/长脚本等任务请预估时长传入" +
+        "(如 120000);超时会被强制终止并提示重试。其余 action 忽略此字段。"
     ),
   offset: z
     .number()
@@ -184,16 +194,19 @@ export interface LocalFileView {
   pattern: string
   /** search 的文件后缀过滤(如 "*.ts") */
   glob: string
+  /** exec 的超时毫秒(模型未传/非法时为 undefined,执行层回落默认 30s) */
+  timeoutMs?: number
 }
 
 /**
- * 卡片决策回调的载荷:动作类型 + create 覆盖时的写入内容 / exec 的命令文本。
+ * 卡片决策回调的载荷:动作类型 + create 覆盖时的写入内容 / exec 的命令文本与超时。
  * ChatPanel 的 handleLocalFileDecision 据此分派执行。
  */
 export interface LocalFileDecision {
   action: "delete" | "create" | "exec"
   content?: string
   command?: string
+  timeoutMs?: number
 }
 
 const ACTIONS: readonly LocalFileAction[] = [
@@ -234,6 +247,7 @@ export function toLocalFileView(input: unknown): LocalFileView {
     command?: unknown
     pattern?: unknown
     glob?: unknown
+    timeout_ms?: unknown
   }
   const action: LocalFileView["action"] = ACTIONS.includes(raw.action as LocalFileAction)
     ? (raw.action as LocalFileAction)
@@ -245,6 +259,7 @@ export function toLocalFileView(input: unknown): LocalFileView {
   const command = typeof raw.command === "string" ? raw.command : ""
   const pattern = typeof raw.pattern === "string" ? raw.pattern : ""
   const glob = typeof raw.glob === "string" ? raw.glob : ""
+  const timeoutMs = typeof raw.timeout_ms === "number" && raw.timeout_ms > 0 ? raw.timeout_ms : undefined
   return {
     action,
     path,
@@ -255,6 +270,7 @@ export function toLocalFileView(input: unknown): LocalFileView {
     command,
     pattern,
     glob,
+    timeoutMs,
   }
 }
 
@@ -301,9 +317,11 @@ export const LOCAL_FILE_TOOL_PROMPT: string = [
   "- search:跨文件搜索关键词(path 为目录或文件,支持 glob 后缀过滤如 \"*.ts\"),输出 文件:行号:内容 命中列表,上限 100 条——定位代码/内容时优先用它,比逐个 read 快得多。",
   "- edit:把文件内 old_text 唯一匹配处替换为 new_text——old_text 必须逐字一致且全文仅出现一次,0 处或多处匹配都会失败。修改前务必先 read 拿到准确原文;失败时重新 read 再用更长/更准的片段重试,不要盲改。",
   "- move:把文件/目录移动或重命名为 to_path;目标已存在会失败。",
-  "- exec:在工作区内执行 PowerShell 命令(工作目录=工作区根,path 传空字符串),适合批量重命名、跨文件搜索、调用 git/ffmpeg 等系统工具。命令必须用 PowerShell 语法;输出上限 8KB(超出截断),超时 30 秒会被强杀。只读白名单命令(Get-ChildItem/Get-Content/Select-String/Test-Path/git status 等)自动执行;其余命令(写入/删除/联网/系统操作/绝对路径/管道拼接)会弹确认卡等待用户批准,被拒后不要原样重试,改用文件工具或向用户说明。禁止:访问工作区外路径、下载执行、修改系统配置。",
+  "- exec:在工作区内执行 PowerShell 命令(工作目录=工作区根,path 传空字符串),适合批量重命名、跨文件搜索、调用 git/ffmpeg 等系统工具、运行构建/测试脚本。命令必须用 PowerShell 语法;输出上限 32KB(超出截断,保留头尾);默认超时 30 秒,可用 timeout_ms 按任务时长申请(1~600 秒,如 npm install 传 300000),超时会被强杀并附重试指引。只读白名单命令(Get-ChildItem/Get-Content/Select-String/Test-Path/git status 等)自动执行;其余命令(写入/删除/联网/系统操作/绝对路径/管道拼接)会弹确认卡等待用户批准,被拒后不要原样重试,改用文件工具或向用户说明。禁止:访问工作区外路径、下载执行、修改系统配置。",
   "- 一次只操作一个文件,需要多个文件时分多次调用;不要臆造工具未返回的成功结果。",
   "- 效率规则:需要多个互不依赖的文件内容/多条信息时,在同一次回复里一并发出多个工具调用(它们会被并发执行),不要一次只发一个;分析项目时按 overview 全景 → search 定位 → 大文件 outline 骨架 → read 行范围精读的顺序,禁止逐文件通读。",
+  "- 项目约定:每次会话开始时系统会自动注入工作区快照(目录树+AGENT.md)——引用具体文件前仍需 read 核实;" +
+    "用户提出可长期复用的项目规范(技术栈约定/目录结构/代码风格)时,建议把它写入工作区根的 AGENT.md(用 create/write),下次会话自动生效。",
   "- 收到工具结果后用一句话向用户确认(成功:给出文件路径或结果摘要;失败:说明原因)。",
 ].join("\n")
 
@@ -322,11 +340,12 @@ const EXEC_GIT_READ_SUB = new Set(["status", "log", "diff", "show", "rev-parse",
 
 /**
  * exec 确认档黑名单:命中任意一条即需人工确认(全文扫描,管道右侧/字符串里也查,安全侧从严)。
- * 覆盖:语句分隔与重定向(; & < > `)、子表达式 $(、相对/绝对/UNC/家目录路径逃逸、
+ * 覆盖:语句分隔与重定向(; & | < > `)、子表达式 $(、相对/绝对/UNC/家目录路径逃逸、
  * 环境变量引用、PowerShell 写/副作用动词族、传统高危 exe 与别名。
+ * 导出供 project_check 白名单复用(检查命令同样必须不命中任何一条)。
  */
-const EXEC_CONFIRM_PATTERNS: readonly RegExp[] = [
-  /[;&<>`]/,
+export const EXEC_CONFIRM_PATTERNS: readonly RegExp[] = [
+  /[;&<>|`]/,
   /\$\(/,
   /\.\./,
   /\$env:/i,

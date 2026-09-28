@@ -1,7 +1,7 @@
 'use client'
 
 import { memo, useState } from 'react'
-import { BookOpen, Brain, Check, ChevronDown, Globe, Link2, ListTodo, Loader2, Plug, Search, Settings2, TriangleAlert, Wrench } from 'lucide-react'
+import { BookOpen, Brain, Check, ChevronDown, ClipboardCheck, Dumbbell, Globe, Link2, ListTodo, Loader2, Plug, Search, Settings2, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { UIMessage } from 'ai'
 import { ClarifyCard } from './ClarifyCard'
@@ -9,22 +9,31 @@ import { LocalFileCard } from './LocalFileCard'
 import { GenerateMaskCard } from './GenerateMaskCard'
 import { WriteDocCard } from './WriteDocCard'
 import { WriteCodeCard } from './WriteCodeCard'
+import { PreviewCheckCard } from './PreviewCheckCard'
 import { TripMapCard } from './TripMapCard'
 import { ProviderModelCard } from './ProviderModelCard'
+import { AddCustomModelCard } from './AddCustomModelCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 import { LOCAL_FILE_TOOL_NAME } from '@/lib/ai/local-file-tool'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
 import { WRITE_DOC_TOOL_NAME } from '@/lib/ai/write-doc-tool'
 import { WRITE_CODE_TOOL_NAME } from '@/lib/ai/write-code-tool'
+import { PREVIEW_CHECK_TOOL_NAME } from '@/lib/ai/preview-check-tool'
+import { PROJECT_CHECK_TOOL_NAME } from '@/lib/ai/project-check-tool'
+import { ProjectCheckCard } from './ProjectCheckCard'
 import { TRIP_TOOL_NAME } from '@/lib/ai/trip-tool'
 import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
 import { PROVIDER_MODEL_TOOL_NAME } from '@/lib/ai/provider-model-tool'
+import { ADD_CUSTOM_MODEL_TOOL_NAME } from '@/lib/ai/custom-model-tool'
 import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
 import { KNOWLEDGE_TOOL_NAME } from '@/lib/ai/knowledge-tool'
+import { PRACTICE_TOOL_NAME, RECORD_TOOL_NAME } from '@/lib/ai/practice-tool'
 import { TODO_TOOL_NAME, type TodoToolOutput } from '@/lib/ai/todo-tool'
 import { URL_READER_TOOL_NAME, type UrlReaderOutput } from '@/lib/ai/url-reader'
 import { parseMcpToolDisplay } from '@/lib/ai/mcp/mcp-constants'
 import { getSettingDef, formatSettingValue } from '@/lib/settings/registry'
+import { isRevertableSetting, revertSettingsOp } from '@/lib/settings/executor'
+import { MiniSwitch } from '@/components/settings/MiniSwitch'
 
 /**
  * 工具调用卡片 —— 渲染 AI 工具调用过程,让"模型查资料"对用户可见可信。
@@ -200,15 +209,21 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
   // hooks 置顶(web_search 的展开状态),避免条件 return 造成 hooks 顺序不稳定
   const [manual, setManual] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [revokedKeys, setRevokedKeys] = useState<Set<string>>(new Set())
 
   // 澄清提问:专用交互卡片(问题+选项点选),不进通用工具卡分支
   if (view.tool === CLARIFY_TOOL_NAME) {
     return <ClarifyCard view={view} answered={clarifyAnswered ?? false} onSubmit={onClarifySubmit} />
   }
 
-  // 本地文件操作:专用卡片(create 自动执行展示结果;delete 待确认→批准后执行)
+  // 本地文件操作:专用卡片(create 自动执行展示结果;delete 待确认→批准后执行)。
+  // 外层带 data-tcid:待批准钉住横幅据它滚动定位到卡片(ChatPanel)
   if (view.tool === LOCAL_FILE_TOOL_NAME) {
-    return <LocalFileCard view={view} onDecision={onLocalFileDecision} onOpenEditor={onOpenEditor} />
+    return (
+      <div data-tcid={view.toolCallId}>
+        <LocalFileCard view={view} onDecision={onLocalFileDecision} onOpenEditor={onOpenEditor} />
+      </div>
+    )
   }
 
   // 面具工坊:专用交互卡片(草稿预览+一键添加),不进通用工具卡分支
@@ -221,6 +236,11 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
     return <ProviderModelCard view={view} />
   }
 
+  // 中转站/自定义模型:确认卡片(Key 由用户在卡片里就地粘贴并测试;Key 不进对话记录)
+  if (view.tool === ADD_CUSTOM_MODEL_TOOL_NAME) {
+    return <AddCustomModelCard view={view} />
+  }
+
   // 写作文档:一行式卡片(成功→打开按钮;流式→占位;失败→标红)
   if (view.tool === WRITE_DOC_TOOL_NAME) {
     return <WriteDocCard view={view} />
@@ -231,24 +251,77 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
     return <WriteCodeCard view={view} />
   }
 
+  // 预览验证:preview_check 结果(通过/报错清单/不可验证)
+  if (view.tool === PREVIEW_CHECK_TOOL_NAME) {
+    return <PreviewCheckCard view={view} />
+  }
+
+  // 项目检查:project_check 结果(通过/未通过+输出/未能执行)
+  if (view.tool === PROJECT_CHECK_TOOL_NAME) {
+    return <ProjectCheckCard view={view} />
+  }
+
   // 行程规划:地图卡片(AI 结构化行程,前端段间真实路径规划+时间线联动+全屏总览)
   if (view.tool === TRIP_TOOL_NAME) {
     return <TripMapCard view={view} />
   }
 
-  // AI 设置控制:一行式卡片,列出全部操作(注册表中文映射);白名单拒绝时右侧标「未生效」
+  // AI 设置控制:开关列表式卡片 —— 每条操作一行「名称 → 值」+ 右侧开关;开关默认开(已应用),
+  // 点掉即撤销该条(回到 AI 改动前的原值);流式/失败/无操作时退化为一行式 ToolRow。
   if (view.tool === SETTINGS_TOOL_NAME) {
     const ops =
       (view.input as { operations?: Array<{ key: string; value: string }> } | undefined)?.operations ?? []
     const failed =
       view.state === 'output-error' || (view.output as { ok?: boolean } | undefined)?.ok === false
-    const text =
-      ops.length > 0
-        ? `应用设置：${ops
-            .map((op) => `${getSettingDef(op.key)?.label ?? op.key}→${formatSettingValue(op.key, op.value)}`)
-            .join('、')}`
-        : '应用设置'
-    return <ToolRow icon={<Settings2 className="w-3.5 h-3.5" />} text={text} streaming={view.state === 'input-streaming'} failed={failed} />
+    const streaming = view.state === 'input-streaming' || view.state === 'input-available'
+    const toolCallId = view.toolCallId
+    const isPersisted = !!toolCallId?.startsWith('persisted-')
+
+    // 退化:流式/失败/无操作时保持原一行式(状态提示更清晰)
+    if (streaming || failed || ops.length === 0) {
+      const text =
+        ops.length > 0
+          ? `应用设置：${ops
+              .map((op) => `${getSettingDef(op.key)?.label ?? op.key}→${formatSettingValue(op.key, op.value)}`)
+              .join('、')}`
+          : '应用设置'
+      return <ToolRow icon={<Settings2 className="w-3.5 h-3.5" />} text={text} streaming={streaming} failed={failed} />
+    }
+
+    return (
+      <div className="rounded-lg border border-line/60 bg-surface-muted overflow-hidden text-xs">
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5">
+          <Settings2 className="w-3.5 h-3.5 shrink-0 text-content-secondary" />
+          <span className="text-content-secondary">应用设置</span>
+          <span className="ml-auto text-content-muted">{ops.length} 项</span>
+        </div>
+        <div className="flex flex-col border-t border-line/50">
+          {ops.map((op, i) => {
+            const label = getSettingDef(op.key)?.label ?? op.key
+            const valueText = formatSettingValue(op.key, op.value)
+            const revoked = revokedKeys.has(op.key)
+            const canRevert = !isPersisted && !!toolCallId && isRevertableSetting(op.key)
+            return (
+              <div key={`${op.key}-${i}`} className="flex items-center gap-2 px-2.5 py-1.5">
+                <span className={cn('min-w-0 flex-1 truncate', revoked && 'text-content-muted line-through')}>
+                  {label} <span className="text-content-muted">→</span> {valueText}
+                </span>
+                <MiniSwitch
+                  on={!revoked}
+                  disabled={!canRevert}
+                  onClick={() => {
+                    if (!canRevert || !toolCallId) return
+                    if (revertSettingsOp(toolCallId, op.key)) {
+                      setRevokedKeys((s) => new Set(s).add(op.key))
+                    }
+                  }}
+                />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
   }
 
   // 显式记忆添加:一行式卡片列出已保存的记忆内容;服务端写库,这里只展示
@@ -318,6 +391,56 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
             ? `查课本「${kQuery}」· 命中 ${kCount} 段`
             : `查课本「${kQuery}」· 课本中未找到`
     return <ToolRow icon={<BookOpen className="w-3.5 h-3.5" />} text={kText} streaming={view.state === 'input-streaming'} failed={kFailed} />
+  }
+
+  // 题库抽题:一行式卡片;流式显示抽题条件,完成后显示抽到几道;0 道时明确告知题库无匹配
+  if (view.tool === PRACTICE_TOOL_NAME) {
+    const pIn = view.input as { topic?: string; year?: string; kind?: string } | undefined
+    const pOut = view.output as { items?: unknown[]; error?: string } | undefined
+    const pCount = pOut?.items?.length ?? 0
+    const pFailed = view.state === 'output-error' || !!pOut?.error
+    const pBrief = [
+      pIn?.year ? `${pIn.year}年` : '',
+      pIn?.topic ?? '',
+      pIn?.kind === 'choice' ? '选择题' : pIn?.kind === 'answer' ? '解答题' : '',
+    ]
+      .filter(Boolean)
+      .join('·')
+    const pPending = view.state === 'input-streaming' || view.state === 'input-available'
+    const pText = pPending
+      ? pBrief
+        ? `正在抽题「${pBrief}」…`
+        : '正在抽题…'
+      : pFailed
+        ? '抽题未生效'
+        : pCount > 0
+          ? pBrief
+            ? `已抽 ${pCount} 道题「${pBrief}」`
+            : `已抽 ${pCount} 道题`
+          : '题库暂无匹配题目'
+    return <ToolRow icon={<Dumbbell className="w-3.5 h-3.5" />} text={pText} streaming={pPending} failed={pFailed} />
+  }
+
+  // 判分回传:一行式卡片;完成后显示登记题数与新收错题数(答错自动进错题本)
+  if (view.tool === RECORD_TOOL_NAME) {
+    const rOut = view.output as
+      | { processed?: number; wrongRecorded?: number; existingReused?: number; missing?: number; error?: string }
+      | undefined
+    const rFailed = view.state === 'output-error' || !!rOut?.error
+    const rPending = view.state === 'input-streaming' || view.state === 'input-available'
+    const rText = rPending
+      ? '正在登记作答…'
+      : rFailed
+        ? '记录作答未生效'
+        : [
+            `已登记 ${rOut?.processed ?? 0} 题作答`,
+            rOut?.wrongRecorded ? `新收 ${rOut.wrongRecorded} 道错题` : '',
+            rOut?.existingReused ? `${rOut.existingReused} 道已在错题本` : '',
+            rOut?.missing ? `${rOut.missing} 题未找到` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+    return <ToolRow icon={<ClipboardCheck className="w-3.5 h-3.5" />} text={rText} streaming={rPending} failed={rFailed} />
   }
 
   // 全文阅读:一行式卡片;流式显示目标域名,完成后显示类型与域名;服务端 fetch,这里只展示

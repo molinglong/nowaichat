@@ -13,10 +13,12 @@ import { WriteDocPanel } from '@/components/write/WriteDocPanel'
 import { FileEditorPanel } from './FileEditorPanel'
 import { CodePanel } from '@/components/code/CodePanel'
 import { ChatPreviewPanel } from './ChatPreviewPanel'
+import { WorkSidePane } from '@/components/workspace/WorkSidePane'
 import { OutlineSidebar } from './OutlineSidebar'
+import { InfoAsidePanel, INFO_PANEL_WIDTH, INFO_TAB_WIDTH } from './InfoAsidePanel'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { ContextMeter } from './ContextMeter'
-import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
+import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore, liveCodeDoc } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import { buildSettingsSnapshot, executeSettingsOps } from '@/lib/settings/executor'
 import { toast } from '@/lib/toast'
@@ -27,7 +29,7 @@ import type { ModelDefinition } from '@/lib/ai/types'
 import { getBuiltinMask } from '@/lib/ai/builtin-masks'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import type { Attachment } from './FileUpload'
-import { getIsTauri, tauri } from '@/lib/tauri'
+import { getIsTauri, tauri, useIsTauri } from '@/lib/tauri'
 import {
   writeFile as lfWriteFile,
   deleteFile as lfDeleteFile,
@@ -39,6 +41,7 @@ import {
   execCommand as lfExecCommand,
   overviewDir as lfOverviewDir,
   searchContent as lfSearchContent,
+  getWorkspaceDir,
   LOCAL_FILES_SYNC_KEY,
 } from '@/lib/tauri-files'
 import {
@@ -51,6 +54,30 @@ import {
   CODE_EDIT_TOOL_NAME,
   type CodeEditToolOutput,
 } from '@/lib/ai/code-edit-tool'
+import { applyCodeEdit } from '@/lib/ai/code-edit-match'
+import {
+  PREVIEW_CHECK_TOOL_NAME,
+  type PreviewCheckToolOutput,
+} from '@/lib/ai/preview-check-tool'
+import {
+  PROJECT_CHECK_TOOL_NAME,
+  CHECK_ALLOWLIST_HINT,
+  isCheckCommandAllowed,
+  type ProjectCheckToolInput,
+  type ProjectCheckToolOutput,
+} from '@/lib/ai/project-check-tool'
+import {
+  analyzeTurnForGate,
+  buildVerifyGateMessage,
+  isVerifyGateMessage,
+} from '@/lib/ai/verify-gate'
+import { WRITE_CODE_TOOL_NAME } from '@/lib/ai/write-code-tool'
+import type { CodeDocFull } from '@/components/code/types'
+import {
+  ensureWorkspaceSnapshot,
+  refreshWorkspaceSnapshot,
+  getWorkspaceSnapshot,
+} from '@/lib/workspace/workspace-snapshot'
 
 const MODEL_STORAGE_KEY = 'chat:selectedModel'
 const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
@@ -78,9 +105,10 @@ function getDateLine(): string {
 
 /**
  * sendAutomaticallyWhen 判据:仅当最后一条 assistant 消息里存在“已回填结果”的无 execute 客户端工具
- * (local_file / code_edit)、全部 tool part 都已有 output、且最后一个 tool part 之后没有实质文本/推理
- * (模型尚未据结果续答)时,才自动再发一次请求让模型收尾。模型续答产生文本后判据转 false,杜绝无限重发。
- * 不含这两类工具的普通对话恒 false,对既有流程零影响。
+ * (local_file / code_edit / preview_check)、全部 tool part 都已有 output、且最后一个 tool part 之后
+ * 没有实质文本/推理(模型尚未据结果续答)时,才自动再发一次请求让模型收尾。
+ * 模型续答产生文本后判据转 false,杜绝无限重发。
+ * 不含这三类工具的普通对话恒 false,对既有流程零影响。
  */
 function shouldContinueAfterLocalFile(messages: UIMessage[]): boolean {
   const last = messages[messages.length - 1]
@@ -93,7 +121,12 @@ function shouldContinueAfterLocalFile(messages: UIMessage[]): boolean {
     const t = parts[i].type ?? ''
     if (!t.startsWith('tool-')) continue
     lastToolIdx = i
-    if (t === `tool-${LOCAL_FILE_TOOL_NAME}` || t === `tool-${CODE_EDIT_TOOL_NAME}`)
+    if (
+      t === `tool-${LOCAL_FILE_TOOL_NAME}` ||
+      t === `tool-${CODE_EDIT_TOOL_NAME}` ||
+      t === `tool-${PREVIEW_CHECK_TOOL_NAME}` ||
+      t === `tool-${PROJECT_CHECK_TOOL_NAME}`
+    )
       sawClientTool = true
     const st = parts[i].state
     if (st !== 'output-available' && st !== 'output-error') allResolved = false
@@ -150,14 +183,20 @@ export function ChatPanel({
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
   const editorOpen = useChatStore((s) => s.editorFile !== null)
   const codePanelOpen = useChatStore((s) => s.codePanelOpen)
+  const infoPanelOpen = useChatStore((s) => s.infoPanelOpen)
+  // 工作态(仅桌面端):右侧产物区常驻,聊天主区同步让位(同宽 min(34vw,440px))
+  const inTauri = useIsTauri()
+  const workMode = useChatStore((s) => s.workMode)
   const openEditor = useChatStore((s) => s.openEditor)
   const [conversationId, setConversationId] = useState(initialConversationId)
 
   // 切换会话/新建对话时自动收起写作画布面板(含 remount 首跑):
-  // 发送首条消息新建会话只更新内部 state,不改 props.initialConversationId,不会误关
+  // 发送首条消息新建会话只更新内部 state,不改 props.initialConversationId,不会误关。
+  // 同时重置工作区定位文件——workFile 是全局的,不重置会挂上一个对话的文件
   useEffect(() => {
     useChatStore.getState().closeWritePanel()
     useChatStore.getState().closeCodePanel()
+    useChatStore.getState().setWorkFile(null)
   }, [initialConversationId])
 
   // A 流式恢复: 页面加载时若历史里最后一条 assistant 消息带 streaming 标记,
@@ -230,6 +269,13 @@ export function ChatPanel({
 
   // 预览面板打开状态(ChatPreviewPanel 滑出驱动):桌面端聊天区同步压缩让位
   const previewOpen = useChatStore((s) => s.previewCode !== null)
+
+  // 右侧抽屉(写作/预览/编辑器/代码/工作态产物区)任一打开 → 资料面板整列撤下:
+  // 抽屉是 fixed 浮层 + margin 让位,资料面板是布局内的一列,两者叠加会撑出容器
+  const drawerOpen =
+    codePanelOpen || writePanelOpen || previewOpen || editorOpen || (inTauri && workMode)
+  // 资料面板(展开或只剩收起的竖标签)是否占着右墙
+  const infoSlotOccupied = !!conversationId && !drawerOpen
   
   // Auto-enable deepThink for reasoning models (like DeepSeek-R1), but allow user to toggle off
   const shouldAutoEnableDeepThink = initialModel && allModels.find(m => m.id === initialModel)?.supportsReasoning
@@ -541,6 +587,11 @@ export function ChatPanel({
           get codePanelOpen() {
             return useChatStore.getState().codePanelOpen
           },
+          // 工作区快照(仅桌面端有值):目录树 + AGENT.md 约定,服务端注入 system。
+          // 仿 settingsSnapshot 模式;TTL 缓存,写操作后失效重建,注入段声明"可能滞后"
+          get workspaceContext() {
+            return getIsTauri() ? (getWorkspaceSnapshot() ?? undefined) : undefined
+          },
           // Attachments are read from ref at send time
           get attachments() {
             return attachmentsRef.current
@@ -598,10 +649,11 @@ export function ChatPanel({
           docId?: string
           old_text?: string
           new_text?: string
+          replace_all?: boolean
         }
         const docId = typeof ci.docId === 'string' ? ci.docId : ''
-        const original = typeof ci.old_text === 'string' ? ci.old_text : ''
-        const modified = typeof ci.new_text === 'string' ? ci.new_text : ''
+        const oldText = typeof ci.old_text === 'string' ? ci.old_text : ''
+        const newText = typeof ci.new_text === 'string' ? ci.new_text : ''
         if (!docId) {
           addToolOutput({
             tool: CODE_EDIT_TOOL_NAME,
@@ -610,13 +662,157 @@ export function ChatPanel({
           })
           return
         }
-        useChatStore.getState().setCodePendingDiff({ docId, original, modified })
+        // 片段替换:在文档「当前真实内容」上做唯一匹配(精确→逐行 trim 两级,ZCode Edit 语义)。
+        // 内容来源:面板开着且就是这篇 → 编辑器实时值(含未保存改动);否则 GET 落库版本
+        let current = liveCodeDoc.docId === docId ? liveCodeDoc.content : ''
+        if (!current) {
+          try {
+            const doc = await fetchJson<CodeDocFull>(`/api/code/docs/${docId}`, { timeoutMs: 15_000 })
+            current = doc.content
+          } catch {
+            addToolOutput({
+              tool: CODE_EDIT_TOOL_NAME,
+              toolCallId: callId,
+              output: {
+                ok: false,
+                error: '无法读取文档当前内容(接口失败)。请告知用户打开对应文档后重试。',
+              } satisfies CodeEditToolOutput,
+            })
+            return
+          }
+        }
+        const match = applyCodeEdit(current, oldText, newText, ci.replace_all === true)
+        if (match.status !== 'ok' || typeof match.modifiedContent !== 'string') {
+          // 0 处/多处/无变化:回填可行动错误文案(见 code-edit-match.ts),模型同轮自纠重试
+          addToolOutput({
+            tool: CODE_EDIT_TOOL_NAME,
+            toolCallId: callId,
+            output: { ok: false, error: match.message ?? '片段匹配失败' } satisfies CodeEditToolOutput,
+          })
+          return
+        }
+        useChatStore.getState().setCodePendingDiff({ docId, original: current, modified: match.modifiedContent })
         useChatStore.getState().openCodePanel(docId)
         addToolOutput({
           tool: CODE_EDIT_TOOL_NAME,
           toolCallId: callId,
-          output: { ok: true, status: 'pending-review' } satisfies CodeEditToolOutput,
+          output: {
+            ok: true,
+            status: 'pending-review',
+            strategy: match.strategy,
+          } satisfies CodeEditToolOutput,
         })
+        return
+      }
+      // preview_check:AI 主动验证 HTML 预览 → 打开代码面板写入检查请求,CodeEditor 认领执行
+      // (切预览渲染→静默期收集 console/脚本错误),结果经 store resolver 回来后回填续跑。
+      // 与 local_file 同属无 execute 客户端工具,但不需要 Tauri,Web 端同样可用
+      if (toolCall.toolName === PREVIEW_CHECK_TOOL_NAME) {
+        const callId = toolCall.toolCallId
+        if (executedLocalFileCallsRef.current.has(callId)) return
+        executedLocalFileCallsRef.current.add(callId)
+        const pi = (toolCall.input ?? {}) as { docId?: string }
+        const store = useChatStore.getState()
+        let docId =
+          typeof pi.docId === 'string' && pi.docId ? pi.docId : store.codePanelDocId ?? ''
+        // 兜底:AI 在 write_code 同一轮紧跟着调 preview_check 时,卡片的"自动打开面板"effect
+        // 可能还没跑,codePanelDocId 仍为 null——从本会话消息里回溯最近一次 write_code 产物
+        if (!docId) {
+          for (const m of messages) {
+            for (const p of m.parts as Array<{ type?: string; output?: unknown }>) {
+              if (p.type !== `tool-${WRITE_CODE_TOOL_NAME}`) continue
+              const out = p.output as { ok?: boolean; docId?: string } | undefined
+              if (out && out.ok === true && typeof out.docId === 'string' && out.docId) {
+                docId = out.docId
+              }
+            }
+          }
+        }
+        if (!docId) {
+          addToolOutput({
+            tool: PREVIEW_CHECK_TOOL_NAME,
+            toolCallId: callId,
+            output: {
+              ok: false,
+              message: '未指定 docId,且当前没有打开的代码文档',
+            } satisfies PreviewCheckToolOutput,
+          })
+          return
+        }
+        // 打开面板(CodeEditor 挂载后认领请求执行);检查在 3~8 秒内经 resolver 回传
+        store.openCodePanel(docId)
+        const output = await new Promise<PreviewCheckToolOutput>((resolve) => {
+          useChatStore.getState().beginPreviewCheck(docId, resolve)
+          // 兜底:CodeEditor 未挂载/执行链路异常时,不能让 tool part 悬死(续跑判据永假)
+          setTimeout(
+            () => resolve({ ok: false, message: '预览检查超时(12 秒),前端未完成渲染验证' }),
+            12_000
+          )
+        })
+        addToolOutput({ tool: PREVIEW_CHECK_TOOL_NAME, toolCallId: callId, output })
+        return
+      }
+      if (toolCall.toolName === PROJECT_CHECK_TOOL_NAME) {
+        const callId = toolCall.toolCallId
+        if (executedLocalFileCallsRef.current.has(callId)) return
+        executedLocalFileCallsRef.current.add(callId)
+        const ci = (toolCall.input ?? {}) as ProjectCheckToolInput
+        const cmd = typeof ci.command === 'string' ? ci.command.trim() : ''
+        const deny = (error: string) => {
+          addToolOutput({
+            tool: PROJECT_CHECK_TOOL_NAME,
+            toolCallId: callId,
+            output: { ok: false, error } satisfies ProjectCheckToolOutput,
+          })
+        }
+        if (!getIsTauri()) {
+          deny('项目检查仅桌面客户端可用(Web 端没有本地命令执行能力)')
+          return
+        }
+        if (!cmd) {
+          deny('缺少要运行的检查命令(command 为空)')
+          return
+        }
+        if (!isCheckCommandAllowed(cmd)) {
+          deny(
+            `命令不在检查白名单(仅允许纯检查命令,自动执行不弹确认):${CHECK_ALLOWLIST_HINT}。` +
+              `收到的是「${cmd}」——如确需运行,请改用 local_file 的 exec 动作(会弹确认卡等用户批准)。`
+          )
+          return
+        }
+        const timeoutMs =
+          typeof ci.timeout_ms === 'number' && ci.timeout_ms > 0
+            ? Math.min(ci.timeout_ms, 180_000)
+            : 120_000
+        // 后台并发执行;超时兜底语义与下方 runLocalFileAsync 一致(invoke 异常场景永不返回时
+        // 保证 tool part 必然回填,续跑判据不悬死)。不复用该函数:它把回填写死为 local_file 工具
+        const wait = Math.min(timeoutMs + 5_000, 610_000)
+        void Promise.race([
+          lfExecCommand(cmd, timeoutMs),
+          new Promise<{ ok: false; error: string }>((resolve) =>
+            setTimeout(() => resolve({ ok: false, error: '执行超时,本次调用被中止' }), wait)
+          ),
+        ]).then(
+          (out) => {
+            const res: ProjectCheckToolOutput = out.ok
+              ? {
+                  ok: out.exitCode === 0,
+                  exitCode: out.exitCode,
+                  output: out.execOutput,
+                  truncated: out.truncated,
+                  durationMs: out.durationMs,
+                }
+              : { ok: false, error: out.error ?? '命令执行失败' }
+            addToolOutput({ tool: PROJECT_CHECK_TOOL_NAME, toolCallId: callId, output: res })
+          },
+          (err) => {
+            addToolOutput({
+              tool: PROJECT_CHECK_TOOL_NAME,
+              toolCallId: callId,
+              output: { ok: false, error: String(err) } satisfies ProjectCheckToolOutput,
+            })
+          }
+        )
         return
       }
       if (toolCall.toolName !== LOCAL_FILE_TOOL_NAME) return
@@ -630,15 +826,22 @@ export function ChatPanel({
       const runLocalFileAsync = (
         id: string,
         action: LocalFileToolOutput['action'],
-        run: () => Promise<LocalFileToolOutput>
+        run: () => Promise<LocalFileToolOutput>,
+        // exec 可按模型申请的 timeout_ms 放宽兜底(任务真实时长未知,兜底=申请值+5s);
+        // 其余动作保持 25s
+        opTimeoutMs?: number
       ) => {
         // 超时兜底:invoke 若因异常场景永不返回,tool part 将永远停在 input-available,
         // 自动续跑判据(allResolved)永假,流程静默死停;race 一个超时结果保证必然回填,
         // 模型会收到明确的失败原因而不是无限等待(迟到的真实结果会覆盖超时结果,幂等无害)
+        const wait =
+          typeof opTimeoutMs === 'number' && opTimeoutMs > 0
+            ? Math.min(opTimeoutMs + 5_000, 610_000)
+            : 25_000
         const timeout = new Promise<LocalFileToolOutput>((resolve) =>
           setTimeout(
-            () => resolve({ ok: false, action, error: '执行超时(25 秒),本次调用被中止' }),
-            25_000
+            () => resolve({ ok: false, action, error: '执行超时,本次调用被中止' }),
+            wait
           )
         )
         void Promise.race([run(), timeout]).then(
@@ -661,6 +864,29 @@ export function ChatPanel({
         })
         return
       }
+      // 未授权工作区:不执行也不空转 —— 滑出右侧产物区停在「选择文件夹」引导,
+      // 同时把明确原因回填给模型(它会如实向用户解释),授权后用户让 AI 重试即可
+      const base = await getWorkspaceDir()
+      if (!base) {
+        executedLocalFileCallsRef.current.add(callId)
+        useChatStore.getState().setWorkMode(true)
+        toast.error('还没有选择工作区文件夹，请先在右侧「工作区」里选一个', {
+          title: '本地文件',
+          timeout: 8000,
+        })
+        addToolOutput({
+          tool: LOCAL_FILE_TOOL_NAME,
+          toolCallId: callId,
+          output: {
+            ok: false,
+            action: input.action,
+            error:
+              '尚未选择工作区文件夹(右侧「工作区」面板点「选择文件夹…」授权)。' +
+              '请告知用户先选文件夹，选好后让用户说一声再重试本次操作。',
+          } satisfies LocalFileToolOutput,
+        })
+        return
+      }
       if (input.action === 'create') {
         // 覆盖确认:目标已存在时不自动写入(与 edit 唯一匹配/move 拒覆盖对齐),也不标记
         // 已执行——卡片停在待确认态,由 handleLocalFileDecision 执行写入并回填;目标不存在
@@ -670,6 +896,7 @@ export function ChatPanel({
         executedLocalFileCallsRef.current.add(callId)
         const content = typeof input.content === 'string' ? input.content : ''
         const res = await lfWriteFile(input.path, content)
+        if (res.ok) void refreshWorkspaceSnapshot()
         addToolOutput({
           tool: LOCAL_FILE_TOOL_NAME,
           toolCallId: callId,
@@ -716,6 +943,7 @@ export function ChatPanel({
       if (input.action === 'edit') {
         executedLocalFileCallsRef.current.add(callId)
         const res = await lfEditFile(input.path, input.old_text ?? '', input.new_text ?? '')
+        if (res.ok) void refreshWorkspaceSnapshot()
         addToolOutput({
           tool: LOCAL_FILE_TOOL_NAME,
           toolCallId: callId,
@@ -726,6 +954,7 @@ export function ChatPanel({
       if (input.action === 'move') {
         executedLocalFileCallsRef.current.add(callId)
         const res = await lfMoveFile(input.path, input.to_path ?? '')
+        if (res.ok) void refreshWorkspaceSnapshot()
         addToolOutput({
           tool: LOCAL_FILE_TOOL_NAME,
           toolCallId: callId,
@@ -735,13 +964,23 @@ export function ChatPanel({
       }
       if (input.action === 'exec') {
         // 命令执行:白名单或"始终运行"开启时后台执行(不阻塞其他并发调用);其余(含空命令)
-        // 停等确认卡,由 handleLocalFileDecision 执行并回填——与 delete/create 确认流同层
+        // 停等确认卡,由 handleLocalFileDecision 执行并回填——与 delete/create 确认流同层。
+        // timeout_ms 由模型按任务时长申请(Rust 侧钳制),回填兜底超时同步放宽
         const cmd = typeof input.command === 'string' ? input.command.trim() : ''
         if (!cmd) return
+        const timeoutMs =
+          typeof input.timeout_ms === 'number' && input.timeout_ms > 0 ? input.timeout_ms : undefined
         if (!execAutoRunRef.current && !isExecAutoAllowed(cmd)) return
         executedLocalFileCallsRef.current.add(callId)
-        runLocalFileAsync(callId, 'exec', async () =>
-          ({ ...(await lfExecCommand(cmd)), action: 'exec' }) satisfies LocalFileToolOutput
+        runLocalFileAsync(
+          callId,
+          'exec',
+          async () => {
+            const out = { ...(await lfExecCommand(cmd, timeoutMs)), action: 'exec' } as LocalFileToolOutput
+            if (out.ok) void refreshWorkspaceSnapshot()
+            return out
+          },
+          timeoutMs
         )
         return
       }
@@ -753,13 +992,20 @@ export function ChatPanel({
       if (isError || isAbort) return
       const convId = conversationIdRef.current
       if (!convId) return
-      // local_file 客户端工具轮:tool part 生命周期由前端管理(create 回填结果、delete 等用户
-      // 异步确认)。若在此用 DB 内容替换 parts,会丢掉待确认/已回填的 tool part,导致确认卡片
-      // 无法交互、addToolOutput 找不到目标、同轮续跑失效。故本轮含 local_file 调用时跳过内容同步。
+      // 客户端工具轮(local_file / code_edit / preview_check):tool part 生命周期由前端管理
+      // (create 回填结果、delete 等用户异步确认、code_edit 待审查、preview_check 检查结果)。
+      // 若在此用 DB 内容替换 parts,会丢掉这些 tool part,导致卡片无法交互、addToolOutput
+      // 找不到目标、同轮续跑失效。故本轮含客户端工具调用时跳过内容同步。
       if (
-        message.parts.some(
-          (p) => (p as { type?: string }).type === `tool-${LOCAL_FILE_TOOL_NAME}`
-        )
+        message.parts.some((p) => {
+          const t = (p as { type?: string }).type ?? ''
+          return (
+            t === `tool-${LOCAL_FILE_TOOL_NAME}` ||
+            t === `tool-${CODE_EDIT_TOOL_NAME}` ||
+            t === `tool-${PREVIEW_CHECK_TOOL_NAME}` ||
+            t === `tool-${PROJECT_CHECK_TOOL_NAME}`
+          )
+        })
       ) {
         return
       }
@@ -820,6 +1066,57 @@ export function ChatPanel({
   // setMessages 引用稳定(来自 useChat),挂到 ref 上供 onFinish 内的最终内容同步使用
   setMessagesRef.current = setMessages
 
+  // 收工验收门(verify-gate):agent 本回合成功改过工作区文件(local_file create/edit)、
+  // 之后没有任何一次 project_check 跑绿、且模型以文本收尾时,自动注入一条打回消息,
+  // 强制它先验收再汇报——语义对应 ZCode 的 Stop-hook 验证门。判定纯函数见 verify-gate.ts。
+  // 防失控三保险:①每回合(锚点=最后一条真实用户消息)最多打回 2 次;②同一条 assistant
+  // 消息只打回一次(StrictMode/重渲安全);③仅在亲眼见证一轮流式结束(status 回 ready)
+  // 时判定——挂载回放历史/切换会话不会误触发旧回合的门。
+  // 仅桌面端+工作区开关开启时启用(与服务端 project_check 注入闸门同源)。
+  const verifyGateRef = useRef<{ anchorId: string | null; fired: number; gatedAssistantId: string | null }>({
+    anchorId: null,
+    fired: 0,
+    gatedAssistantId: null,
+  })
+  const gatePrevStatusRef = useRef(status)
+  useEffect(() => {
+    const prev = gatePrevStatusRef.current
+    gatePrevStatusRef.current = status
+    if (status !== 'ready') return
+    if (prev !== 'streaming' && prev !== 'submitted') return
+    if (!getIsTauri() || !localFilesToggleRef.current) return
+    const last = messages[messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    // 回合锚点=最后一条真实用户消息(跳过门注入消息);锚点变化即新回合,重置计数
+    let anchorId: string | null = null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role !== 'user') continue
+      if (isVerifyGateMessage(m)) continue
+      anchorId = m.id ?? null
+      break
+    }
+    const gate = verifyGateRef.current
+    if (gate.anchorId !== anchorId) {
+      gate.anchorId = anchorId
+      gate.fired = 0
+    }
+    if (gate.fired >= 2 || gate.gatedAssistantId === last.id) return
+    const verdict = analyzeTurnForGate(messages)
+    if (!verdict.shouldGate) return
+    gate.fired += 1
+    gate.gatedAssistantId = last.id
+    void sendMessage({ text: buildVerifyGateMessage(verdict.unverifiedWrites) })
+  }, [messages, status, sendMessage])
+
+  // messages 的 ref 镜像: 供 handleEditMessage 等回调在依赖数组里摆脱 messages。
+  // 否则流式期间 messages 每 50ms 变一次 → 回调引用跟着变 → 打穿 MessageBubble
+  // 的 memo(比较器比对 onEdit 引用),全列表气泡逐帧重渲染
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
   // A 流式恢复: 远端仍在生成(轮询续显中)也算生成中,输入框保持禁用/停止按钮可见,
   // 新消息按 F 方案入队,待定格后自动发出
   const isLoading = status === 'submitted' || status === 'streaming' || remoteStreamingId != null
@@ -867,7 +1164,9 @@ export function ChatPanel({
   const prevScrollTopRef = useRef(0)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
-  // 滚动容器监听:向上滚=脱离跟随;滚回底部(距底<=40px)=恢复跟随
+  // 滚动容器监听:向上滚=脱离跟随;滚回底部(距底<=8px)=恢复跟随。
+  // 此前阈值 40px 会在底部形成拉锯区(用户小幅上滑被跟随定时器拉回),收紧为 8px:
+  // 几乎贴底才算"主动滚回",其余位置保留自由回看。
   useEffect(() => {
     const el = messagesScrollEl
     if (!el) return
@@ -879,7 +1178,7 @@ export function ChatPanel({
       if (scrolledUp && shouldAutoScrollRef.current) {
         shouldAutoScrollRef.current = false
         setShowScrollToBottom(true)
-      } else if (!shouldAutoScrollRef.current && distanceFromBottom <= 40) {
+      } else if (!shouldAutoScrollRef.current && distanceFromBottom <= 8) {
         shouldAutoScrollRef.current = true
         setShowScrollToBottom(false)
       }
@@ -956,6 +1255,15 @@ export function ChatPanel({
     pendingAttachmentsRef.current = undefined
   }, [messages, setMessages])
 
+  // 欢迎页壁纸激活态同步给 shell(WelcomeWallpaperLayer 据此显隐,侧栏/内容列随之变玻璃):
+  // 欢迎态 = messages 为空(与下方欢迎分支同判据);卸载(切 tab/进会话)时复位
+  const chatWelcomeActive = messages.length === 0
+  const setChatWelcomeActive = useChatStore((s) => s.setChatWelcomeActive)
+  useEffect(() => {
+    setChatWelcomeActive(chatWelcomeActive)
+    return () => setChatWelcomeActive(false)
+  }, [chatWelcomeActive, setChatWelcomeActive])
+
   const handleSend = useCallback(
     (text: string, attachments?: Attachment[]) => {
       // 生成中不丢弃输入:入队,本轮结束后由下方 effect 自动发出
@@ -969,18 +1277,80 @@ export function ChatPanel({
       if (attachments && attachments.length > 0) {
         pendingAttachmentsRef.current = attachments
       }
+      // 工作区快照:桌面端发送前确保新鲜(TTL 内复用缓存,过期/失效才重建,fire-and-forget
+      // 不阻塞发送;本次 getter 读到的可能是上一次快照,注入段已向模型声明"可能滞后")
+      if (inTauri) void ensureWorkspaceSnapshot()
       sendMessage({ text })
       // 注意: 此处不能清空 attachmentsRef —— AI SDK sendMessages 首行 await resolve2(body)
       // 会先让出微任务,若本处同步清空,getter 求值时附件已丢失(实测所有附件类型均发送为 undefined)。
       // 保留本次值: 下一次发送由上方赋值覆盖(无附件时为 undefined);
       // regenerate 时 getter 仍返回本次附件,服务端注入到最后一条 user 消息,行为正确。
     },
-    [sendMessage]
+    [sendMessage, inTauri]
   )
 
   // local_file 决策:卡片上用户点「批准」→ 按动作执行(delete=移入回收站;
   // create=覆盖写入)并回填;「拒绝」→ 回填 denied。回填后由 sendAutomaticallyWhen
   // 触发同轮续跑,让模型基于结果向用户收尾。
+  // 工作区快照:桌面端挂载即预构建(首次发送前就有),此后写操作触发重建、发送时 TTL 兜底
+  useEffect(() => {
+    if (inTauri) void ensureWorkspaceSnapshot()
+  }, [inTauri])
+
+  // Ctrl+E 快捷开关工作态(仅桌面端;工作态=右侧产物区常驻)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'e') return
+      if (!getIsTauri()) return
+      e.preventDefault()
+      useChatStore.getState().setWorkMode(!useChatStore.getState().workMode)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // 待批准操作(需要用户在 LocalFileCard 上点批准的):delete 恒等确认;
+  // create 覆盖停在确认卡;exec 非白名单且未开"始终运行"停在确认卡。
+  // 其余动作(读/列/白名单 exec 等)自动执行,只是短暂 input-available,不算待批准
+  const pendingApprovals = useMemo(() => {
+    const out: { id: string; label: string }[] = []
+    for (const m of messages) {
+      for (const p of m.parts as Array<{ type?: string; state?: string; input?: unknown }>) {
+        if (p.type !== `tool-${LOCAL_FILE_TOOL_NAME}` || p.state !== 'input-available') continue
+        const input = p.input as LocalFileToolInput | undefined
+        const action = input?.action
+        const path = typeof input?.path === 'string' && input.path.trim() ? input.path.trim() : ''
+        let label: string | null = null
+        if (action === 'delete') label = `删除 ${path}`
+        else if (action === 'create') label = `覆盖写入 ${path}`
+        else if (
+          action === 'exec' &&
+          !execAutoRunRef.current &&
+          !isExecAutoAllowed(typeof input?.command === 'string' ? input.command : '')
+        ) {
+          label = `执行命令 ${(typeof input?.command === 'string' ? input.command : '').trim()}`
+        }
+        if (label) {
+          out.push({ id: (p as { toolCallId?: string }).toolCallId ?? '', label })
+        }
+      }
+    }
+    return out
+  }, [messages])
+
+  const gotoPendingApproval = useCallback((toolCallId: string) => {
+    const el = document.querySelector(`[data-tcid="${toolCallId}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    ;(el as HTMLElement).animate?.(
+      [
+        { boxShadow: '0 0 0 3px rgba(245,158,11,.85)' },
+        { boxShadow: '0 0 0 3px rgba(245,158,11,0)' },
+      ],
+      { duration: 1600 }
+    )
+  }, [])
+
   const handleOpenEditor = useCallback(
     (path: string) => {
       openEditor(path)
@@ -1010,7 +1380,7 @@ export function ChatPanel({
         `【当前完整代码】\n${detail.code}\n` +
         selHint +
         `\n\n【改写需求】\n${detail.instruction ?? '(用户未填写,按你理解的合理改写)'}\n\n` +
-        `返回 code_edit:docId 用上面这个 id,old_text 逐字复制上面的完整原文,new_text 写改写后的完整代码。`
+        `返回 code_edit:docId 用上面这个 id。只发改动涉及的片段——old_text 从上面原文里逐字复制要改的代码块(带前后 1~3 行上下文保证全文唯一),new_text 为改写后的片段;保持无关代码稳定。`
       handleSend(text)
     }
     window.addEventListener('aichatt:code-ask-ai', onAsk)
@@ -1022,7 +1392,12 @@ export function ChatPanel({
       toolCallId: string,
       path: string,
       approved: boolean,
-      decision: { action: 'delete' | 'create' | 'exec'; content?: string; command?: string }
+      decision: {
+        action: 'delete' | 'create' | 'exec'
+        content?: string
+        command?: string
+        timeoutMs?: number
+      }
     ) => {
       if (executedLocalFileCallsRef.current.has(toolCallId)) return
       executedLocalFileCallsRef.current.add(toolCallId)
@@ -1046,6 +1421,7 @@ export function ChatPanel({
       }
       if (decision.action === 'create') {
         const res = await lfWriteFile(path, decision.content ?? '')
+        if (res.ok) void refreshWorkspaceSnapshot()
         addToolOutput({
           tool: LOCAL_FILE_TOOL_NAME,
           toolCallId,
@@ -1054,7 +1430,8 @@ export function ChatPanel({
         return
       }
       if (decision.action === 'exec') {
-        const res = await lfExecCommand(decision.command ?? '')
+        const res = await lfExecCommand(decision.command ?? '', decision.timeoutMs)
+        if (res.ok) void refreshWorkspaceSnapshot()
         addToolOutput({
           tool: LOCAL_FILE_TOOL_NAME,
           toolCallId,
@@ -1063,6 +1440,7 @@ export function ChatPanel({
         return
       }
       const res = await lfDeleteFile(path)
+      if (res.ok) void refreshWorkspaceSnapshot()
       addToolOutput({
         tool: LOCAL_FILE_TOOL_NAME,
         toolCallId,
@@ -1090,7 +1468,7 @@ export function ChatPanel({
       const callId = p.toolCallId
       if (!callId || executedSettingsCallIdsRef.current.has(callId)) continue
       executedSettingsCallIdsRef.current.add(callId)
-      void executeSettingsOps(p.input)
+      void executeSettingsOps(p.input, callId)
     }
   }, [messages])
 
@@ -1153,6 +1531,10 @@ export function ChatPanel({
         const reasoning =
           typeof latest.reasoning === 'string' && latest.reasoning.trim() ? latest.reasoning : null
         if (!text && !reasoning) return
+        // 进行中标注 state:'streaming'(而非恒 'done'): MessageBubble 的流式判定
+        // (最后一个 text part 的 state)据此成立,打字机才能启用 —— 否则每 1.2s
+        // 的快照替换会整段跳字,且生成期间就进富渲染反复全量重排(闪烁源之一)
+        const partState = stillStreaming ? ('streaming' as const) : ('done' as const)
         setMessages((prev) =>
           prev.map((m) =>
             m.id !== remoteStreamingId
@@ -1161,9 +1543,9 @@ export function ChatPanel({
                   ...m,
                   parts: [
                     ...(reasoning
-                      ? [{ type: 'reasoning' as const, text: reasoning, state: 'done' as const }]
+                      ? [{ type: 'reasoning' as const, text: reasoning, state: partState }]
                       : []),
-                    ...(text ? [{ type: 'text' as const, text, state: 'done' as const }] : []),
+                    ...(text ? [{ type: 'text' as const, text, state: partState }] : []),
                   ],
                 } as UIMessage
           )
@@ -1310,9 +1692,12 @@ export function ChatPanel({
 
   const handleEditMessage = useCallback(
     async (messageId: string, newText: string) => {
+      // messages 走 ref 镜像读取(依赖数组保持 [setMessages, sendMessage] 稳定,
+      // 原因见 messagesRef 处注释);编辑只在非流式期可点,读到的是最新一次 commit
+      const msgs = messagesRef.current
       // C 分支轻量版: 刚发送的消息持有 AI SDK 本地临时 id(与服务端 cuid 不同),
       // 服务端按 id 查不到时会用旧文本回退定位,所以这里附带旧文本一起传
-      const oldMessage = messages.find((m) => m.id === messageId)
+      const oldMessage = msgs.find((m) => m.id === messageId)
       const oldText = oldMessage
         ? oldMessage.parts
             .filter((p) => p.type === 'text')
@@ -1343,16 +1728,16 @@ export function ChatPanel({
 
       // Truncate local messages to before the edited message
       // 注意: 本地查找必须用原始本地 id(临时 id 或历史 cuid),不能用 editedFromId
-      const editIndex = messages.findIndex((m) => m.id === messageId)
+      const editIndex = msgs.findIndex((m) => m.id === messageId)
       if (editIndex === -1) return
-      const truncated = messages.slice(0, editIndex)
+      const truncated = msgs.slice(0, editIndex)
       setMessages(truncated)
 
       // C 分支轻量版: 新消息带 editedFrom 指向被编辑消息(真实数据库 id),服务端落库后
       // MessageBubble 据此显示"查看历史版本"回看入口
       sendMessage({ text: newText, metadata: { editedFrom: editedFromId } })
     },
-    [messages, setMessages, sendMessage]
+    [setMessages, sendMessage]
   )
 
   const errorInfo = useMemo(
@@ -1405,11 +1790,12 @@ export function ChatPanel({
   }
 
   return (
-    <div className={`flex flex-col h-full relative overflow-hidden transition-[margin] duration-300 ease-out ${codePanelOpen ? 'md:mr-[min(60vw,960px)]' : writePanelOpen || previewOpen || editorOpen ? 'md:mr-[min(46vw,720px)]' : ''}`}>
+    <div className="flex h-full min-h-0">
+      <div className="flex flex-col h-full min-w-0 flex-1 relative overflow-hidden">
 
-      {/* Error banner */}
+      {/* Error banner(桌面端下移让位浮动工具簇: 横幅全宽,右缘正落在无底板浮簇底下) */}
       {error && errorInfo && (
-        <div className="mx-4 mt-3 mb-0 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 flex items-start gap-3">
+        <div className="mx-4 mt-3 mb-0 md:mt-12 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 flex items-start gap-3">
           <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm text-red-600 dark:text-red-400 font-medium">
@@ -1463,7 +1849,10 @@ export function ChatPanel({
 
       {/* Mask bar - 当前生效的面具 chip(仅对话态;欢迎态由输入框下方胶囊行承担入口),点击弹出切换面板 */}
       {activeMask && messages.length > 0 && (
-        <div className="px-4 pt-2">
+        // data-tauri-drag-region:客户端下这一行本身就是空白带(chip 只占左侧一小块),
+        // 整行挂拖动区 → 除 chip 与其弹层外的区域都能抓窗(chat 顶部好抓手 +1)。
+        // 注意只挂属性不写 -webkit-app-region,避免子元素继承拖拽区把弹层点击吃掉。
+        <div className="px-4 pt-2" data-tauri-drag-region="">
           <div className="relative inline-block">
             <button
               onClick={() => setMaskPickerOpen((v) => !v)}
@@ -1530,11 +1919,25 @@ export function ChatPanel({
                   fontFamily: "'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif",
                 }}
               >
-                {getGreeting()}，今天能为你做些什么？
+                {/* 主题问候: 六选一,由 配色 + 明暗 走 CSS 门控,不做日期/时段检测 ——
+                    换回黑白基线即恢复原问候语。常规版挂 .base-only(格子下另有专属
+                    文案),不用 .no-fest —— 后者在格子下仍然可见,会给登录页标语复用。
+                    注意 .grid-night 是**暮色**的历史错名,晚上那版叫 .grid-nightfall */}
+                <span className="base-only">{getGreeting()}，今天能为你做些什么？</span>
+                <span className="fest-night">中秋快乐，今夜月色正圆</span>
+                <span className="grid-dawn">天亮了，今天想做点什么？</span>
+                <span className="grid-day">日头正好，今天想做点什么？</span>
+                <span className="grid-night">暮色四合，今天想做点什么？</span>
+                <span className="grid-nightfall">夜深了，今天想做点什么？</span>
               </h2>
               {/* 副标题: 日期 + 当前模型,给问候语增加层次 */}
               <p className="mt-3 text-xs text-content-muted tracking-wide">
                 {getDateLine()}
+                <span className="fest-only fest-tag"> · 中秋</span>
+                <span className="grid-dawn fest-tag"> · 日出</span>
+                <span className="grid-day fest-tag"> · 正午</span>
+                <span className="grid-night fest-tag"> · 暮色</span>
+                <span className="grid-nightfall fest-tag"> · 夜晚</span>
                 {currentModelName ? ` · ${currentModelName}` : ''}
               </p>
             </div>
@@ -1545,9 +1948,15 @@ export function ChatPanel({
           {/* relative wrapper: "回到底部"按钮需要相对消息区(而非滚动内容)定位,
               absolute 元素放进滚动容器内会随内容滚走 */}
           <div className="relative flex-1 min-h-0">
+            {/* md:pt-12: 桌面端浮动工具簇无底板悬在内容区右上,首条消息(含右对齐用户气泡)须从其下方起排;
+                padding 放在滚动容器内,滚动时随内容移出 —— 顶部裁切线保持 y=0,TopFade 渐隐行为不变 */}
+            {/* data-tauri-drag-region:容器自身的 md:pt-12 留白带(滚到顶时的顶部 48px)
+                即客户端窗口拖动区,滚动后留白移出、拖动随之失效,不挡消息点击与选词。
+                只挂属性不写 -webkit-app-region:子元素不继承拖拽区,正文选择/按钮不受影响 */}
             <div
               ref={setMessagesScrollEl}
-              className="h-full overflow-y-auto overflow-x-hidden scroll-contain"
+              data-tauri-drag-region=""
+              className="h-full overflow-y-auto overflow-x-hidden scroll-contain md:pt-12"
             >
               <div className="flex min-h-full">
                 <MessageList
@@ -1555,13 +1964,25 @@ export function ChatPanel({
                   isStreaming={isLoading}
                   isPending={status === 'submitted'}
                   className="min-h-full flex-1"
+                  virtualized
+                  scrollElement={messagesScrollEl}
                   onRegenerate={handleRegenerate}
                   onEditMessage={handleEditMessage}
                   onClarifySubmit={handleSend}
                   onLocalFileDecision={handleLocalFileDecision}
                   onOpenEditor={handleOpenEditor}
                 />
-                <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
+                {/* 资料面板占住右墙时,刻度列不隐藏,只按面板实际宽度整体左移;
+                    drawer 打开时右墙由 fixed 抽屉接管,刻度列才撤下 */}
+                {!drawerOpen && (
+                  <OutlineSidebar
+                    messages={messages}
+                    scrollContainer={messagesScrollEl}
+                    rightOffset={
+                      infoSlotOccupied ? (infoPanelOpen ? INFO_PANEL_WIDTH : INFO_TAB_WIDTH) : 0
+                    }
+                  />
+                )}
               </div>
             </div>
             {showScrollToBottom && (
@@ -1610,6 +2031,27 @@ export function ChatPanel({
             </div>
           )}
 
+          {/* 待批准操作钉住横幅(P0):不用滚聊天流找确认卡,点击一键定位 */}
+          {pendingApprovals.length > 0 && (
+            <div className="flex justify-center px-4 pb-1.5">
+              <button
+                type="button"
+                onClick={() => gotoPendingApproval(pendingApprovals[0].id)}
+                className="inline-flex max-w-full items-center gap-2.5 rounded-full bg-[#1d1d21] px-4 py-2 text-xs text-white
+                  shadow-lg transition-transform hover:-translate-y-0.5"
+              >
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-400" />
+                <span className="truncate">
+                  {pendingApprovals.length} 个操作待批准 · {pendingApprovals[0].label}
+                </span>
+                {pendingApprovals.length > 1 && (
+                  <span className="shrink-0 text-[10px] text-white/50">共 {pendingApprovals.length} 个</span>
+                )}
+                <span className="shrink-0 font-medium text-blue-300">定位 →</span>
+              </button>
+            </div>
+          )}
+
           {/* Input area - fixed at bottom */}
           <ChatInput
             onSend={handleSend}
@@ -1637,9 +2079,20 @@ export function ChatPanel({
       )}
 
       <WriteDocPanel />
-      <FileEditorPanel />
-      <CodePanel />
       <ChatPreviewPanel />
+      </div>
+
+      {/* [P1]常驻 Side Pane:预览/文件树/编辑器/代码 四 tab 并存,取代互斥覆盖面板 */}
+      <WorkSidePane messages={messages} />
+
+      {/* 对话资料:聊天列右侧的并列一列(in-flow),留在 app-shell 圆角容器内,不越界;
+          抽屉打开时整列撤下,由 fixed 抽屉接管右墙 */}
+      {infoSlotOccupied && (
+        <InfoAsidePanel
+          conversationId={conversationId}
+          messages={messages}
+        />
+      )}
     </div>
   )
 }

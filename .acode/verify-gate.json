@@ -1,0 +1,5 @@
+{
+  "command": "cmd.exe",
+  "args": ["/d", "/s", "/c", "npx tsc --noEmit"],
+  "timeoutMs": 180000
+}
