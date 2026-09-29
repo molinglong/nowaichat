@@ -54,10 +54,114 @@ const PROMPT_PRESETS = [
 // 本地 state 初始化和「存档模型已下线」自愈都回落到它
 const DEFAULT_IMAGE_MODEL = 'builtin:wanx2.1-t2i-turbo'
 
+// ─── 生图进度:消费 /api/images 的 NDJSON 阶段流 ────────────────────────────────
+// 阶段与 src/lib/ai/image.ts 的 GenStage 对齐
+type GenStage = 'submit' | 'running' | 'saving'
+
+const STAGE_LABEL: Record<GenStage, string> = {
+  submit: '提交任务',
+  running: '模型生成中',
+  saving: '下载保存',
+}
+
+type StageEvent = { stage: GenStage; poll?: number; elapsedMs?: number }
+
+/**
+ * 阶段 → 进度条百分比。
+ * submit/saving 是瞬时阶段给固定值;running 拿不到真实百分比(接口是轮询/同步返回),
+ * 用已用时近似:约 30s 爬到 85%,再慢也不超过 95(避免"卡在 99%")。
+ */
+function stagePercent(stage: GenStage, elapsedMs: number): number {
+  if (stage === 'submit') return 6
+  if (stage === 'saving') return 92
+  return Math.min(95, Math.round(12 + (elapsedMs / 30_000) * 73))
+}
+
+/**
+ * 发起生图并消费进度流(POST + fetch ReadableStream;EventSource 只支持 GET)。
+ * - 服务端返回 NDJSON:逐行解析 stage/done/error 事件
+ * - 服务端返回 JSON(参数校验失败/旧版本):按 JSON 语义回退,不改行为
+ */
+async function readGenerationStream<T>(
+  body: Record<string, unknown>,
+  onStage: (e: StageEvent) => void
+): Promise<T> {
+  const res = await fetch('/api/images', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!(res.headers.get('content-type') ?? '').includes('application/x-ndjson')) {
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error((data as { error?: string }).error || `生成失败 (HTTP ${res.status})`)
+    }
+    return data as T
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error('生成失败:响应不可读')
+
+  const decoder = new TextDecoder()
+  const outcome: { result?: T; error?: string } = {}
+  let buffer = ''
+
+  const handleLine = (line: string) => {
+    const text = line.trim()
+    if (!text) return
+    let evt: {
+      type?: string
+      stage?: GenStage
+      poll?: number
+      elapsedMs?: number
+      payload?: T
+      message?: string
+    }
+    try {
+      evt = JSON.parse(text)
+    } catch {
+      return
+    }
+    if (evt.type === 'stage' && evt.stage) {
+      onStage({ stage: evt.stage, poll: evt.poll, elapsedMs: evt.elapsedMs })
+    } else if (evt.type === 'done') {
+      outcome.result = evt.payload
+    } else if (evt.type === 'error') {
+      outcome.error = evt.message || '生成失败'
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+  }
+  buffer += decoder.decode()
+  if (buffer.trim()) handleLine(buffer)
+
+  if (outcome.error) throw new Error(outcome.error)
+  const payload = outcome.result
+  if (payload === undefined) throw new Error('生成失败:连接中断,请重试')
+  return payload
+}
+
 function ImagesContent() {
   const queryClient = useQueryClient()
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
+  // 生图阶段进度(提交/生成中/保存 + 起始时间);非 null 时按钮下方显示进度条
+  const [genProgress, setGenProgress] = useState<{
+    stage: GenStage
+    poll?: number
+    startedAt: number
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [images, setImages] = useState<GeneratedImage[]>([])
   const [loadingList, setLoadingList] = useState(true)
@@ -247,6 +351,8 @@ function ImagesContent() {
     if (!text || generating) return
     setGenerating(true)
     setError(null)
+    const startedAt = Date.now()
+    setGenProgress({ stage: 'submit', startedAt })
     try {
       const body: Record<string, unknown> = {
         prompt: text,
@@ -255,16 +361,13 @@ function ImagesContent() {
       if (referenceImage) {
         body.referenceImageUrl = referenceImage.url
       }
-      const res = await fetch('/api/images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const record = await readGenerationStream<GeneratedImage>(body, (e) => {
+        setGenProgress((prev) => ({
+          stage: e.stage,
+          poll: e.poll,
+          startedAt: prev?.startedAt ?? startedAt,
+        }))
       })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `生成失败 (HTTP ${res.status})`)
-      }
-      const record: GeneratedImage = await res.json()
       setImages((prev) => [record, ...prev])
       setTotal((n) => n + 1)
       setLatestGeneratedId(record.id)
@@ -279,6 +382,7 @@ function ImagesContent() {
       setError(err instanceof Error ? err.message : '生成失败')
     } finally {
       setGenerating(false)
+      setGenProgress(null)
     }
   }
 
@@ -613,6 +717,14 @@ function ImagesContent() {
             )}
           </button>
 
+          {genProgress && (
+            <GenerationProgress
+              stage={genProgress.stage}
+              poll={genProgress.poll}
+              startedAt={genProgress.startedAt}
+            />
+          )}
+
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs text-content-secondary font-medium">图片尺寸</label>
@@ -823,6 +935,52 @@ function ReferenceImageDropZone({
   )
 }
 
+// ─── 生图进度条(工作台生图 / 二创共用) ────────────────────────────────────────
+function GenerationProgress({
+  stage,
+  poll,
+  startedAt,
+}: {
+  stage: GenStage
+  poll?: number
+  startedAt: number
+}) {
+  const [elapsedMs, setElapsedMs] = useState(() => Date.now() - startedAt)
+  useEffect(() => {
+    setElapsedMs(Date.now() - startedAt)
+    const timer = setInterval(() => setElapsedMs(Date.now() - startedAt), 500)
+    return () => clearInterval(timer)
+  }, [startedAt])
+
+  const percent = stagePercent(stage, elapsedMs)
+  const seconds = Math.floor(elapsedMs / 1000)
+  return (
+    <div className="rounded-lg border border-line/60 bg-surface-subtle px-3 py-2">
+      <div className="flex items-center justify-between text-[11px] mb-1.5">
+        <span className="flex items-center gap-1.5 text-content-secondary">
+          <Loader2 className="w-3 h-3 animate-spin text-accent" />
+          {STAGE_LABEL[stage]}
+          {stage === 'running' && poll ? (
+            <span className="text-content-muted">· 第 {poll} 次查询</span>
+          ) : null}
+        </span>
+        <span className="text-content-muted tabular-nums">{seconds}s</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-surface-muted overflow-hidden">
+        <div
+          className="h-full bg-accent transition-[width] duration-500 ease-out"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      {seconds >= 90 && (
+        <div className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400">
+          耗时超出常规,模型可能繁忙;可继续等待,或稍后重试
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── 共享二创面板(PreviewView 与弹窗共用) ───────────────────────────────────
 function EditPanel({
   image,
@@ -843,6 +1001,12 @@ function EditPanel({
   const [editBusy, setEditBusy] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [variations, setVariations] = useState<GeneratedImage[] | null>(null)
+  // 二创阶段进度(与工作台生图同一套阶段流)
+  const [editProgress, setEditProgress] = useState<{
+    stage: GenStage
+    poll?: number
+    startedAt: number
+  } | null>(null)
   const imgWrapRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<null | { startX: number; startY: number }>(null)
 
@@ -860,6 +1024,8 @@ function EditPanel({
     setEditBusy(true)
     setEditError(null)
     setVariations(null)
+    const startedAt = Date.now()
+    setEditProgress({ stage: 'submit', startedAt })
     try {
       const body: Record<string, unknown> = {
         parentId: image.id,
@@ -870,16 +1036,16 @@ function EditPanel({
       if (editTab === 'variation') body.n = editN
       if (editTab === 'inpaint' && maskRect) body.maskRect = maskRect
 
-      const res = await fetch('/api/images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const data = await readGenerationStream<{
+        primary: GeneratedImage
+        items: GeneratedImage[]
+      }>(body, (e) => {
+        setEditProgress((prev) => ({
+          stage: e.stage,
+          poll: e.poll,
+          startedAt: prev?.startedAt ?? startedAt,
+        }))
       })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `二创失败 (HTTP ${res.status})`)
-      }
-      const data = (await res.json()) as { primary: GeneratedImage; items: GeneratedImage[] }
       if (editTab === 'variation') {
         setVariations(data.items)
       } else {
@@ -889,6 +1055,7 @@ function EditPanel({
       setEditError(err instanceof Error ? err.message : '二创失败')
     } finally {
       setEditBusy(false)
+      setEditProgress(null)
     }
   }
 
@@ -1100,6 +1267,16 @@ function EditPanel({
           {editError && (
             <div className="mx-3 mt-3 px-3 py-2 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
               {editError}
+            </div>
+          )}
+
+          {editProgress && (
+            <div className="px-3 pt-3">
+              <GenerationProgress
+                stage={editProgress.stage}
+                poll={editProgress.poll}
+                startedAt={editProgress.startedAt}
+              />
             </div>
           )}
 

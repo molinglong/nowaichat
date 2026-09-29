@@ -10,7 +10,8 @@
 #        → tar.gz → scp → VPS 解压到 .new 目录 → mv 原子切换 → 重启容器 → 健康验证
 #        验证失败自动回滚（把 .old 目录换回去重启）。
 #
-# 注意:  dev/build 共用 .next 会炸产物 —— 检测到 dev 进程自动暂停, 部署结束(无论成败)自动恢复。
+# 注意:  构建走独立 distDir(.next-deploy), 与运行中 dev 的 .next 完全隔离, 产物不会被 dev 写坏;
+#        [1/6] 的 dev 暂停逻辑保留(部署结束无论成败自动恢复), 但不再依赖它保证产物完整。
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
@@ -38,14 +39,20 @@ Write-Host "OK"
 
 try {
 
-Write-Host "=== [2/6] 本地构建 npm run build ===" -ForegroundColor Cyan
+Write-Host "=== [2/6] 本地构建 npm run build (独立 distDir, 与 dev 的 .next 隔离) ===" -ForegroundColor Cyan
+$LocalDist = ".next-deploy"
 Push-Location $ProjectRoot
 try {
+    $env:NEXT_DIST_DIR = $LocalDist
     npm run build
-    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: 构建失败" -ForegroundColor Red; exit 1 }
-} finally { Pop-Location }
-if (-not (Test-Path "$ProjectRoot\.next\standalone\server.js")) {
-    Write-Host "ERROR: .next\standalone\server.js 不存在, 确认 next.config.mjs 的 output:'standalone'" -ForegroundColor Red
+    $buildExit = $LASTEXITCODE
+} finally {
+    Remove-Item Env:NEXT_DIST_DIR -ErrorAction SilentlyContinue
+    Pop-Location
+}
+if ($buildExit -ne 0) { Write-Host "ERROR: 构建失败" -ForegroundColor Red; exit 1 }
+if (-not (Test-Path "$ProjectRoot\$LocalDist\standalone\server.js")) {
+    Write-Host "ERROR: $LocalDist\standalone\server.js 不存在, 确认 next.config.mjs 的 output:'standalone'" -ForegroundColor Red
     exit 1
 }
 Write-Host "OK"
@@ -55,9 +62,10 @@ $stage = Join-Path $env:TEMP "aichatt-dist-stage"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $stage | Out-Null
 # standalone 本体（含打包的 node_modules 与 server.js）
-Copy-Item -Recurse "$ProjectRoot\.next\standalone\*" $stage
+Copy-Item -Recurse "$ProjectRoot\$LocalDist\standalone\*" $stage
 # standalone 不自带静态资源/公共文件，需手动并入（与 Dockerfile 一致）
-Copy-Item -Recurse "$ProjectRoot\.next\static" "$stage\.next\static" -Force
+# 注意: 目标目录名必须与 distDir 同名(server.js 按构建时的 distDir 找静态资源)
+Copy-Item -Recurse "$ProjectRoot\$LocalDist\static" "$stage\$LocalDist\static" -Force
 Copy-Item -Recurse "$ProjectRoot\public" "$stage\public" -Force
 # 瘦身: 字体(103MB)/uploads(16MB)不进包 —— 包从 265MB 降到 ~145MB, 上传时间减半;
 # fonts/fonts-subset 由 VPS 端切换时从旧产物原地回填(见 [6/6]);

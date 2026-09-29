@@ -5,6 +5,7 @@ node_modules/
 
 # Build
 .next/
+.next-*/
 out/
 build/
 dist/
@@ -46,8 +47,8 @@ next-env.d.ts
 prisma/*.db
 prisma/*.db-journal
 
-# Uploads
-uploads/
+# Uploads(仅运行时用户内容;锚定根目录,避免误伤 src/app/uploads 路由)
+/public/uploads/
 
 # Dev files
 *.db

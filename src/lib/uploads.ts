@@ -6,24 +6,13 @@
 import path from "path"
 import { readFile, readdir, stat, unlink } from "fs/promises"
 import { prisma } from "@/lib/db"
+import { sanitizeUploadName } from "@/lib/upload-name"
 
 export const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads")
 
-/** 上传时生成的唯一文件名:nanoId(12) + 扩展名 */
-const UPLOAD_NAME_REGEX = /^[\w-]{8,32}(\.[A-Za-z0-9]{1,10})?$/
-
-/**
- * 从 URL(/uploads/xxx.png)或文件名中提取并校验文件名,
- * 防止路径穿越;非法时返回 null。
- */
-export function sanitizeUploadName(input: string): string | null {
-  let name = input.trim()
-  if (name.includes("/")) {
-    name = path.basename(name)
-  }
-  if (!UPLOAD_NAME_REGEX.test(name)) return null
-  return name
-}
+// 文件名校验的实现移到了无 fs/prisma 依赖的 @/lib/upload-name,
+// 供 /uploads 静态兜底路由复用;此处 re-export 保持既有调用方不变
+export { sanitizeUploadName }
 
 /** 收集全库消息中所有被引用的附件文件名 */
 export async function collectReferencedUploadNames(): Promise<Set<string>> {

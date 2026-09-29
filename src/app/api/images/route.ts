@@ -7,6 +7,7 @@ import {
   generateImageWithReference,
   supportsReferenceImage,
   type EditType,
+  type OnGenProgress,
 } from "@/lib/ai/image"
 
 export const maxDuration = 90 // seconds
@@ -40,6 +41,77 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ items, total, limit, offset })
 }
 
+/** 客户端声明接受 NDJSON 时才走流式进度(fetch 无法用 EventSource,故选 NDJSON over POST) */
+function wantsStream(req: NextRequest): boolean {
+  return (req.headers.get("accept") ?? "").includes("application/x-ndjson")
+}
+
+/**
+ * 统一执行 + 响应:
+ *  - 非流式(Accept 不含 application/x-ndjson):保持原 JSON 行为(旧客户端/其它调用方兼容)
+ *  - 流式:逐行 NDJSON 事件 {type:"stage"|"done"|"error", ...},让前端展示真实阶段进度
+ */
+async function respond(
+  req: NextRequest,
+  execute: (onProgress?: OnGenProgress) => Promise<unknown>,
+  label: string
+): Promise<Response> {
+  if (!wantsStream(req)) {
+    try {
+      return NextResponse.json(await execute())
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "图片生成失败"
+      console.error(`[images] ${label} failed:`, message)
+      return NextResponse.json({ error: message }, { status: 500 })
+    }
+  }
+
+  const encoder = new TextEncoder()
+  const startedAt = Date.now()
+  let closed = false
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const emit = (evt: Record<string, unknown>) => {
+        if (closed) return
+        try {
+          controller.enqueue(
+            encoder.encode(JSON.stringify({ ...evt, elapsedMs: Date.now() - startedAt }) + "\n")
+          )
+        } catch {
+          // 客户端已断开(导航/取消),后续事件直接丢弃
+          closed = true
+        }
+      }
+      try {
+        const payload = await execute((stage, info) =>
+          emit({ type: "stage", stage, ...(info?.poll ? { poll: info.poll } : {}) })
+        )
+        emit({ type: "done", payload })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "图片生成失败"
+        console.error(`[images] ${label} failed:`, message)
+        emit({ type: "error", message })
+      } finally {
+        closed = true
+        try {
+          controller.close()
+        } catch {
+          // already closed
+        }
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      // 反代(宝塔 nginx)不缓冲响应,保证阶段事件实时到达
+      "X-Accel-Buffering": "no",
+    },
+  })
+}
+
 /**
  * POST /api/images
  *
@@ -55,6 +127,8 @@ export async function GET(req: NextRequest) {
  *   - editType: "edit" | "inpaint" | "variation"
  *   - maskRect: { x, y, w, h } 0~1 归一化坐标 (仅 inpaint 需要)
  *   - n: 生成数量 (仅 variation,默认 1)
+ *
+ * 进度:请求头 Accept: application/x-ndjson 时返回阶段事件流(见 respond)
  */
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -103,48 +177,46 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "父图不存在或无权访问" }, { status: 404 })
     }
 
-    try {
-      const results = await editImage({
-        userId,
-        sourceUrl: parent.url,
-        sourceWidth: parent.width,
-        sourceHeight: parent.height,
-        prompt,
-        editType,
-        maskRect: body.maskRect,
-        n,
-        modelId: body.modelId,
-      })
+    return respond(
+      req,
+      async (onProgress) => {
+        const results = await editImage({
+          userId,
+          sourceUrl: parent.url,
+          sourceWidth: parent.width,
+          sourceHeight: parent.height,
+          prompt,
+          editType,
+          maskRect: body.maskRect,
+          n,
+          modelId: body.modelId,
+          onProgress,
+        })
 
-      const records = await Promise.all(
-        results.map((r) =>
-          prisma.generatedImage.create({
-            data: {
-              userId,
-              prompt: prompt || `(variation of ${parent.id.slice(0, 6)})`,
-              url: r.url,
-              model: r.model,
-              width: r.width,
-              height: r.height,
-              size: parent.size,
-              source,
-              parentId: parent.id,
-              editType,
-              maskRect: body.maskRect ? JSON.stringify(body.maskRect) : null,
-            },
-          })
+        const records = await Promise.all(
+          results.map((r) =>
+            prisma.generatedImage.create({
+              data: {
+                userId,
+                prompt: prompt || `(variation of ${parent.id.slice(0, 6)})`,
+                url: r.url,
+                model: r.model,
+                width: r.width,
+                height: r.height,
+                size: parent.size,
+                source,
+                parentId: parent.id,
+                editType,
+                maskRect: body.maskRect ? JSON.stringify(body.maskRect) : null,
+              },
+            })
+          )
         )
-      )
-      // variation 多张时只返回第一张作为主预览,全部通过 items 字段返回
-      return NextResponse.json({
-        primary: records[0],
-        items: records,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "二创生成失败"
-      console.error("[images] Edit failed:", message)
-      return NextResponse.json({ error: message }, { status: 500 })
-    }
+        // variation 多张时只返回第一张作为主预览,全部通过 items 字段返回
+        return { primary: records[0], items: records }
+      },
+      "Edit"
+    )
   }
 
   // 文生图路径
@@ -181,15 +253,42 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    try {
-      const result = await generateImageWithReference({
-        userId,
-        modelId,
-        referenceImageUrl: refUrl,
-        prompt,
-        size,
-      })
-      const record = await prisma.generatedImage.create({
+    return respond(
+      req,
+      async (onProgress) => {
+        const result = await generateImageWithReference({
+          userId,
+          modelId,
+          referenceImageUrl: refUrl,
+          prompt,
+          size,
+          onProgress,
+        })
+        return prisma.generatedImage.create({
+          data: {
+            userId,
+            prompt,
+            url: result.url,
+            model: result.model,
+            width: result.width,
+            height: result.height,
+            size,
+            source,
+            // editType 沿用 'edit',历史记录/筛选与二创「以图生图」共用通道
+            editType: "edit",
+            referenceImageUrl: refUrl,
+          },
+        })
+      },
+      "Reference generation"
+    )
+  }
+
+  return respond(
+    req,
+    async (onProgress) => {
+      const result = await generateImage(userId, modelId, prompt, size, onProgress)
+      return prisma.generatedImage.create({
         data: {
           userId,
           prompt,
@@ -199,37 +298,9 @@ export async function POST(req: NextRequest) {
           height: result.height,
           size,
           source,
-          // editType 沿用 'edit',历史记录/筛选与二创「以图生图」共用通道
-          editType: "edit",
-          referenceImageUrl: refUrl,
         },
       })
-      return NextResponse.json(record)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "参考图生图失败"
-      console.error("[images] Reference generation failed:", message)
-      return NextResponse.json({ error: message }, { status: 500 })
-    }
-  }
-
-  try {
-    const result = await generateImage(userId, modelId, prompt, size)
-    const record = await prisma.generatedImage.create({
-      data: {
-        userId,
-        prompt,
-        url: result.url,
-        model: result.model,
-        width: result.width,
-        height: result.height,
-        size,
-        source,
-      },
-    })
-    return NextResponse.json(record)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "图片生成失败"
-    console.error("[images] Generate failed:", message)
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
+    },
+    "Generate"
+  )
 }

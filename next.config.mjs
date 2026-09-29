@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // dev/build 共用 .next 会互相写坏产物(standalone 复制不全 -> 运行时 500)。
+  // 设置 NEXT_DIST_DIR 可把本次构建隔离到独立目录,与运行中的 dev 井水不犯河水。
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   eslint: {
     // 生产构建不强制 lint:开发体验已经由 IDE/编辑器接管,
     // 部署期 lint 报错会阻断镜像构建,得不偿失。

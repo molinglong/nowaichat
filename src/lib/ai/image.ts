@@ -38,6 +38,12 @@ export interface GenerationResult {
   height: number
 }
 
+/** 生图进度阶段:提交任务 → 模型生成中 → 下载保存 */
+export type GenStage = "submit" | "running" | "saving"
+
+/** 进度回调(info.poll 为轮询序号,用于区分"还在生成"与"卡死") */
+export type OnGenProgress = (stage: GenStage, info?: { poll?: number }) => void
+
 /** 根据 modelId 判断 provider 类型 */
 function getProviderType(modelId: string): "builtin" | "custom" {
   return modelId.startsWith("builtin:") ? "builtin" : "custom"
@@ -48,12 +54,14 @@ async function generateWanx(
   prompt: string,
   apiKey: string,
   modelId: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   const BASE = "https://dashscope.aliyuncs.com/api/v1"
   const selectedSize = size || "1024*1024"
   const [width, height] = selectedSize.split("*").map(Number)
 
+  onProgress?.("submit")
   const createRes = await fetch(`${BASE}/services/aigc/text2image/image-synthesis`, {
     method: "POST",
     headers: {
@@ -79,8 +87,11 @@ async function generateWanx(
   }
 
   const deadline = Date.now() + MAX_WAIT_MS
+  let pollCount = 0
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS)
+    pollCount++
+    onProgress?.("running", { poll: pollCount })
     const pollRes = await fetch(`${BASE}/tasks/${taskId}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
@@ -91,6 +102,7 @@ async function generateWanx(
     if (status === "SUCCEEDED") {
       const url = pollJson.output?.results?.[0]?.url
       if (!url) throw new Error("图片生成成功,但未返回图片链接")
+      onProgress?.("saving")
       const saved = await downloadAndSave(url)
       return { url: saved, model: modelId, width, height }
     }
@@ -107,7 +119,8 @@ async function generateOpenAICompatible(
   apiKey: string,
   modelId: string,
   baseURL: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   // 统一格式: size → width x height
   const sizeMap: Record<string, { width: number; height: number }> = {
@@ -148,6 +161,9 @@ async function generateOpenAICompatible(
     body.height = height
   }
 
+  // 同步适配器:请求发出即"提交",等待响应期间即"生成中"
+  onProgress?.("submit")
+  onProgress?.("running")
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -167,6 +183,7 @@ async function generateOpenAICompatible(
   const item = json.data?.[0]
   if (!item) throw new Error("图片生成成功但无返回数据")
 
+  onProgress?.("saving")
   if (item.url) {
     const saved = await downloadAndSave(item.url)
     return { url: saved, model: modelId, width, height }
@@ -185,7 +202,8 @@ async function generateGeminiWithReference(
   modelId: string,
   baseURL: string,
   referenceImageDataUrl: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   // size → Gemini aspectRatio
   const sizeMap: Record<string, string> = {
@@ -238,6 +256,9 @@ async function generateGeminiWithReference(
     },
   }
 
+  // 同步适配器:请求发出即"提交",等待响应期间即"生成中"
+  onProgress?.("submit")
+  onProgress?.("running")
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -290,6 +311,7 @@ async function generateGeminiWithReference(
     )
   }
 
+  onProgress?.("saving")
   const saved = await saveBase64(imageBase64)
   return { url: saved, model: modelId, width, height }
 }
@@ -301,7 +323,8 @@ async function generateOpenAIWithReference(
   modelId: string,
   baseURL: string,
   referenceImageDataUrl: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   const sizeMap: Record<string, { width: number; height: number }> = {
     "1024*1024": { width: 1024, height: 1024 },
@@ -339,6 +362,9 @@ async function generateOpenAIWithReference(
     body.height = height
   }
 
+  // 同步适配器:请求发出即"提交",等待响应期间即"生成中"
+  onProgress?.("submit")
+  onProgress?.("running")
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -358,6 +384,7 @@ async function generateOpenAIWithReference(
   const item = json.data?.[0]
   if (!item) throw new Error("图片生成成功但无返回数据")
 
+  onProgress?.("saving")
   if (item.url) {
     const saved = await downloadAndSave(item.url)
     return { url: saved, model: modelId, width, height }
@@ -374,7 +401,8 @@ async function generateStability(
   prompt: string,
   apiKey: string,
   modelId: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   const sizeMap: Record<string, { width: number; height: number }> = {
     "1024x1024": { width: 1024, height: 1024 },
@@ -386,6 +414,9 @@ async function generateStability(
   const sizeKey = size || "1024x1024"
   const { width, height } = sizeMap[sizeKey] ?? { width: 1024, height: 1024 }
 
+  // 同步适配器:请求发出即"提交",等待响应期间即"生成中"
+  onProgress?.("submit")
+  onProgress?.("running")
   const res = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
     method: "POST",
     headers: {
@@ -412,6 +443,7 @@ async function generateStability(
   }
   const artifact = json.artifacts?.[0]
   if (!artifact?.base64) throw new Error("图片生成失败或无返回")
+  onProgress?.("saving")
   const saved = await saveBase64(artifact.base64)
   return { url: saved, model: modelId, width, height }
 }
@@ -428,7 +460,8 @@ export async function generateImage(
   userId: string,
   modelId: string,
   prompt: string,
-  size?: string
+  size?: string,
+  onProgress?: OnGenProgress
 ): Promise<GenerationResult> {
   const providerType = getProviderType(modelId)
 
@@ -486,6 +519,7 @@ export async function generateImage(
     baseURL,
     size,
     providerKey,
+    onProgress,
   })
 }
 
@@ -515,20 +549,21 @@ async function dispatchAdapter(args: {
   baseURL?: string
   size?: string
   providerKey: string
+  onProgress?: OnGenProgress
 }): Promise<GenerationResult> {
-  const { adapter, prompt, apiKey, actualModelId, baseURL, size } = args
+  const { adapter, prompt, apiKey, actualModelId, baseURL, size, onProgress } = args
 
   switch (adapter) {
     case "qianwen":
-      return generateWanx(prompt, apiKey, actualModelId, size)
+      return generateWanx(prompt, apiKey, actualModelId, size, onProgress)
     case "qianwen-edit":
       throw new Error("qianwen-edit adapter 仅用于二创流程,请走 editImage()")
     case "openai": {
       if (!baseURL) throw new Error("OpenAI 兼容端点缺少 baseURL")
-      return generateOpenAICompatible(prompt, apiKey, actualModelId, baseURL, size)
+      return generateOpenAICompatible(prompt, apiKey, actualModelId, baseURL, size, onProgress)
     }
     case "stability":
-      return generateStability(prompt, apiKey, actualModelId, size)
+      return generateStability(prompt, apiKey, actualModelId, size, onProgress)
     default: {
       const _exhaustive: never = adapter
       throw new Error(`不支持的生图 adapter: ${String(_exhaustive)}`)
@@ -589,6 +624,8 @@ export interface EditInput {
   n?: number
   /** 使用的模型 id,默认 builtin:qwen-image-edit */
   modelId?: string
+  /** 进度回调(阶段:提交/生成中/保存) */
+  onProgress?: OnGenProgress
 }
 
 /** 检测后端模型是否原生支持二创(以图生图/局部重绘) */
@@ -716,7 +753,11 @@ async function generateQwenEdit(input: EditInput): Promise<GenerationResult[]> {
     editType,
     maskRect,
     n = 1,
+    onProgress,
   } = input
+
+  // 提交阶段包含:读取原图 + 上传 OSS(大图可能耗时数秒)
+  onProgress?.("submit")
 
   // 二创强制走 qwen-image-edit,屏蔽用户传入的 modelId
   const EDIT_MODEL_ID = "builtin:qwen-image-edit"
@@ -762,6 +803,7 @@ async function generateQwenEdit(input: EditInput): Promise<GenerationResult[]> {
   console.log(`[QwenEdit] 调用 multimodal-generation, model=${builtin.modelId}, content=${JSON.stringify(content)}, params=${JSON.stringify(parameters)}`)
   const endpoint = `https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`
   // multimodal-generation 是同步接口:直接返回结果,不需要异步任务 + 轮询
+  onProgress?.("running")
   const createRes = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -803,6 +845,7 @@ async function generateQwenEdit(input: EditInput): Promise<GenerationResult[]> {
   }
 
   // 下载每张 oss:// 图片到本地
+  onProgress?.("saving")
   const saved: GenerationResult[] = []
   for (const ossOrHttpUrl of ossUrls) {
     const httpUrl = await resolveDashScopeUrl(ossOrHttpUrl, apiKey)
@@ -840,6 +883,8 @@ export interface ReferenceImageInput {
   prompt: string
   /** 生图尺寸 */
   size?: string
+  /** 进度回调(阶段:提交/生成中/保存) */
+  onProgress?: OnGenProgress
 }
 
 /** 检查给定 modelId 是否支持图生图(参考图上传) */
@@ -853,7 +898,7 @@ export function supportsReferenceImage(modelId: string): boolean {
 export async function generateImageWithReference(
   input: ReferenceImageInput
 ): Promise<GenerationResult> {
-  const { userId, modelId, referenceImageUrl, prompt, size } = input
+  const { userId, modelId, referenceImageUrl, prompt, size, onProgress } = input
 
   // 读取参考图(自定义模型和内置模型共用)
   let refWidth = 1024
@@ -903,6 +948,7 @@ export async function generateImageWithReference(
       editType: "edit",
       n: 1,
       modelId: builtin.id,
+      onProgress,
     })
     if (results.length === 0) throw new Error("参考图生图失败,未返回图片")
     return results[0]
@@ -937,7 +983,8 @@ export async function generateImageWithReference(
       customModel.modelId,
       customModel.baseURL,
       refDataUrl,
-      size
+      size,
+      onProgress
     )
     return result
   }
@@ -949,7 +996,8 @@ export async function generateImageWithReference(
     customModel.modelId,
     customModel.baseURL,
     refDataUrl,
-    size
+    size,
+    onProgress
   )
   return result
 }
