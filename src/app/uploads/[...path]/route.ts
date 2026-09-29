@@ -17,7 +17,19 @@ import { sanitizeUploadName } from "@/lib/upload-name"
 // 必须动态:读的是运行期磁盘状态,不能被构建期静态化/缓存
 export const dynamic = "force-dynamic"
 
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads")
+const UPLOAD_DIR = path.resolve(process.cwd(), "public", "uploads")
+
+// 单段也可能带穿越/绝对路径/盘符/空字节/反斜杠(URL 解码产物), 一律按非法处理
+function isUnsafeSegment(segment: string): boolean {
+  return (
+    segment.includes("..") ||
+    segment.includes("/") ||
+    segment.includes("\\") ||
+    segment.includes("\0") ||
+    path.isAbsolute(segment) ||
+    /^[A-Za-z]:/.test(segment)
+  )
+}
 
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -44,7 +56,7 @@ export async function GET(
 ) {
   // uploads 目录是平铺结构(文件名 = 随机 id + 扩展名),多段路径一律非法
   const segments = params.path ?? []
-  if (segments.length !== 1) {
+  if (segments.length !== 1 || isUnsafeSegment(segments[0])) {
     return new Response("Not Found", { status: 404 })
   }
   // 文件名白名单校验(防路径穿越;与上传/生图落盘命名同一规范)
@@ -52,10 +64,15 @@ export async function GET(
   if (!name) {
     return new Response("Not Found", { status: 404 })
   }
+  // 纵深防御:解析结果必须严格落在 uploads 根目录内
+  const filePath = path.resolve(UPLOAD_DIR, name)
+  if (!filePath.startsWith(UPLOAD_DIR + path.sep)) {
+    return new Response("Not Found", { status: 404 })
+  }
 
   let buffer: Buffer
   try {
-    buffer = await readFile(path.join(UPLOAD_DIR, name))
+    buffer = await readFile(filePath)
   } catch {
     return new Response("Not Found", { status: 404 })
   }
