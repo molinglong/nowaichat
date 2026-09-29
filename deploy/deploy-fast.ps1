@@ -17,7 +17,9 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 $VpsHost = "root@yuban.icu"
 $DistDir = "/opt/aichatt-dist"
-$PkgName = "aichatt-dist.tar.gz"
+# 包名带时间戳: 防并行会话/历史残留撞车——2026-09-29 两会话同写 /tmp/aichatt-dist.tar.gz,
+# 我方 [6/6] 读到被并发写坏的包导致解压失败(本地包完好、通道干净, 纯属路径撞车)
+$PkgName = "aichatt-dist-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".tar.gz"
 # scp 上传限速(Kbit/s): 家宽上行被 scp 打满会拖慢全屋上网, 默认 ~1.1MB/s(实测链路峰值 1.8MB/s 的一半);
 # 设 0 则不限速全速上传
 $UploadLimitKbps = 9000
@@ -80,10 +82,14 @@ if (Test-Path $imgDir) { Remove-Item -Recurse -Force $imgDir; Write-Host "已排
 Write-Host "=== [4/6] 打包 tar.gz ===" -ForegroundColor Cyan
 $pkgPath = Join-Path $env:TEMP $PkgName
 Remove-Item -Force $pkgPath -ErrorAction SilentlyContinue
-tar -czf $pkgPath -C $stage .
+# 必须用 Windows 自带 bsdtar: 从 Git Bash 启动时 PATH 会先命中 GNU tar,
+# 它把 "C:\..." 的盘符当远程主机(host:path)解析, 直接报 "Cannot connect to C:"
+& "$env:SystemRoot\System32\tar.exe" -czf $pkgPath -C $stage .
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: tar 打包失败" -ForegroundColor Red; exit 1 }
 $pkgMB = [math]::Round((Get-Item $pkgPath).Length / 1MB, 1)
-Write-Host "OK ($pkgMB MB)"
+# 本地包指纹, 供远端解压前校验(防上传损坏/并发改写)
+$pkgMd5 = (Get-FileHash -Algorithm MD5 -Path $pkgPath).Hash.ToLower()
+Write-Host "OK ($pkgMB MB, md5 $pkgMd5)"
 
 Write-Host "=== [5/6] 上传 VPS ===" -ForegroundColor Cyan
 $scpArgs = @()
@@ -99,6 +105,12 @@ set -e
 PKG=/tmp/$PkgName
 NEW=$DistDir.new
 OLD=$DistDir.old
+# 解压前校验指纹: 包被并发写入/传输损坏时在此退出 —— 尚未触碰线上产物, 服务不受影响
+if ! echo "$pkgMd5  `$PKG" | md5sum -c -; then
+  echo "PKG MD5 MISMATCH (并发写入或传输损坏)"
+  rm -f `$PKG
+  exit 1
+fi
 rm -rf `$NEW
 mkdir -p `$NEW
 tar -xzf `$PKG -C `$NEW
