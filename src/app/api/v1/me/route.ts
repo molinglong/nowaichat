@@ -9,6 +9,16 @@ import { gatewayJsonError, resolveGatewayUserId } from "@/lib/api/gateway-auth"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type, x-api-key",
+}
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS })
+}
+
 export async function GET(req: NextRequest) {
   const userId = await resolveGatewayUserId(req)
   if (!userId) {
@@ -23,9 +33,8 @@ export async function GET(req: NextRequest) {
     return gatewayJsonError(404, "not_found_error", "user not found")
   }
 
-  return Response.json({
-    userId: user.id,
-    email: user.email,
-    name: user.name ?? user.email,
-  })
+  return Response.json(
+    { userId: user.id, email: user.email, name: user.name ?? user.email },
+    { headers: { ...CORS } }
+  )
 }
