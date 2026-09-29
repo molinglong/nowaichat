@@ -2231,7 +2231,7 @@ export function SettingsModal({
           <div aria-hidden className="hidden md:block absolute left-0 top-0 w-48 h-2 bg-surface pointer-events-none" />
           <div aria-hidden className="hidden md:block absolute left-0 bottom-0 w-48 h-2 bg-surface pointer-events-none" />
           {/* Sidebar —— 移动端:顶部水平 Tabs 滚动条;桌面端:左侧固定栏(顶部红点标题栏固定,导航项独立滚动) */}
-          <nav className="md:m-2 md:mr-0 w-full md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 backdrop-blur-3xl md:rounded-xl md:border md:border-line/60 overflow-hidden md:flex md:flex-col md:px-2 md:py-2">
+          <nav className="md:m-2 md:mr-0 w-full md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 glass-blur md:rounded-xl md:border md:border-line/60 overflow-hidden md:flex md:flex-col md:px-2 md:py-2">
             {/* 桌面端:固定标题栏——红点不随下方导航项滚动;标题栏语义手柄(立即拖动,双击复位居中) */}
             <div
               data-drag-handle
@@ -5750,8 +5750,10 @@ function PresetModelsManager({
   )
 }
 
-// ============ API 令牌(外部静态页 Bearer 调用凭证) ============
-// 供新标签页(bento)等本地静态页以 Authorization: Bearer 调用待办/快问等 REST API。
+// ============ API 令牌(外部凭证:本地静态页 + ACode 网关/MCP) ============
+// 供新标签页(bento)等本地静态页以 Authorization: Bearer 调用待办/快问等 REST API;
+// 同一枚令牌也是 ACode 的 aichatt 身份凭证:x-api-key 携带后可调用
+// /api/v1/models(拉模型清单)、/api/v1/messages(模型网关)、/api/v1/mcp(记忆读写)。
 // 明文仅创建响应中返回一次,库中只存哈希;撤销为软删除(保留审计)。
 
 interface ApiTokenRow {

@@ -1,19 +1,18 @@
 /**
  * Anthropic Messages 兼容端点(透明代理)——让外部 agent(如 ACode)以 aichatt 为唯一模型网关。
  *
- * 鉴权:x-api-key 与 env.AICHATT_API_TOKEN 时序安全比对(部署级全局令牌,配在 .env,不入库)。
- * 转发:按 body.model 匹配 CustomModel(protocol="anthropic")行,resolveApiKey 解密,
- *       原样转发到 {normalized baseURL}/messages,响应(含 SSE 流)逐字节透传。
+ * 鉴权:x-api-key → 个人访问令牌(ApiToken 表)解析出 userId,或部署级 env 令牌回退(管理员)。
+ * 隔离:模型解析按该用户的 CustomModel 行匹配——每个 aichatt 账号只能走自己配置的模型。
+ * 转发:resolveApiKey 解密该行 key,原样转发到 {normalized baseURL}/messages,
+ *       响应(含 SSE 流)逐字节透传。
  * 为什么是透明代理而不是协议翻译:ACode 说 anthropic 协议,中转站也说 anthropic 协议,
  * aichatt 只做「key 保险箱 + 地址映射」——工具调用/流式事件零改动全保留,
  * 中转站原始 key 从此只存在 aichatt 一处。
- *
- * 多用户说明:令牌是部署级全局令牌(个人部署单主账号),模型解析取首个匹配行。
  */
 import type { NextRequest } from "next/server"
 import { prisma } from "@/lib/db"
 import { resolveApiKey, normalizeCustomBaseURL } from "@/lib/ai/custom-model"
-import { gatewayTokenOk, gatewayJsonError } from "@/lib/api/gateway-auth"
+import { gatewayJsonError, resolveGatewayUserId } from "@/lib/api/gateway-auth"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -24,7 +23,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!gatewayTokenOk(req.headers.get("x-api-key") ?? "")) {
+  const userId = await resolveGatewayUserId(req)
+  if (!userId) {
     return gatewayJsonError(401, "authentication_error", "invalid x-api-key")
   }
 
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   }
 
   const cm = await prisma.customModel.findFirst({
-    where: { modelId: model, protocol: "anthropic" },
+    where: { modelId: model, protocol: "anthropic", userId },
   })
   if (!cm) {
     return gatewayJsonError(404, "not_found_error", `no anthropic-protocol custom model named "${model}"`)

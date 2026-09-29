@@ -3,14 +3,14 @@
  * 深桥「记忆打通」的服务端:ACode 作为 MCP client 连接本端点后,
  * agent 可直接搜索/新增/列出用户的长期记忆(aichatt DB 为记忆唯一源头)。
  *
- * 鉴权:同 /api/v1/messages(x-api-key 令牌,部署级全局)。
+ * 鉴权:同 /api/v1/messages(x-api-key 令牌,个人访问令牌→userId,env 令牌回退管理员)。
  * 协议:MCP Streamable HTTP(JSON-RPC 2.0),无状态实现——每个 POST 独立处理,
  * 不签发会话、不维护握手状态;通知类请求 202 空体;GET(SSE)不支持返回 405。
- * 用户作用域:部署级单主账号(取库中首个用户)。
+ * 用户作用域:令牌绑定的账号(记忆按该用户隔离)。
  */
 import type { NextRequest } from "next/server"
 import { prisma } from "@/lib/db"
-import { gatewayTokenOk, gatewayJsonError } from "@/lib/api/gateway-auth"
+import { gatewayJsonError, resolveGatewayUserId } from "@/lib/api/gateway-auth"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -57,20 +57,12 @@ const TOOLS = [
   },
 ]
 
-async function resolveUserId(): Promise<string | null> {
-  const user = await prisma.user.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  })
-  return user?.id ?? null
-}
-
 async function callTool(
+  userId: string,
   name: string,
   args: Record<string, unknown>
 ): Promise<{ text: string }> {
-  const userId = await resolveUserId()
-  if (!userId) return { text: "记忆库为空:部署中没有任何用户。" }
+  if (!userId) return { text: "记忆库为空:无法解析账号身份。" }
   const rawLimit = Number(args.limit)
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10, 1), 100)
 
@@ -135,7 +127,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!gatewayTokenOk(req.headers.get("x-api-key") ?? "")) {
+  const userId = await resolveGatewayUserId(req)
+  if (!userId) {
     return gatewayJsonError(401, "authentication_error", "invalid x-api-key")
   }
 
@@ -178,7 +171,7 @@ export async function POST(req: NextRequest) {
     const name = typeof msg.params?.name === "string" ? msg.params.name : ""
     const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
     try {
-      const r = await callTool(name, args)
+      const r = await callTool(userId, name, args)
       return reply(toolResult(r.text))
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err)
