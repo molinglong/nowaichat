@@ -48,6 +48,12 @@ const TOOLS = [
     },
   },
   {
+    name: "get_profile",
+    description:
+      "查询当前 aichatt 账号身份(用户名/邮箱)。用户问「我是谁/我叫什么/我的账号」时调用此工具获取准确信息,不要猜测。",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "list_recent_memories",
     description: "列出用户 aichatt 记忆库中最近更新的记忆条目",
     inputSchema: {
@@ -65,6 +71,15 @@ async function callTool(
   if (!userId) return { text: "记忆库为空:无法解析账号身份。" }
   const rawLimit = Number(args.limit)
   const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10, 1), 100)
+
+  if (name === "get_profile") {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true },
+    })
+    if (!user) return { text: "账号不存在。" }
+    return { text: `aichatt 账号:${user.name || user.email}(邮箱 ${user.email})` }
+  }
 
   if (name === "search_memory") {
     const query = typeof args.query === "string" ? args.query.trim() : ""
