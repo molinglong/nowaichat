@@ -124,7 +124,7 @@ test("injectMemoryIntoBody: 续轮 tool_result 在前, 记忆块追加在最后�
   const body = followupBody()
   assert.equal(injectMemoryIntoBody(body, "<memory-context>MEM</memory-context>"), true)
 
-  const last = body.messages[2].content
+  const last = body.messages[2].content as Array<Record<string, unknown>>
   assert.equal(last.length, 2)
   assert.equal(last[0].type, "tool_result")
   assert.equal(last[0].cache_control, EPHEMERAL)

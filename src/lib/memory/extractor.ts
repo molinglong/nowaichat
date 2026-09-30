@@ -54,19 +54,20 @@ AI：${assistantText.slice(0, 2000)}`,
 }
 
 /**
- * 完整流程：从一轮对话提取记忆并保存（供 onFinish 调用，失败不抛出）
+ * 完整流程：从一轮对话提取记忆并保存（供 onFinish 与网关写提取调用，失败不抛出）。
+ * 返回写入计数；null 表示本轮跳过（文本为空/过短）或提取失败。
  */
 export async function extractAndSaveMemories(options: {
   userId: string
   model: LanguageModel
   userText: string
   assistantText: string
-}): Promise<void> {
+}): Promise<{ created: number; replaced: number } | null> {
   const { userId, model, userText, assistantText } = options
   try {
-    if (!userText.trim() || !assistantText.trim()) return
+    if (!userText.trim() || !assistantText.trim()) return null
     // 极短消息(如"你好""Hi")几乎不会产生新记忆,跳过提取以省去一次后台 LLM 调用的 token 开销
-    if (userText.trim().length < 4) return
+    if (userText.trim().length < 4) return null
 
     const existingContents = await listAllMemoryContents(userId)
 
@@ -77,7 +78,7 @@ export async function extractAndSaveMemories(options: {
       existingContents,
     })
 
-    if (!items.length) return
+    if (!items.length) return { created: 0, replaced: 0 }
 
     console.log(`[memory] extracted: ${JSON.stringify(items)}`)
     const { created, replaced } = await saveExtractedMemories(userId, items)
@@ -87,8 +88,10 @@ export async function extractAndSaveMemories(options: {
     if (created > 0) {
       console.log(`[memory] saved ${created} new memories for user ${userId}`)
     }
+    return { created, replaced }
   } catch (error) {
     // 记忆提取失败不影响聊天主流程
     console.error("[memory] extraction failed:", error)
+    return null
   }
 }
