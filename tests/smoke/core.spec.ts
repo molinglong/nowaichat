@@ -15,10 +15,13 @@ test("发送消息收到流式回复", async ({ page }) => {
   // dev server 高负载时首屏水合可能超过默认 15s;本用例整体放宽到 3 分钟
   await expect(input).toBeVisible({ timeout: 30_000 })
   test.setTimeout(180_000)
-  // 新对话默认 GPT-4o,admin 未配 openai Key,切到已配置 Key 的 DeepSeek 分组
-  // 型号名随注册表升级漂移,不硬编码。下拉打开后才异步拉取 Key 名单,未就绪时
+  // 新对话默认模型(admin 未配其 Key),切到已配置 Key 的 DeepSeek 分组
+  // 型号名随注册表升级漂移,不硬编码:发送按钮的前一个兄弟容器即 ModelSelector
+  // (ChatInput 工具行)。下拉打开后才异步拉取 Key 名单,未就绪时
   // 只剩 custom 分组(拉取失败被静默吞掉)—— 每轮重开下拉重新拉取,直至分组出现
-  const selectorBtn = page.getByRole("button", { name: "GPT-4o" }).first()
+  const selectorBtn = page
+    .locator('xpath=//button[@aria-label="发送"]/preceding-sibling::*[1]//button')
+    .first()
   const searchBox = page.getByPlaceholder("搜索模型...")
   const deepseekItem = page.getByRole("button", { name: /^DeepSeek-/ }).first()
   await expect(async () => {

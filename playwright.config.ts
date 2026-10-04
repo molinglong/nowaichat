@@ -43,6 +43,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json" },
     },
+    {
+      // 「编辑已发送消息」用例:复用 admin 会话
+      name: "edit-smoke",
+      testMatch: /edit-msg\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
   ],
   webServer: {
     command: "npm run dev",

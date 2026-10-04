@@ -24,9 +24,14 @@ test("写作画布核心链路", async ({ page, request }) => {
     await expect(page.getByRole("button", { name: "新建文档" }).first()).toBeVisible({ timeout: 30_000 })
   }
 
-  // TopBar「更多」二级菜单包含写作画布入口(点击后仍在 /write,入口存在即通过)
-  await page.getByRole("button", { name: "更多功能" }).click()
-  await page.getByRole("menuitem", { name: "写作画布" }).click()
+  // 侧边栏「更多功能」折叠组含写作画布入口(T-C 改版后导航从顶栏下沉到侧栏)。
+  // 在 /write 时该组随当前页自动展开 —— 已展开勿再点开关(会把它收起来)
+  const writeNav = page.getByRole("button", { name: "写作画布" })
+  if (!(await writeNav.isVisible())) {
+    await page.getByRole("button", { name: "更多功能" }).click()
+  }
+  await expect(writeNav).toBeVisible()
+  await writeNav.click()
   await expect(page).toHaveURL(/\/write/)
 
   // 新建文档 → 先重命名(失败运行也不残留「未命名」) → 输入正文 → 自动保存
