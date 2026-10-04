@@ -6,6 +6,8 @@ import { useSession } from 'next-auth/react'
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
 import { ChatPanel } from '@/components/chat/ChatPanel'
+import { AuthErrorBoundary } from '@/components/AuthErrorBoundary'
+import { ClientOnly } from '@/components/ClientOnly'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import { queryKeys, STALE } from '@/lib/query/keys'
@@ -134,9 +136,13 @@ export default function ConversationClientPage() {
     <ConversationClientContent />
   )
   return (
-    <Suspense>
-      {providersContent}
-    </Suspense>
+    <AuthErrorBoundary>
+      <Suspense>
+        <ClientOnly>
+          {providersContent}
+        </ClientOnly>
+      </Suspense>
+    </AuthErrorBoundary>
   )
 }
 

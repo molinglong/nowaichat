@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { signIn } from "next-auth/react"
-import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
   ErrorBar,
@@ -14,7 +13,6 @@ import {
 } from "@/components/auth-controls"
 
 export default function LoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
@@ -31,15 +29,15 @@ export default function LoginPage() {
       redirect: false,
     })
 
-    setLoading(false)
-
     if (res?.error) {
+      setLoading(false)
       setError("邮箱或密码错误")
       return
     }
 
-    router.push("/chat")
-    router.refresh()
+    // 硬导航而非 router.push:未登录时 /chat 的 RSC 请求会被 middleware 307 回 /login,
+    // 这条脏跳转进 Next 14 router cache 后软导航会复用,表现为首点无反应、需点第二次
+    window.location.assign("/chat")
   }
 
   return (

@@ -162,7 +162,9 @@ export const config = {
   // 避免每个资源请求都执行 JWT 解码;未登录时字体请求也不会被 307 重定向成 HTML。
   // manifest.json 与 icons(PWA 图标)同理:浏览器请求它们不携带 cookie,
   // 被 307 成登录页 HTML 会导致「添加到主屏幕」的 PWA 安装直接失败。
+  // brand(品牌标记图,登录页/侧栏 <img> 引用)同理:登录页本身即未登录态,
+  // 被 307 成 HTML 会渲染成破图。
   // uploads 的安全头(X-Content-Type-Options/CSP sandbox)由 next.config.mjs headers() 独立提供,
   // 文件名 nanoid(12)/分片 hash 不可枚举,未登录直访风险可控
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|fonts|manifest.json|icons|wallpaper).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|brand|fonts|manifest.json|icons|wallpaper).*)"],
 }

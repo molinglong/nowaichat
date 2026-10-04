@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { signIn } from "next-auth/react"
-import { useRouter } from "next/navigation"
 import Link from "next/link"
 import {
   ErrorBar,
@@ -20,7 +19,6 @@ import {
  * - 隔离区对话可在正常模式 设置→账号信息 中找回
  */
 export default function EphemeralLoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
@@ -39,9 +37,8 @@ export default function EphemeralLoginPage() {
       redirect: false,
     })
 
-    setLoading(false)
-
     if (res?.error) {
+      setLoading(false)
       // NextAuth v5 beta:自定义 CredentialsSignin 的 code 在 res.code,
       // res.error 是通用的 "CredentialsSignin",必须两者都匹配
       const code = res.code ?? res.error
@@ -55,8 +52,8 @@ export default function EphemeralLoginPage() {
       return
     }
 
-    router.push("/chat")
-    router.refresh()
+    // 同主登录页:硬导航避开 router cache 里 /chat 的脏 307 跳转(临时模式只允许 /chat)
+    window.location.assign("/chat")
   }
 
   return (

@@ -35,10 +35,11 @@ export default function AuthLayout({
           <div className="auth-night-moon" />
         </div>
 
-        {/* 顶部 Logo */}
+        {/* 顶部 Logo：品牌标记嵌圆徽标；深色模式换反白版图（红点保持原色） */}
         <div className="auth-reveal auth-delay-1 relative z-10 flex items-center gap-[11px]">
-          <div className="font-ultra flex h-[34px] w-[34px] items-center justify-center rounded-full border border-line-strong bg-surface/70 text-[15px] text-content-primary">
-            a
+          <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full border border-line-strong bg-surface/70">
+            <img src="/brand/mark.png" alt="" aria-hidden className="w-[19px] dark:hidden" />
+            <img src="/brand/mark-invert.png" alt="" aria-hidden className="hidden w-[19px] dark:block" />
           </div>
           <span className="text-sm font-medium tracking-[0.12em] text-content-primary">
             aichatt

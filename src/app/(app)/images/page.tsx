@@ -22,6 +22,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { AuthErrorBoundary } from '@/components/AuthErrorBoundary'
+import { ClientOnly } from '@/components/ClientOnly'
 import { queryKeys, STALE, IMAGES_PAGE_SIZE as PAGE_SIZE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import { deleteUploadedFile } from '@/components/chat/FileUpload'
@@ -1727,8 +1729,12 @@ function ImagesSuspenseFallback() {
 
 export default function ImagesPage() {
   return (
-    <Suspense fallback={<ImagesSuspenseFallback />}>
-      <ImagesContent />
-    </Suspense>
+    <AuthErrorBoundary>
+      <Suspense fallback={<ImagesSuspenseFallback />}>
+        <ClientOnly>
+          <ImagesContent />
+        </ClientOnly>
+      </Suspense>
+    </AuthErrorBoundary>
   )
 }

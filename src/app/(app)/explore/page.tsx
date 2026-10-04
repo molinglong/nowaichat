@@ -4,6 +4,8 @@ import { Scale, Loader2, Sparkles, ChevronRight } from 'lucide-react'
 import { Suspense, useState, useCallback, useRef, useEffect } from 'react'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { AuthErrorBoundary } from '@/components/AuthErrorBoundary'
+import { ClientOnly } from '@/components/ClientOnly'
 import { OpponentLane } from '@/components/explore/OpponentLane'
 import { UserLane } from '@/components/explore/UserLane'
 import { AssistantPanel } from '@/components/explore/AssistantPanel'
@@ -103,9 +105,13 @@ export default function ExplorePage() {
   return (
     // Suspense 兜底:虽然 cache hit 时直接同步 render,
     // 但极端冷启场景下 useSuspenseQuery 仍会抛 promise → fallback
-    <Suspense>
-      <ExploreContent />
-    </Suspense>
+    <AuthErrorBoundary>
+      <Suspense>
+        <ClientOnly>
+          <ExploreContent />
+        </ClientOnly>
+      </Suspense>
+    </AuthErrorBoundary>
   )
 }
 

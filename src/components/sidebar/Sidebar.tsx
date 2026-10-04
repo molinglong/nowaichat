@@ -373,11 +373,11 @@ export function Sidebar() {
           // 深色主题下反而亮一档),不再是纯白。
           // 原先的 bg-surface-glass 是「72% 的白」,而它背后就是 .app-shell 的纯色
           // bg-surface —— 同色叠同色、blur 在纯色上等于空转,侧栏因此是一块没有
-          // 材质的死白(格子主题下比暖纸底的页面还白)。backdrop-blur-xl 保留:
+          // 材质的死白(格子主题下比暖纸底的页面还白)。glass-blur 保留:
           // 它让 aside 成为 fixed 后代的包含块(下方面具菜单的点击遮罩依赖这点)。
           // sidebar-panel: 右端「入影」暗层(见 globals.css .sidebar-panel::after)。
           // 铺在整个面板上而不是只铺会话列表容器 —— 否则列表顶边会多一条断层
-          'bg-surface-muted backdrop-blur-xl text-content-primary sidebar-panel',
+          'bg-surface-muted glass-blur text-content-primary sidebar-panel',
           'rounded-xl border border-line/50 overflow-hidden',
           'transition-transform duration-300 ease-in-out',
           'm-1.5',
@@ -416,6 +416,10 @@ export function Sidebar() {
               {/* 品牌月相(F-4): 只在配色=月白·桂花金时显示 —— 该配色是月夜版,
                   月符号与"格子/基线"的语境无关,由 .fest-night 整体隐藏,不占位、不留 gap */}
               <span className="fest-night brand-moon" aria-hidden="true" />
+              {/* 品牌标记: 仅非月白·桂花金显示(该主题由月相承担品牌符号,故用 .no-fest 门控);
+                  深色模式换反白版图,不用 CSS filter 反相(会连红点一起翻色) */}
+              <img src="/brand/mark.png" alt="" aria-hidden className="no-fest w-4 shrink-0 dark:hidden" />
+              <img src="/brand/mark-invert.png" alt="" aria-hidden className="no-fest hidden w-4 shrink-0 dark:block" />
               <h1 className="text-base font-semibold tracking-tight truncate">aichatt</h1>
             </div>
           ) : (

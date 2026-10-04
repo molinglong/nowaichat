@@ -16,6 +16,8 @@
 
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { Suspense } from 'react'
+import { AuthErrorBoundary } from '@/components/AuthErrorBoundary'
+import { ClientOnly } from '@/components/ClientOnly'
 import { useSearchParams } from 'next/navigation'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
@@ -82,8 +84,12 @@ export default function NewChatPage() {
     // 用一个空 fallback 包本组件本身——让 React Suspense 监视内部的 useSuspenseQuery。
     // Next.js Router Suspense 会用同目录的 loading.tsx 作为"路由级"fallback,
     // 这里只是在 Suspense boundary 内做最后兜底(例如 cache 完全为空)
-    <Suspense>
-      <NewChatContent />
-    </Suspense>
+    <AuthErrorBoundary>
+      <Suspense>
+        <ClientOnly>
+          <NewChatContent />
+        </ClientOnly>
+      </Suspense>
+    </AuthErrorBoundary>
   )
 }
