@@ -1253,10 +1253,25 @@ export function ChatPanel({
   // 附件会挂到上一条消息上(或无消息可挂),当轮气泡永远看不到附件卡片。
   const pendingAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
 
-  // 消费后置空:挂载后 atts 为 undefined 会早退,不会因依赖 messages 而死循环。
+  // 消费判据用 messages 闭包直接读,不靠 setMessages 更新器里的标记:更新器在 React 18 可能延后执行。
+  // 只在真正挂到最后一条 user 消息时才清空 —— 编辑重答链路先 setMessages(截断,此时一条 user 都没有)
+  // 再 sendMessage,无条件清空会在截断那一帧把附件吃掉,当轮气泡看不到图(库内有,刷新才回填)。
   useEffect(() => {
     const atts = pendingAttachmentsRef.current
     if (!atts || atts.length === 0) return
+    let idx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        idx = i
+        break
+      }
+    }
+    if (idx === -1) return
+    if ((messages[idx] as { attachments?: Attachment[] }).attachments) {
+      // 该条已带附件(上一轮已挂或服务端回填),不再覆盖
+      pendingAttachmentsRef.current = undefined
+      return
+    }
     setMessages((prev) => {
       const next = [...prev]
       for (let i = next.length - 1; i >= 0; i--) {
@@ -1289,9 +1304,9 @@ export function ChatPanel({
         return
       }
       attachmentsRef.current = attachments
-      if (attachments && attachments.length > 0) {
-        pendingAttachmentsRef.current = attachments
-      }
+      // 新发送无条件覆盖:上面 effect 改为"没挂上就保留",这里负责让陈旧待注入项不污染下一轮
+      pendingAttachmentsRef.current =
+        attachments && attachments.length > 0 ? attachments : undefined
       // 工作区快照:桌面端发送前确保新鲜(TTL 内复用缓存,过期/失效才重建,fire-and-forget
       // 不阻塞发送;本次 getter 读到的可能是上一次快照,注入段已向模型声明"可能滞后")
       if (inTauri) void ensureWorkspaceSnapshot()
@@ -1759,9 +1774,15 @@ export function ChatPanel({
       const truncated = msgs.slice(0, editIndex)
       setMessages(truncated)
 
-      // 附件随重发带回(与 handleSend 同款时序:transport 在请求时读 ref)
-      attachmentsRef.current = oldAtts && oldAtts.length > 0 ? oldAtts : undefined
-      if (oldAtts && oldAtts.length > 0) pendingAttachmentsRef.current = oldAtts
+      // 附件随重发带回(与 handleSend 同款时序:transport 在请求时读 ref);
+      // 无附件必须清空残留,否则上一轮的图会挂进本轮(与 handleReanswerFrom 同款)
+      if (oldAtts && oldAtts.length > 0) {
+        attachmentsRef.current = oldAtts
+        pendingAttachmentsRef.current = oldAtts
+      } else {
+        attachmentsRef.current = undefined
+        pendingAttachmentsRef.current = undefined
+      }
 
       // C 分支轻量版: 新消息带 editedFrom 指向被编辑消息(真实数据库 id),服务端落库后
       // MessageBubble 据此显示"查看历史版本"回看入口
