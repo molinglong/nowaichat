@@ -290,6 +290,8 @@ export function CompareLane({
         <ChatErrorBanner
           info={errorInfo}
           size="compact"
+          provider={modelDef.provider}
+          modelId={modelId}
           onRetry={() => {
             clearError()
             regenerate()

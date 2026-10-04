@@ -20,6 +20,21 @@ export type UpstreamErrorCode =
   | 'session_expired'
   | 'unknown'
 
+export const ERROR_CODES: UpstreamErrorCode[] = [
+  'invalid_api_key',
+  'config_missing',
+  'insufficient_balance',
+  'rate_limit',
+  'model_not_found',
+  'context_length',
+  'content_policy',
+  'timeout',
+  'network',
+  'server_error',
+  'session_expired',
+  'unknown',
+]
+
 export interface UpstreamErrorAction {
   label: string
   settingsSection?: string

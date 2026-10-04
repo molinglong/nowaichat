@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, ChevronDown, Copy, RefreshCw, Settings as SettingsIcon } from 'lucide-react'
+import { AlertCircle, ChevronDown, Copy, ListChecks, Loader2, RefreshCw, Settings as SettingsIcon, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/store/chat-store'
 import { toast } from '@/lib/toast'
@@ -14,6 +14,9 @@ interface ChatErrorBannerProps {
   onClose?: () => void
   /** compact: 对比泳道等窄容器用的缩小版 */
   size?: 'normal' | 'compact'
+  /** 出错那家的服务商与模型，供 AI 诊断避开同一个坏 Key */
+  provider?: string
+  modelId?: string
   className?: string
 }
 
@@ -26,6 +29,8 @@ export function ChatErrorBanner({
   onRetry,
   onClose,
   size = 'normal',
+  provider,
+  modelId,
   className,
 }: ChatErrorBannerProps) {
   const compact = size === 'compact'
@@ -35,6 +40,31 @@ export function ChatErrorBanner({
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
   const setSettingsSection = useChatStore((s) => s.setSettingsSection)
   const router = useRouter()
+
+  const [diagnosis, setDiagnosis] = useState<{ cause: string; steps: string[] } | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
+
+  const handleDiagnose = useCallback(async () => {
+    if (diagnosing) return
+    setDiagnosing(true)
+    try {
+      const res = await fetch('/api/errors/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw: info.raw, code: info.code, provider, modelId }),
+      })
+      const json = (await res.json()) as { data?: { cause: string; steps: string[] } | null; error?: string }
+      if (json.data) {
+        setDiagnosis(json.data)
+      } else {
+        toast.error(json.error || '暂时分析不出原因，展开原始错误看看服务商说了什么')
+      }
+    } catch {
+      toast.error('网络连接失败，请检查网络后重试')
+    } finally {
+      setDiagnosing(false)
+    }
+  }, [diagnosing, info.code, info.raw, provider, modelId])
 
   const handleAction = () => {
     if (!info.action) return
@@ -129,7 +159,41 @@ export function ChatErrorBanner({
               {rawOpen ? '收起原始错误' : '查看原始错误'}
             </button>
           )}
+
+          {info.raw && (
+            <button
+              type="button"
+              onClick={handleDiagnose}
+              disabled={diagnosing}
+              className={cn(
+                'inline-flex items-center gap-1 text-red-500/80 transition-colors hover:text-red-600 disabled:opacity-50',
+                'dark:text-red-400/70 dark:hover:text-red-300',
+                compact ? 'text-[11px]' : 'text-xs'
+              )}
+            >
+              {diagnosing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              {diagnosing ? '分析中…' : '让 AI 分析原因'}
+            </button>
+          )}
         </div>
+
+        {/* AI 诊断卡片：仅用户主动点击后出现，不挤占重试 */}
+        {diagnosis && (
+          <div className="mt-2 rounded-lg border border-line/70 bg-surface/70 px-2.5 py-2">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-content-primary">
+              <ListChecks className="w-3.5 h-3.5 shrink-0 text-content-muted" />
+              {diagnosis.cause}
+            </p>
+            <ol className="mt-1.5 space-y-1">
+              {diagnosis.steps.map((step, i) => (
+                <li key={i} className="flex gap-1.5 text-[11px] leading-relaxed text-content-secondary">
+                  <span className="shrink-0 tabular-nums text-content-muted">{i + 1}.</span>
+                  <span className="min-w-0 break-words">{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         {/* 服务商原文：默认折叠，仅用于排查与反馈 */}
         {info.raw && rawOpen && (

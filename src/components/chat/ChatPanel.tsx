@@ -2007,7 +2007,13 @@ export function ChatPanel({
 
       {/* Error banner(桌面端下移让位浮动工具簇: 横幅全宽,右缘正落在无底板浮簇底下) */}
       {error && errorInfo && (
-        <ChatErrorBanner info={errorInfo} onRetry={handleRetry} onClose={() => clearError()} />
+        <ChatErrorBanner
+          info={errorInfo}
+          onRetry={handleRetry}
+          onClose={() => clearError()}
+          provider={mergedModels.find((m) => m.id === currentModel)?.provider}
+          modelId={currentModel}
+        />
       )}
 
       {/* Mask bar - 当前生效的面具 chip(仅对话态;欢迎态由输入框下方胶囊行承担入口),点击弹出切换面板 */}
