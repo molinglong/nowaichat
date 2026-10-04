@@ -13,6 +13,7 @@ import { PreviewCheckCard } from './PreviewCheckCard'
 import { TripMapCard } from './TripMapCard'
 import { ProviderModelCard } from './ProviderModelCard'
 import { AddCustomModelCard } from './AddCustomModelCard'
+import { DeleteCustomModelCard } from './DeleteCustomModelCard'
 import { CLARIFY_TOOL_NAME } from '@/lib/ai/clarify'
 import { LOCAL_FILE_TOOL_NAME } from '@/lib/ai/local-file-tool'
 import { MASK_TOOL_NAME } from '@/lib/ai/mask-tool'
@@ -25,6 +26,7 @@ import { TRIP_TOOL_NAME } from '@/lib/ai/trip-tool'
 import { SETTINGS_TOOL_NAME } from '@/lib/ai/settings-tool'
 import { PROVIDER_MODEL_TOOL_NAME } from '@/lib/ai/provider-model-tool'
 import { ADD_CUSTOM_MODEL_TOOL_NAME } from '@/lib/ai/custom-model-tool'
+import { DELETE_CUSTOM_MODEL_TOOL_NAME } from '@/lib/ai/delete-custom-model-tool'
 import { MEMORY_TOOL_NAME } from '@/lib/ai/memory-tool'
 import { KNOWLEDGE_TOOL_NAME } from '@/lib/ai/knowledge-tool'
 import { PRACTICE_TOOL_NAME, RECORD_TOOL_NAME } from '@/lib/ai/practice-tool'
@@ -239,6 +241,11 @@ function ToolCallCardInner({ view, clarifyAnswered, onClarifySubmit, onLocalFile
   // 中转站/自定义模型:确认卡片(Key 由用户在卡片里就地粘贴并测试;Key 不进对话记录)
   if (view.tool === ADD_CUSTOM_MODEL_TOOL_NAME) {
     return <AddCustomModelCard view={view} />
+  }
+
+  // 删除自定义模型:确认卡片(聊天/生图两库;二次确认+计算题双层防护)
+  if (view.tool === DELETE_CUSTOM_MODEL_TOOL_NAME) {
+    return <DeleteCustomModelCard view={view} />
   }
 
   // 写作文档:一行式卡片(成功→打开按钮;流式→占位;失败→标红)

@@ -186,6 +186,14 @@ export async function PATCH(req: NextRequest) {
     if (action === "delete") {
       if (!fields.id) return NextResponse.json({ error: "缺少模型 ID" }, { status: 400 })
       const dbId = fields.id.replace("custom:", "")
+      // 归属校验：只能删除本人名下的模型（防跨用户 IDOR）
+      const owned = await prisma.imageModel.findFirst({
+        where: { id: dbId, userId },
+        select: { id: true },
+      })
+      if (!owned) {
+        return NextResponse.json({ error: "模型不存在" }, { status: 404 })
+      }
       // 如果删除的是当前选中的模型，自动切回默认
       const user = await prisma.user.findUnique({
         where: { id: userId },

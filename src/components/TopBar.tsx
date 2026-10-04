@@ -9,6 +9,9 @@ import { useIsTauri } from '@/lib/tauri'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { prefetchTabData as prefetchTabDataShared } from '@/lib/query/prefetchTab'
+// 「对话资料」面板占位宽:让位量与 ChatPanel/OutlineSidebar 共用同一组常量(单一事实源)
+import { INFO_PANEL_WIDTH, INFO_TAB_WIDTH } from './chat/InfoAsidePanel'
+import { useIsComputerMode } from '@/hooks/useIsComputerMode'
 
 // 快捷键提示表:与已实现行为一一对应(j/k 与 Enter 复制见 MessageList,搜索见 Sidebar)
 const HOTKEY_HINTS: ReadonlyArray<{ keys: string; desc: string }> = [
@@ -47,10 +50,22 @@ export function TopBar() {
   const workMode = useChatStore((s) => s.workMode)
   const setWorkMode = useChatStore((s) => s.setWorkMode)
   const previewOpen = useChatStore((s) => s.previewCode !== null)
-  // 右侧「对话资料」面板:浮动工具簇要跟着让位,否则压在面板头上。
-  // 与 ChatPanel 同口径:新对话主页没有会话不登场;面板收起时只剩 28px 竖标签;
-  // 任一右侧抽屉打开时整列撤下,让位交给上面的抽屉分支。
-  const infoPanelOpen = useChatStore((s) => s.infoPanelOpen) && !!currentConversationId
+  // 右侧「对话资料」面板:浮动工具簇要跟着让位,否则压在面板头上
+  // (2026-09-29 实测:4 键态胶囊 x 1099..1301 完全盖住面板收起键 x 1279..1301,
+  //  elementFromPoint 命中胶囊的「设置」键 —— 面板收起键点不到;收起态 28px 竖标签同样被吃 16px)。
+  // 与 ChatPanel 的 infoSlotOccupied 同口径:面板登场时 = 有会话且无右侧抽屉接管
+  // (写作画布/预览在上面的让位分支里已先行走掉,这里再排掉代码面板与文件编辑器);
+  // 让位量 = 面板实际占位宽(展开 INFO_PANEL_WIDTH / 收起 INFO_TAB_WIDTH)+ 本簇自己的 12px 边距,
+  // 与 OutlineSidebar 刻度列同一组常量、同一手法。
+  const infoPanelOpen = useChatStore((s) => s.infoPanelOpen)
+  const editorFileOpen = useChatStore((s) => s.editorFile !== null)
+  // 电脑模式限定:平板/手机(触屏为主)不渲染资料面板,这里也不让位
+  const isComputerMode = useIsComputerMode()
+  const infoSlotOccupied =
+    isComputerMode && !!currentConversationId && !codePanelOpen && !editorFileOpen
+  const infoRightOffset = infoSlotOccupied
+    ? (infoPanelOpen ? INFO_PANEL_WIDTH : INFO_TAB_WIDTH) + 12
+    : 0
   // 次要工具入口隐藏口径:仅覆盖层(写作画布/聊天预览)打开时——tab 不再遮聊天
   const panelOpen = writePanelOpen || previewOpen
   const openCodePanel = useChatStore((s) => s.openCodePanel)
@@ -168,9 +183,12 @@ export function TopBar() {
         />
       )}
 
-      {/* ── <md 移动端顶栏带(原样保留):汉堡 + 页面标题 + 设置 ── */}
+      {/* ── <md 移动端顶栏带(原样保留):汉堡 + 页面标题 + 设置 ──
+             data-app-topbar: 向上弹出的浮动菜单据此避让此带,
+             不让菜单顶被这根 fixed 带盖住(见 useMaskMenuMaxHeight) ── */}
       <header
-        className="md:hidden relative z-40 flex items-center h-11 px-1.5 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl"
+        data-app-topbar=""
+        className="md:hidden relative z-40 flex items-center h-11 px-1.5 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass glass-blur"
         {...dragProps}
         {...(inTauri
           ? {
@@ -249,19 +267,24 @@ export function TopBar() {
         </div>
       </header>
 
-      {/* ── ≥md 浮动工具簇(T-C):顶栏带下线后,工具浮在内容区右上;无底板,只有图标 ──
-          [P1]right 跟随 Side Pane 实际宽度(可拖拽),覆盖层打开时退回各自让位宽度 */}
+      {/* ── ≥md 浮动工具簇(T-C):顶栏带下线后,工具浮在内容区右上 ──
+          CAP 胶囊化(2026-09-29 拍板):给既有包围盒显形 —— 1px 描边 + 5px 内边距 = 原 6px,
+          外框仍是 94×38、三键坐标零位移;边距 12/12,让位量上再叠加常量
+          [P1]right 跟随 Side Pane 实际宽度(可拖拽);「对话资料」面板在场时按面板占位宽让位
+          (292 / 40 —— 面板占多大就退多远,外加自己那份 12px);覆盖层打开时退回各自让位宽度 */}
       <div
         className={cn(
-          'hidden md:flex absolute top-0 z-40 items-center gap-0.5 p-1.5 transition-[right] duration-300 ease-out right-0'
+          'hidden md:flex absolute top-3 z-40 items-center gap-0.5 p-[5px] border border-line rounded-full bg-surface-glass glass-blur shadow-sm transition-[right] duration-300 ease-out right-3'
         )}
         style={
           {
             right: inTauri && workMode && !writePanelOpen && !previewOpen
-              ? `${sidePaneWidth}px`
+              ? `${sidePaneWidth + 12}px`
               : writePanelOpen || previewOpen
-                ? 'min(46vw, 720px)'
-                : undefined,
+                ? 'calc(min(46vw, 720px) + 12px)'
+                : infoSlotOccupied
+                  ? `${infoRightOffset}px`
+                  : undefined,
           } as React.CSSProperties
         }
         {...dragProps}
@@ -274,7 +297,7 @@ export function TopBar() {
             onClick={handleBranchConversation}
             disabled={isBranching}
             className={cn(
-              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
+              'inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-all duration-150 touch-manipulation shrink-0',
               'text-content-secondary hover:text-content-primary hover:bg-surface-subtle active:scale-95',
               isBranching && 'opacity-60 cursor-wait'
             )}
@@ -290,7 +313,7 @@ export function TopBar() {
         {!writePanelOpen && (
           <button
             onClick={handleOpenCodePanel}
-            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation disabled:opacity-50"
+            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-full text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation disabled:opacity-50"
             aria-label="代码编辑器"
             title="打开代码编辑器(写代码 / 让 AI 改代码)"
             style={{ WebkitTapHighlightColor: 'transparent', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -302,7 +325,7 @@ export function TopBar() {
         <div className={panelOpen ? 'hidden' : 'relative shrink-0'}>
           <button
             onClick={() => setHotkeysOpen((v) => !v)}
-            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+            className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-full text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
             aria-label="键盘快捷键"
             title="键盘快捷键"
             aria-haspopup="dialog"
@@ -337,7 +360,7 @@ export function TopBar() {
         {/* 设置入口(与侧栏用户行齿轮同一个弹窗;临时模式下为精简版) */}
         <button
           onClick={() => setSettingsOpen(true)}
-          className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-md text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
+          className="shrink-0 inline-flex items-center justify-center p-1.5 rounded-full text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-all duration-150 active:scale-95 touch-manipulation"
           aria-label="设置"
           title="设置"
           style={{ WebkitTapHighlightColor: 'transparent' }}
