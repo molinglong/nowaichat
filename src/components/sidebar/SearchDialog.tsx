@@ -426,7 +426,7 @@ export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
 
       {/* Panel */}
       <div
-        className="relative w-full max-w-lg rounded-xl border border-line/60 bg-surface-glass backdrop-blur-xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-lg rounded-xl border border-line/60 bg-surface-glass glass-blur shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search input */}

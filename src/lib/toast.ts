@@ -175,10 +175,10 @@ function applyToastChrome(
   toastEl.style.fontFamily = 'inherit'
   toastEl.style.borderRadius = '12px'
   toastEl.style.border = `1px solid ${pal.border}`
-  // 毛玻璃: 低不透明度底色 + 大模糊半径,才能透出被覆盖的聊天内容
-  toastEl.style.backdropFilter = 'blur(16px) saturate(150%)'
+  // 毛玻璃: 全站统一配方(与 globals.css .glass-blur 同参),低不透明度底色才能透出被覆盖的聊天内容
+  toastEl.style.backdropFilter = 'blur(20px) saturate(180%)'
   const style = toastEl.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }
-  style.webkitBackdropFilter = 'blur(16px) saturate(150%)'
+  style.webkitBackdropFilter = 'blur(20px) saturate(180%)'
   toastEl.style.overflow = 'hidden'
   // 纯外阴影: iziToast 自带的 ::after 阴影层(含 inset 内阴影)已在 globals.css 关闭
   toastEl.style.boxShadow = pal.shadow

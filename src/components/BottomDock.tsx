@@ -26,7 +26,7 @@ export function BottomDock() {
       aria-label="页面导航"
       className="md:hidden shrink-0 px-3 pt-1 pb-[max(var(--sab),0.375rem)]"
     >
-      <div className="flex items-stretch gap-0.5 p-1 rounded-2xl border border-line/60 bg-surface-glass backdrop-blur-xl shadow-lg">
+      <div className="flex items-stretch gap-0.5 p-1 rounded-2xl border border-line/60 bg-surface-glass glass-blur shadow-lg">
         {items.map(({ key, shortLabel, icon: Icon, active, onClick }) => (
           <button
             key={key}
