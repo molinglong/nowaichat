@@ -480,6 +480,15 @@ body {
     overscroll-behavior: contain;
   }
 
+  /* ── 统一玻璃配方(全站单一事实源):模糊 20px + 饱和度 180% ──
+     底色不透明度 0.72 烘焙在 Tailwind 的 bg-surface-glass(tailwind.config.ts);
+     各面底色差异(侧栏 muted、遮罩黑)另叠 bg-*,本类只管 backdrop-filter。
+     新增玻璃浮层一律引本类,不要再写 backdrop-blur-* 原子类。 */
+  .glass-blur {
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+
   /* 内容区上沿渐隐(仅 ≥md,由使用处加 hidden md:block)。
      顶栏下沉后内容滚到容器上沿本会被硬切一刀,而浮簇(TopBar ≥md 分支)自身没有底板 ——
      消息正文的笔画直接从按钮下沿断开。这层把「硬切」换成「渐隐」。
@@ -586,7 +595,7 @@ body {
 }
 
 /* 壁纸激活:内容列放行(壁纸透出),侧栏变毛玻璃卡片 ——
-   aside 自带的 backdrop-blur-xl 从「纯色上空转」变成吃到壁纸的真玻璃。
+   aside 自带的 glass-blur 从「纯色上空转」变成吃到壁纸的真玻璃。
    蒙版已随壁纸垫在侧栏下,这里只补一层浅色调做出卡片感,浓度别太高
    (会与底层蒙版叠乘)。聊天态/其他 tab 下壁纸层不存在,:has 不命中,
    两处恢复不透明 */
@@ -1321,6 +1330,17 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   border-radius: 0;
 }
 
+/* 消息操作栏: hover / 键盘聚焦才显示(桌面端去掉常驻 debug 灰字感);
+   触屏无 hover 回退半透明常驻(方案 A · CP-8/CP-11) */
+.msg-actions { opacity: 0; transition: opacity 0.15s ease; }
+.group:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
+@media (hover: none) { .msg-actions { opacity: 0.5; } }
+
+/* 表格收尾: 行 hover 底色、末行去分隔线(mdComponents table/td 的补位) */
+.rich-md tbody tr { transition: background-color 0.12s ease; }
+.rich-md tbody tr:hover { background: rgb(var(--surface-muted) / 0.6); }
+.rich-md tbody tr:last-child td { border-bottom: 0; }
+
 /* ── 代码块语法高亮(rehype-highlight / hljs token)──
    GitHub 配色基准、微降饱和贴合中性灰审美;作用域限定 .rich-md 防污染 */
 .rich-md .hljs-comment,
@@ -1390,7 +1410,7 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   padding: 1.25rem 1rem;
   background: rgb(var(--code-bg));
   border: 1px solid rgb(var(--line));
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   text-align: center;
 }
 .rich-md .katex-display:first-child,
@@ -1953,4 +1973,24 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
    叠在毛玻璃底上会产生“3D 内凹”感，与极简平面语言相悖。 */
 .iziToast.iziToast--aichatt::after {
   display: none;
+}
+
+/* ── 图表卡中性色(ChartCard 黑白灰编辑系):全部走 CSS 变量,浅/深/格子/桂花金自动适配 ──
+   CSS 规则会压过 recharts 写在 SVG 上的 presentation attributes,故浅色值只作无 CSS 时的兜底。
+   与 src/components/chat/ChartCard.tsx 的黑白灰配色配套,改动两者同步。 */
+.chart-card .recharts-cartesian-axis-tick-value {
+  fill: rgb(var(--content-muted));
+}
+.chart-card .recharts-cartesian-grid line {
+  stroke: rgb(var(--line));
+}
+.chart-card .recharts-legend-item-text {
+  color: rgb(var(--content-secondary));
+}
+.chart-card .recharts-line-dots circle,
+.chart-card .recharts-area-dots circle {
+  stroke: rgb(var(--surface));
+}
+.chart-card .recharts-pie-sector path {
+  stroke: rgb(var(--surface));
 }

@@ -17,6 +17,8 @@ import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuSt
 import { insertTextToInput } from '@/lib/input-bridge'
 import { useChatStore } from '@/store/chat-store'
 import dynamic from 'next/dynamic'
+import { ChartCard } from './ChartCard'
+import { parseChartMetadata } from '@/lib/chart-parser'
 
 // 可视化熔断开关: 一行降级——出现渲染死循环/性能退化时改 false,
 // 全部消息回到纯文本渲染(两段式渲染的保险丝;历史坑: 流式重渲染 Maximum update depth)
@@ -27,9 +29,9 @@ const RICH_RENDER_ENABLED = true
 const MindMapBlock = dynamic(() => import('./MindMapBlock'), {
   ssr: false,
   loading: () => (
-    <div className="my-3 rounded-lg overflow-hidden border border-line bg-code-bg">
-      <div className="flex items-center pl-3 pr-1.5 py-1 bg-code-header border-b border-line">
-        <span className="text-[10px] text-content-muted font-mono uppercase tracking-wider select-none">
+    <div className="my-4 rounded-xl overflow-hidden border border-line bg-code-bg">
+      <div className="flex items-center pl-4 pr-2 py-2 border-b border-line">
+        <span className="text-[11px] font-semibold text-content-secondary select-none capitalize">
           mindmap
         </span>
       </div>
@@ -90,7 +92,7 @@ function highlightInlineText(text: string): React.ReactNode {
 
 // 行内 code 提为具名组件：withInlineMarks 靠引用比较跳过，代码内不做高亮
 const CodeInline = ({ children }: { children?: React.ReactNode }) => (
-  <code className="rounded border border-line bg-code-bg px-1 py-0.5 font-mono text-[13px]">{children}</code>
+  <code className="rounded-md bg-accent-soft px-1.5 py-0.5 font-mono text-[13.5px]">{children}</code>
 )
 
 const MAX_MARK_DEPTH = 8
@@ -225,10 +227,10 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
   }, [code, language, handleCopy, handlePreview, canPreview, inChat])
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-line bg-code-bg">
+    <div className="my-4 rounded-xl overflow-hidden border border-line bg-code-bg shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
       {language && (
-        <div className="flex items-center justify-between gap-2 pl-3 pr-1.5 py-1 bg-code-header border-b border-line">
-          <span className="text-[10px] text-content-muted font-mono uppercase tracking-wider truncate select-none">
+        <div className="flex items-center justify-between gap-2 pl-4 pr-2 py-2 border-b border-line">
+          <span className="text-[11px] font-semibold text-content-secondary truncate select-none capitalize">
             {language}
           </span>
           <div className="flex items-center gap-0.5 shrink-0">
@@ -255,28 +257,47 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
           </div>
         </div>
       )}
-      <pre onContextMenu={handleContextMenu} className="p-3 overflow-x-auto text-[13px] leading-relaxed">
+      <pre onContextMenu={handleContextMenu} className="p-4 overflow-x-auto text-[13px] leading-[1.7]">
         {children}
       </pre>
     </div>
   )
 })
 
+// ```chart 围栏 → recharts 图表卡片(复用 chart-parser 校验,与 MessageBubble 的 chart 元数据卡同款组件)。
+// JSON 解析/校验失败降级回普通代码块,原始 JSON 原样可见不吞内容;
+// 流式期间走纯文本分支到不了这里,rich 后一次性渲染,半截 JSON 不会反复解析
+function ChartBlock({ source, children }: { source: string; children?: React.ReactNode }) {
+  const chart = useMemo(() => {
+    try {
+      return parseChartMetadata({ kind: 'chart', chart: JSON.parse(source) })
+    } catch {
+      return null
+    }
+  }, [source])
+  if (!chart) return <CodeBlock>{children}</CodeBlock>
+  return (
+    <div className="my-3">
+      <ChartCard chart={chart.chart} />
+    </div>
+  )
+}
+
 // markdown 元素 → 项目中性灰 token 样式。只映射视觉关键元素,
 // strong/em 等走浏览器默认;不引入 @tailwindcss/typography(依赖与样式都可控)
 // 行内容器(h1-h4/p/li/a/th/td/strong/em)的 children 统一过 withInlineMarks 接上双色高亮
 const mdComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="mb-2 mt-4 text-base font-semibold text-content-primary first:mt-0">{withInlineMarks(children)}</h1>
+    <h1 className="mt-5 mb-2 text-[20px] font-semibold tracking-[-0.01em] leading-snug text-content-primary first:mt-0">{withInlineMarks(children)}</h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mb-2 mt-4 text-[15px] font-semibold text-content-primary first:mt-0">{withInlineMarks(children)}</h2>
+    <h2 className="mt-5 mb-2 text-[19px] font-semibold tracking-[-0.01em] leading-snug text-content-primary first:mt-0">{withInlineMarks(children)}</h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mb-1.5 mt-3 text-sm font-semibold text-content-primary first:mt-0">{withInlineMarks(children)}</h3>
+    <h3 className="mt-4 mb-1.5 text-[15.5px] font-semibold leading-[1.5] text-content-primary first:mt-0">{withInlineMarks(children)}</h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mb-1.5 mt-3 text-sm font-semibold text-content-secondary first:mt-0">{withInlineMarks(children)}</h4>
+    <h4 className="mt-4 mb-1.5 text-[15px] font-semibold text-content-secondary first:mt-0">{withInlineMarks(children)}</h4>
   ),
   p: ({ children }) => {
     // 独立成段的行内公式(模型常把 $..$ 单独成行,看起来夹在正文里很难受):
@@ -290,13 +311,17 @@ const mdComponents: Components = {
     if (math && nodes.every((n) => n === math || (typeof n === 'string' && !n.trim()))) {
       return <p className="math-card">{math}</p>
     }
-    return <p className="my-2 first:mt-0 last:mb-0">{withInlineMarks(children)}</p>
+    return <p className="mb-3.5 last:mb-0">{withInlineMarks(children)}</p>
   },
-  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
-  ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
-  li: ({ children }) => <li className="leading-relaxed">{withInlineMarks(children)}</li>,
+  ul: ({ children }) => <ul className="my-2.5 list-none space-y-1.5 pl-6">{children}</ul>,
+  ol: ({ children }) => <ol className="my-2.5 list-decimal space-y-1.5 pl-6 marker:font-medium marker:text-content-secondary">{children}</ol>,
+  li: ({ children }) => (
+    <li className="relative leading-[1.75] before:content-[''] before:absolute before:-left-[16px] before:top-[0.8em] before:h-[5px] before:w-[5px] before:rounded-full before:bg-content-muted [:is(ol)>li]:before:hidden">
+      {withInlineMarks(children)}
+    </li>
+  ),
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-line pl-3 text-content-secondary">{children}</blockquote>
+    <blockquote className="my-3 rounded-[10px] border border-line border-l-[3px] border-l-content-muted bg-surface px-3.5 py-2.5 text-content-secondary">{children}</blockquote>
   ),
   hr: () => <hr className="my-4 border-line" />,
   a: ({ href, children }) => (
@@ -304,32 +329,33 @@ const mdComponents: Components = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="underline decoration-line underline-offset-2 hover:decoration-content-secondary"
+      className="no-underline border-b border-line-strong transition-colors hover:border-content-secondary"
     >
       {withInlineMarks(children)}
     </a>
   ),
   table: ({ children }) => (
-    <div className="my-3 overflow-x-auto rounded-lg border border-line">
+    <div className="my-4 overflow-x-auto rounded-xl border border-line bg-surface">
       <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
-  thead: ({ children }) => <thead className="bg-code-header/50">{children}</thead>,
+  thead: ({ children }) => <thead className="bg-surface-muted">{children}</thead>,
   th: ({ children }) => (
-    <th className="border-b border-line px-2.5 py-1.5 text-left font-medium text-content-secondary">{withInlineMarks(children)}</th>
+    <th className="border-b border-line px-3.5 py-2 text-left text-[13px] font-semibold text-content-secondary">{withInlineMarks(children)}</th>
   ),
-  td: ({ children }) => <td className="border-b border-line px-2.5 py-1.5 align-top">{withInlineMarks(children)}</td>,
-  // ```mindmap 围栏 → 导图卡片;其余语言照旧走 CodeBlock
+  td: ({ children }) => <td className="border-b border-line px-3.5 py-2.5 align-top">{withInlineMarks(children)}</td>,
+  // ```mindmap 围栏 → 导图卡片;```chart 围栏 → 图表卡片;其余语言照旧走 CodeBlock
   pre: (props) => {
     const { language, code } = extractCodeInfo(props.children)
     if (language === 'mindmap') return <MindMapBlock source={code} />
+    if (language === 'chart') return <ChartBlock source={code}>{props.children}</ChartBlock>
     return <CodeBlock>{props.children}</CodeBlock>
   },
   // 行内 code 样式;块级 code 在 pre 内由 globals.css 的 .rich-md pre code 覆盖为无背景无边框
   code: CodeInline,
   img: ({ src, alt }) => (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt={alt ?? ''} className="my-2 max-w-full rounded-lg border border-line" />
+    <img src={src} alt={alt ?? ''} className="my-2 max-w-full rounded-xl border border-line" />
   ),
   // strong/em 接入高亮管线(视觉仍走浏览器默认,如 **加粗==术语==** 也能标红)
   strong: ({ children }) => <strong>{withInlineMarks(children)}</strong>,
@@ -902,8 +928,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // rich=true,不加动画,避免滚动回看/空闲预热挂载时跟着闪
   const [enterAnim, setEnterAnim] = useState(false)
   const prevRichRef = useRef(rich)
+  const enterPlayedRef = useRef(false)
   useIsoLayoutEffect(() => {
-    if (rich && !prevRichRef.current) setEnterAnim(true)
+    // 闸门:淡入只在首次 plain→rich 定格播一次。恢复轮询场景下 rich 会随
+    // 打字机在 chunk 间隙反复翻转(每 1.2s 一次),不设闸整段文字反复淡入=「闪很多下」
+    if (rich && !prevRichRef.current && !enterPlayedRef.current) {
+      enterPlayedRef.current = true
+      setEnterAnim(true)
+    }
     prevRichRef.current = rich
   }, [rich])
 
@@ -911,7 +943,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   if (!RICH_RENDER_ENABLED || !rich) {
     return (
       <div
-        className={cn('text-sm text-content-primary leading-relaxed break-words whitespace-pre-wrap', className)}
+        className={cn('text-[15px] text-content-primary leading-[1.85] break-words whitespace-pre-wrap', className)}
       >
         {content}
       </div>
@@ -921,7 +953,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   return (
     <div
       className={cn(
-        'text-sm text-content-primary leading-relaxed break-words',
+        'text-[15px] text-content-primary leading-[1.85] break-words',
         enterAnim && 'md-enter',
         className,
       )}
