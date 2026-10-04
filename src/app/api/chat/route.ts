@@ -1784,8 +1784,14 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     // 默认只给客户端 "An error occurred.",这里把上游真实错误转成可读消息。
     onError: (error) => {
       console.error('[chat] Stream error:', error)
-      if (error instanceof APICallError) {
-        const status: number | undefined = error.statusCode ?? undefined
+      // instanceof 只认顶层 @ai-sdk/provider-utils 的类,而 @ai-sdk/deepseek 自带一份
+      // 不同版本的同名类(5.0.30 vs 5.0.29) → DeepSeek 上游错误恒不匹配,全塌成兜底文案。
+      // 按 name + statusCode 形状识别,覆盖多副本场景。
+      const isApiCall =
+        error instanceof APICallError || (error as Error)?.name === 'AI_APICallError'
+      if (isApiCall) {
+        const status: number | undefined =
+          (error as { statusCode?: number })?.statusCode ?? undefined
         monitor("chat_upstream_error", { status: status ?? null })
         if (status === 401) {
           return '服务商鉴权失败(401),请检查该模型的 API Key 是否有效'
