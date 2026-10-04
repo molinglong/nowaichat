@@ -6,7 +6,7 @@ import { ephemeralScope } from "@/lib/ephemeral"
 export async function PATCH(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    return new Response(JSON.stringify({ error: "登录已失效，请重新登录后再试" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     })
@@ -20,7 +20,7 @@ export async function PATCH(req: NextRequest) {
 
     if (styleOffset === undefined || styleOffset < 0 || styleOffset > 100) {
       return new Response(
-        JSON.stringify({ error: "Invalid style offset. Must be between 0 and 100." }),
+        JSON.stringify({ error: "风格强度需在 0-100 之间" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       )
     }
@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
   } catch (error) {
     console.error("[conversation-style] Error:", error)
     return new Response(
-      JSON.stringify({ error: "Failed to update style offset" }),
+      JSON.stringify({ error: "更新风格强度失败" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     )
   }

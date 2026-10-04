@@ -11,7 +11,7 @@ import { recordPracticeAttempt } from '@/lib/study/question-bank'
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
   if (!body.questionId?.trim()) {
     return NextResponse.json({ error: '缺少 questionId' }, { status: 400 })
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     const r = await recordPracticeAttempt(userId, body.questionId.trim(), result, body.userAnswer)
     // 归属校验:非本人题目视为不存在(核心内按 notfound 处理)
     if (r.outcome === 'notfound') {
-      return NextResponse.json({ error: 'Not Found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     if (r.outcome === 'ok') {
       return NextResponse.json({ ok: true })

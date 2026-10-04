@@ -137,7 +137,7 @@ function buildSystem(
 export async function POST(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 })
+    return Response.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
@@ -251,7 +251,7 @@ export async function POST(req: Request) {
     const cmId = modelId.slice(7)
     const cmRecord = await prisma.customModel.findFirst({ where: { id: cmId, userId } })
     if (!cmRecord) {
-      return Response.json({ error: `Unknown custom model: ${modelId}` }, { status: 400 })
+      return Response.json({ error: `自定义模型不存在：${modelId}` }, { status: 400 })
     }
     modelDef = buildCustomModelDefinition(cmRecord)
     realModelId = cmRecord.modelId
@@ -260,7 +260,7 @@ export async function POST(req: Request) {
   } else {
     const builtinModelDef = await getEffectiveModel(userId, modelId)
     if (!builtinModelDef) {
-      return Response.json({ error: `Unknown model: ${modelId}` }, { status: 400 })
+      return Response.json({ error: `模型不存在或已下架：${modelId}` }, { status: 400 })
     }
     modelDef = builtinModelDef
 
@@ -272,13 +272,13 @@ export async function POST(req: Request) {
       apiKey = process.env.API_KEY_DASHSCOPE
       if (!apiKey) {
         return Response.json(
-          { error: "DashScope API key not configured in server environment variables" },
+          { error: "服务端未配置通义千问的 API Key（环境变量 API_KEY_DASHSCOPE）" },
           { status: 400 }
         )
       }
     } else if (!apiKeyRecord) {
       return Response.json(
-        { error: `No API key configured for ${modelDef.provider}` },
+        { error: `还没有配置 ${modelDef.provider} 的 API Key，请先到设置里填写` },
         { status: 400 }
       )
     } else {
@@ -286,7 +286,7 @@ export async function POST(req: Request) {
         apiKey = decrypt(apiKeyRecord.encryptedKey)
       } catch (err) {
         console.error(`[write-generate] Failed to decrypt API key for user ${userId}:`, err)
-        return Response.json({ error: "Failed to decrypt API key" }, { status: 500 })
+        return Response.json({ error: "已保存的 API Key 解密失败，请在设置里重新填写一次" }, { status: 500 })
       }
     }
     // 与 /api/chat 同规则:provider 变量持工厂,调用 provider(realModelId) 才得到语言模型

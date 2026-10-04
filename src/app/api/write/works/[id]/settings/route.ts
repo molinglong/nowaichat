@@ -19,7 +19,7 @@ type RouteContext = { params: { id: string } }
 export async function GET(req: Request, { params }: RouteContext) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const work = await prisma.work.findFirst({
@@ -52,7 +52,7 @@ export async function GET(req: Request, { params }: RouteContext) {
 export async function POST(req: Request, { params }: RouteContext) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const work = await prisma.work.findFirst({

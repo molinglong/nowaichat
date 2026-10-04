@@ -14,7 +14,7 @@ type RouteContext = { params: { id: string } }
 export async function PATCH(req: Request, { params }: RouteContext) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
@@ -54,7 +54,7 @@ export async function PATCH(req: Request, { params }: RouteContext) {
 export async function DELETE(req: Request, { params }: RouteContext) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const existing = await prisma.work.findFirst({

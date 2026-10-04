@@ -36,7 +36,7 @@ const DIFFICULTY_LABELS: Record<string, string> = {
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
   const topic = (body.topic ?? '').trim()
   if (!topic) {

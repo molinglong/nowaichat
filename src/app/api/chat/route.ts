@@ -13,6 +13,7 @@ import type { SharedV4ProviderOptions } from "@ai-sdk/provider"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { decrypt } from "@/lib/crypto"
+import { classifyUpstreamError, encodeUpstreamError } from "@/lib/error-catalog"
 import { getEffectiveModel, createProviderInstanceForEffectiveModel } from "@/lib/ai/registry"
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import { buildMemorySystemPrompt, getRelevantMemories, extractAndSaveMemories } from "@/lib/memory"
@@ -144,6 +145,7 @@ interface ChatRequestBody {
   localFilesEnabled?: boolean // 客户端(Tauri)本地文件能力:仅桌面端且用户开关开启时上报 true,服务端据此注入 local_file 工具
   workspaceContext?: string // 工作区快照(客户端组装:目录树+AGENT.md 约定,≤8KB):仅 local_file 注入时采纳,注入 system
   codePanelOpen?: boolean // 客户端上报:代码编辑器面板是否打开,服务端据此注入 code_edit 工具
+  studyMode?: boolean // /study 导师对话流:强制挂载课本检索/题库练题工具并注入教学能力段(临时模式页面已被 middleware 封锁)
   /** 「只重答这条」:就地改写该 user 消息并把新回答插回原时间位置,后续消息不归档 */
   reanswerEdit?: { editedId?: string; oldContent: string }
 }
@@ -335,10 +337,17 @@ export async function POST(req: NextRequest) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      })
+      return new Response(
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(new Error("未登录或登录已过期"), { code: "session_expired", status: 401 })
+          ),
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
     }
 
     const userId = session.user.id
@@ -354,6 +363,9 @@ export async function POST(req: NextRequest) {
     const { model: modelId, messages: rawMessages, conversationId, deepThink, groupId, webSearch, searchEngine, mcpEnabled } = body
     const attachments = Array.isArray(body.attachments) ? body.attachments : []
     const hasImageAttachments = attachments.some((a) => a.type.startsWith("image/"))
+    // 学习模式(导师对话流):仅正式单聊生效。页面级封锁在 middleware,
+    // 这里再挡一层防伪造请求把工具强行挂进临时/对比泳道。
+    const studyModeOn = body.studyMode === true && !isEphemeral && !groupId
 
     console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}, mcpEnabled: ${mcpEnabled}`)
 
@@ -425,10 +437,21 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     const cmRecord = await prisma.customModel.findFirst({ where: { id: cmId, userId } })
     if (!cmRecord) {
       console.error(`[chat] Unknown custom model: ${modelId} for user ${userId}`)
-      return new Response(JSON.stringify({ error: `Unknown custom model: ${modelId}` }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
+      monitor("chat_upstream_error", { code: "model_not_found", stage: "precheck" })
+      return new Response(
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(new Error(`自定义模型记录不存在: ${modelId}`), {
+              code: "model_not_found",
+              status: 404,
+            })
+          ),
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
     }
     modelDef = buildCustomModelDefinition(cmRecord)
     realModelId = cmRecord.modelId
@@ -443,10 +466,21 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     const builtinModelDef = await getEffectiveModel(userId, modelId)
     if (!builtinModelDef) {
       console.error(`[chat] Unknown model: ${modelId}`)
-      return new Response(JSON.stringify({ error: `Unknown model: ${modelId}` }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      })
+      monitor("chat_upstream_error", { code: "model_not_found", stage: "precheck" })
+      return new Response(
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(new Error(`模型 ${modelId} 不在可用列表中`), {
+              code: "model_not_found",
+              status: 404,
+            })
+          ),
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
     }
     modelDef = builtinModelDef
 
@@ -466,16 +500,30 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       apiKey = process.env.API_KEY_DASHSCOPE
       if (!apiKey) {
         console.error(`[chat] No DashScope API key configured for user ${userId}`)
+        monitor("chat_upstream_error", { code: "config_missing", stage: "precheck", provider: "qianwen" })
         return new Response(
-          JSON.stringify({ error: `DashScope API key not configured in server environment variables (API_KEY_DASHSCOPE)` }),
+          JSON.stringify({
+            error: encodeUpstreamError(
+              classifyUpstreamError(new Error("服务端环境变量 API_KEY_DASHSCOPE 未配置"), {
+                code: "config_missing",
+              })
+            ),
+          }),
           { status: 400, headers: { "Content-Type": "application/json" } }
         )
       }
       console.log("[chat] Using DashScope env var API key for Qwen models")
     } else if (!apiKeyRecord) {
       console.error(`[chat] No API key configured for ${modelDef.provider} for user ${userId}`)
+      monitor("chat_upstream_error", { code: "config_missing", stage: "precheck", provider: modelDef.provider })
       return new Response(
-        JSON.stringify({ error: `No API key configured for ${modelDef.provider}` }),
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(new Error(`未配置 ${modelDef.provider} 的 API Key`), {
+              code: "config_missing",
+            })
+          ),
+        }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       )
     } else {
@@ -483,8 +531,16 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         apiKey = decrypt(apiKeyRecord.encryptedKey)
       } catch (err) {
         console.error(`[chat] Failed to decrypt API key for user ${userId}:`, err)
+        monitor("chat_upstream_error", { code: "config_missing", stage: "decrypt" })
         return new Response(
-          JSON.stringify({ error: `Failed to decrypt API key` }),
+          JSON.stringify({
+            error: encodeUpstreamError(
+              classifyUpstreamError(err, {
+                code: "config_missing",
+                fallbackDetail: "已保存的 Key 解密失败，请在设置里重新填写一次",
+              })
+            ),
+          }),
           { status: 500, headers: { "Content-Type": "application/json" } }
         )
       }
@@ -495,8 +551,16 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       provider = createProviderInstanceForEffectiveModel(modelDef, apiKey)
     } catch (err) {
       console.error(`[chat] Failed to create provider instance for ${modelId}:`, err)
+      monitor("chat_upstream_error", { code: "server_error", stage: "provider_init" })
       return new Response(
-        JSON.stringify({ error: `Failed to initialize AI provider` }),
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(err, {
+              code: "server_error",
+              fallbackDetail: `无法初始化 ${modelDef.provider} 的调用客户端`,
+            })
+          ),
+        }),
         { status: 500, headers: { "Content-Type": "application/json" } }
       )
     }
@@ -994,11 +1058,11 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
   // 课本知识库检索:半绑定(用户名下有知识切块才注入,物理级闸门,无课本则工具不存在);
   // 面具学科倾向(如数学大师→math)仅作为能力段默认过滤建议,不锁死。
-  // 只读工具,临时模式/对比模式均可安全使用。
+  // 只读工具,临时模式/对比模式均可安全使用。学习模式强制挂载(没课本时检索返回空,不阻塞)。
   let knowledgeTool: ReturnType<typeof createKnowledgeTool> | null = null
   let knowledgeSubjectHint = ""
   try {
-    if (await hasKnowledgeChunks(userId)) {
+    if (studyModeOn || (await hasKnowledgeChunks(userId))) {
       knowledgeTool = createKnowledgeTool(userId, effectiveMask?.subject)
       const prefSubject = effectiveMask?.subject
       const prefLabel = prefSubject ? (KNOWLEDGE_SUBJECT_LABELS[prefSubject] ?? prefSubject) : ""
@@ -1013,12 +1077,12 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
   // 题库练题:双工具(practice_questions 抽题 / record_practice 判分回传)。
   // 用户名下有题目才注入(物理级闸门);抽题只读但判分回传要写错题本(StudyNote),
-  // 故临时模式/对比模式整体不挂载(与其它写入类工具同闸门)。
+  // 故临时模式/对比模式整体不挂载(与其它写入类工具同闸门)。学习模式强制挂载。
   let practiceTool: ReturnType<typeof createPracticeTool> | null = null
   let recordPracticeTool: ReturnType<typeof createRecordPracticeTool> | null = null
   if (!isEphemeral && !groupId) {
     try {
-      if (await hasQuestions(userId)) {
+      if (studyModeOn || (await hasQuestions(userId))) {
         practiceTool = createPracticeTool(userId)
         recordPracticeTool = createRecordPracticeTool(userId)
         console.log(`[chat] practice tools attached (user ${userId})`)
@@ -1114,6 +1178,51 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         '若用户本轮是在回答这些题目:判分后**必须**用上面的 id 调 record_practice 上报(原样使用,不得编造);若用户还没作答或聊的是别的,忽略本段即可。',
       ].join('\n'))
       console.log(`[chat] practice pending re-injected (${pending.length} items)`)
+    }
+  }
+  // 学习模式能力段:/study 导师对话流。业界验证范式(ChatGPT Study Mode/Khanmigo):
+  // 答案守卫+苏格拉底引导做在系统层,配逃生舱防"伪引导";结课小结+学情回灌让错题参与对话。
+  if (studyModeOn) {
+    systemParts.push([
+      '## 学习模式(导师)',
+      '本会话处于学习模式:你是导师,目标是让用户真正学会,而不是替他给出答案。',
+      '答案守卫(硬规则):用户问题目时,首次回复禁止直接输出最终答案——先反问定位卡点(如「你卡在哪一步」),给一层不点破计算的提示,再依据用户回应逐步推进。',
+      '- 防伪引导:每轮最多一个反问;连续两轮引导用户仍卡住或明显急躁时,主动转为分步讲解(讲思路、留最后一步让用户亲手完成)。',
+      '- 逃生舱:用户明确要求「直接给我讲解/给我答案」时立即服从,给完整分步讲解,不再反问;讲完仍补一道同考点变式确认是否真会。',
+      '- 讲完一道题后主动给一道同考点变式小练巩固(按试卷块协议 :::choice/:::question + 紧跟 :::answer;有课本时先 search_knowledge 找课本例题改编,防超纲)。',
+      '- 从题库抽题练习时严格按题库练题能力段执行:判分后必须 record_practice 上报,答错的题自动进错题本。',
+      '- 用户示意结课(如「今天到这」「下课」)时给一句结课小结:本次掌握了什么、哪个考点待复习。',
+      '- 开场按下方「当前学情」自然带一句最相关的复习点(如「上次『十字相乘』错了两道,今天先练这个」),不要罗列清单,不要提"系统给我看了你的数据"。',
+    ].join('\n'))
+
+    // 学情回灌:今日到期队列 + 近期薄弱点 → system 段(Khanmigo"近期解题史"机制;
+    // StudyNote 建卡即 due=now,新卡也计入今日队列,与 /api/study/queue 同口径)
+    try {
+      const studyNow = new Date()
+      const [studyDueCount, studyWeakNotes] = await Promise.all([
+        prisma.studyNote.count({
+          where: { userId, OR: [{ dueAt: { lte: studyNow } }, { dueAt: null }] },
+        }),
+        prisma.studyNote.findMany({
+          where: { userId, OR: [{ lapses: { gte: 1 } }, { mastery: { lt: 0.3 } }] },
+          orderBy: { createdAt: 'desc' },
+          take: 6,
+          select: { topic: true, title: true, lapses: true, mastery: true },
+        }),
+      ])
+      const weakLines = studyWeakNotes.map(
+        (n) => `- ${n.topic || n.title.slice(0, 16)}(遗忘 ${n.lapses} 次,掌握度 ${Math.round(n.mastery * 100)}%)`
+      )
+      systemParts.push([
+        '## 当前学情(仅供开场参考,禁止照单罗列)',
+        studyDueCount > 0
+          ? `- 今日复习队列:${studyDueCount} 张到期卡,可主动提议先复习再学新内容`
+          : '- 今日复习队列已清空',
+        ...(weakLines.length ? ['- 近期薄弱考点:', ...weakLines] : []),
+      ].join('\n'))
+      console.log(`[chat] study mode on (due=${studyDueCount}, weak=${weakLines.length})`)
+    } catch (err) {
+      console.error('[chat] study context injection failed:', err)
     }
   }
   console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${engine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
@@ -1789,27 +1898,12 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       // 按 name + statusCode 形状识别,覆盖多副本场景。
       const isApiCall =
         error instanceof APICallError || (error as Error)?.name === 'AI_APICallError'
-      if (isApiCall) {
-        const status: number | undefined =
-          (error as { statusCode?: number })?.statusCode ?? undefined
-        monitor("chat_upstream_error", { status: status ?? null })
-        if (status === 401) {
-          return '服务商鉴权失败(401),请检查该模型的 API Key 是否有效'
-        }
-        if (status === 403) {
-          return '服务商拒绝请求(403)：额度不足或无权限，请检查账户余额'
-        }
-        if (status === 429) {
-          return '请求过于频繁或超出限额(429)，请稍后重试'
-        }
-        if (typeof status === 'number' && status >= 500) {
-          return `服务商服务器错误 (${status}),请稍后重试`
-        }
-        return typeof status === 'number'
-          ? `服务商请求失败(HTTP ${status})，请稍后重试`
-          : '服务商请求失败，请稍后重试'
-      }
-      return '生成过程中出错，请重试'
+      const status = isApiCall
+        ? ((error as { statusCode?: number })?.statusCode ?? undefined)
+        : undefined
+      const info = classifyUpstreamError(error, { status })
+      monitor("chat_upstream_error", { code: info.code, status: status ?? null, stage: "stream" })
+      return encodeUpstreamError(info)
     },
   })
 
@@ -1819,8 +1913,14 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   })
   } catch (error) {
     console.error("[chat] Error processing chat request:", error)
+    const info = classifyUpstreamError(error, { code: "server_error" })
+    monitor("chat_upstream_error", {
+      code: "server_error",
+      stage: "route_catch",
+      raw: info.raw.slice(0, 300),
+    })
     return new Response(
-      JSON.stringify({ error: "Internal server error", details: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ error: encodeUpstreamError(info) }),
       {
         status: 500,
         headers: { "Content-Type": "application/json" }

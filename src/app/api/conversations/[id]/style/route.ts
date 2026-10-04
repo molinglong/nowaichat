@@ -17,7 +17,7 @@ export async function PATCH(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json().catch(() => null)
@@ -29,7 +29,7 @@ export async function PATCH(
     const valid = STYLE_PRESETS.find((p) => p.id === rawPreset)
     if (!valid) {
       return NextResponse.json(
-        { error: `Invalid stylePreset. Must be one of: ${STYLE_PRESETS.map((p) => p.id).join(", ")}` },
+        { error: `风格预设不存在，可选值：${STYLE_PRESETS.map((p) => p.id).join(", ")}` },
         { status: 400 }
       )
     }
@@ -39,7 +39,7 @@ export async function PATCH(
     nextPreset = presetFromOffset(Math.round(rawOffset))
   } else {
     return NextResponse.json(
-      { error: "Provide stylePreset (string) or styleOffset (0-100)." },
+      { error: "请提供 stylePreset 或 styleOffset（0-100）" },
       { status: 400 }
     )
   }
@@ -50,7 +50,7 @@ export async function PATCH(
   })
 
   if (conversation.count === 0) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   return NextResponse.json({ success: true, stylePreset: nextPreset })

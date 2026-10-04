@@ -31,7 +31,7 @@ function normalizeDueAt(raw: unknown): Date | null {
 export async function GET(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const doneParam = new URL(req.url).searchParams.get("done")
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -74,7 +74,7 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -125,7 +125,7 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const id = new URL(req.url).searchParams.get("id")

@@ -9,7 +9,7 @@ export async function GET(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const { id } = params
@@ -25,7 +25,7 @@ export async function GET(
   })
 
   if (!conversation) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   const messages = await prisma.message.findMany({
@@ -77,7 +77,7 @@ export async function DELETE(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const { id } = params
@@ -86,7 +86,7 @@ export async function DELETE(
 
   if (!messageId) {
     return NextResponse.json(
-      { error: "messageId query parameter is required" },
+      { error: "缺少参数 messageId" },
       { status: 400 }
     )
   }
@@ -98,7 +98,7 @@ export async function DELETE(
   })
 
   if (!conversation) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   // Find the target message to get its createdAt timestamp
@@ -127,7 +127,7 @@ export async function DELETE(
   }
 
   if (!targetMessage) {
-    return NextResponse.json({ error: "Message not found" }, { status: 404 })
+    return NextResponse.json({ error: "消息不存在或已被删除" }, { status: 404 })
   }
 
   // C 分支轻量版: 归档代替物理删除,附件文件一并保留(旧版本图片不裂)。
@@ -165,7 +165,7 @@ export async function PATCH(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const { id } = params
@@ -179,7 +179,7 @@ export async function PATCH(
   const oldContent = typeof body.oldContent === "string" ? body.oldContent : ""
   if (!messageId || !content) {
     return NextResponse.json(
-      { error: "messageId and content are required" },
+      { error: "缺少参数 messageId 或 content" },
       { status: 400 }
     )
   }
@@ -190,7 +190,7 @@ export async function PATCH(
     select: { id: true },
   })
   if (!conversation) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   // 仅允许编辑未归档的 user 消息;归档行属于历史版本,不可改
@@ -215,7 +215,7 @@ export async function PATCH(
   }
 
   if (!target) {
-    return NextResponse.json({ error: "Message not found" }, { status: 404 })
+    return NextResponse.json({ error: "消息不存在或已被删除" }, { status: 404 })
   }
 
   const editedAt = new Date().toISOString()

@@ -11,7 +11,7 @@ import { providers } from "@/lib/ai/registry"
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const keys = await prisma.apiKey.findMany({
@@ -47,20 +47,20 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json()
   const { provider, apiKey } = body
 
   if (!provider || typeof provider !== "string") {
-    return NextResponse.json({ error: "provider is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少参数 provider" }, { status: 400 })
   }
   if (!apiKey || typeof apiKey !== "string") {
-    return NextResponse.json({ error: "apiKey is required" }, { status: 400 })
+    return NextResponse.json({ error: "请先填写 API Key" }, { status: 400 })
   }
   if (!providers[provider]) {
-    return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 })
+    return NextResponse.json({ error: `不支持的服务商：${provider}` }, { status: 400 })
   }
 
   let encryptedKey: string
@@ -117,14 +117,14 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json()
   const { provider } = body
 
   if (!provider || typeof provider !== "string") {
-    return NextResponse.json({ error: "provider is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少参数 provider" }, { status: 400 })
   }
 
   try {
@@ -138,6 +138,6 @@ export async function DELETE(req: NextRequest) {
     })
     return NextResponse.json({ success: true })
   } catch {
-    return NextResponse.json({ error: "Key not found" }, { status: 404 })
+    return NextResponse.json({ error: "密钥不存在或已被删除" }, { status: 404 })
   }
 }

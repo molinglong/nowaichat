@@ -74,26 +74,26 @@ function resolveKind(
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const contentType = req.headers.get("content-type") ?? ""
   if (!contentType.includes("multipart/form-data")) {
-    return NextResponse.json({ error: "Expected multipart/form-data" }, { status: 400 })
+    return NextResponse.json({ error: "请求格式应为 multipart/form-data" }, { status: 400 })
   }
 
   const formData = await req.formData()
   const file = formData.get("file") as File | null
 
   if (!file) {
-    return NextResponse.json({ error: "No file provided" }, { status: 400 })
+    return NextResponse.json({ error: "没有收到文件" }, { status: 400 })
   }
 
   // Validate size
   if (file.size > MAX_FILE_SIZE) {
     monitor("upload_too_large", { size: file.size, name: file.name })
     return NextResponse.json(
-      { error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB` },
+      { error: `文件过大，单次上限 ${MAX_FILE_SIZE / 1024 / 1024}MB` },
       { status: 413 }
     )
   }
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
   if (!kind) {
     monitor("upload_unsupported", { mime: file.type, name: file.name })
     return NextResponse.json(
-      { error: `Unsupported file type: ${file.type}` },
+      { error: `不支持的文件类型：${file.type}` },
       { status: 415 }
     )
   }
@@ -175,7 +175,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     await deleteUploadFile(uniqueName).catch(() => {})
     console.error("[upload] Failed to create UploadFile record:", err)
-    return NextResponse.json({ error: "Failed to register upload" }, { status: 500 })
+    return NextResponse.json({ error: "登记上传失败" }, { status: 500 })
   }
 
   // 顺手清理孤儿文件(上传了但从未发送、超过 24 小时未被引用的文件;1 小时节流)
@@ -203,18 +203,18 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const { searchParams } = new URL(req.url)
   const fileParam = searchParams.get("file")
   if (!fileParam) {
-    return NextResponse.json({ error: "file query parameter is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少参数 file" }, { status: 400 })
   }
 
   const name = sanitizeUploadName(fileParam)
   if (!name) {
-    return NextResponse.json({ error: "Invalid file name" }, { status: 400 })
+    return NextResponse.json({ error: "文件名不合法" }, { status: 400 })
   }
 
   // 归属校验:记录存在但不属于当前用户一律 404(不泄露他人文件的存在性);
@@ -224,7 +224,7 @@ export async function DELETE(req: NextRequest) {
     select: { userId: true },
   })
   if (record && record.userId !== session.user.id) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   // 已被消息引用的文件不允许单独删除(避免破坏历史消息展示)
@@ -232,7 +232,7 @@ export async function DELETE(req: NextRequest) {
   if (referenced.has(name)) {
     monitor("upload_delete_conflict", { file: name })
     return NextResponse.json(
-      { error: "File is referenced by a message and cannot be deleted" },
+      { error: "该文件仍被消息引用，暂时无法删除" },
       { status: 409 }
     )
   }

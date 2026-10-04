@@ -18,7 +18,7 @@ export async function POST(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
@@ -27,13 +27,13 @@ export async function POST(
     select: { id: true },
   })
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   const body = await req.json().catch(() => ({}))
   const modelId = (body.modelId ?? '').toString()
   if (!modelId) {
-    return NextResponse.json({ error: 'modelId is required' }, { status: 400 })
+    return NextResponse.json({ error: '缺少参数 modelId' }, { status: 400 })
   }
 
   // 反查该模型在本会话的最新 assistant 消息,取其 groupId

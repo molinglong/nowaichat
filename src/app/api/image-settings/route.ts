@@ -18,7 +18,7 @@ const BUILTIN_IDS = BUILTIN_MODELS.map((m) => m.id)
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -65,7 +65,7 @@ export async function GET() {
 export async function PATCH(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -87,7 +87,7 @@ export async function PATCH(req: NextRequest) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
+    return NextResponse.json({ error: "请求体不是合法的 JSON" }, { status: 400 })
   }
 
   // ── 保存设置 ──────────────────────────────────────────────────────────────

@@ -17,13 +17,13 @@ export async function POST(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const { type, content, topic, model: modelId, conversationHistory, contextSnippets } = await request.json()
 
     if (!type || !content?.trim()) {
-      return NextResponse.json({ error: 'Type and content are required' }, { status: 400 })
+      return NextResponse.json({ error: '缺少参数 type 或 content' }, { status: 400 })
     }
 
     const userId = session.user.id
@@ -123,7 +123,7 @@ export async function POST(request: Request) {
         break
 
       default:
-        return NextResponse.json({ error: 'Unknown analysis type' }, { status: 400 })
+        return NextResponse.json({ error: '不支持的分析类型' }, { status: 400 })
     }
 
     // 构建消息
@@ -167,7 +167,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('[explore/assistant] Error:', error)
     return NextResponse.json(
-      { error: 'Analysis failed', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: '分析失败', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }

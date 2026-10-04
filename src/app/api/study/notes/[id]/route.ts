@@ -10,14 +10,14 @@ export async function PATCH(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   let body: { title?: string; content?: string; analysis?: string | null; subject?: string; topic?: string | null }
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
 
   const data: Record<string, unknown> = {}
@@ -41,7 +41,7 @@ export async function PATCH(
       data,
     })
     if (row.count === 0) {
-      return NextResponse.json({ error: 'Not Found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     const updated = await prisma.studyNote.findUnique({ where: { id: params.id } })
     return NextResponse.json(updated)
@@ -58,7 +58,7 @@ export async function DELETE(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   try {
@@ -66,7 +66,7 @@ export async function DELETE(
       where: { id: params.id, userId: session.user.id },
     })
     if (row.count === 0) {
-      return NextResponse.json({ error: 'Not Found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     return NextResponse.json({ ok: true })
   } catch (err) {

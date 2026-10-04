@@ -30,7 +30,7 @@ export async function GET(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
@@ -66,7 +66,7 @@ export async function GET(
   })
 
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   // 解析 JSON 字段供前端直接消费,避免前端重复处理
@@ -154,7 +154,7 @@ export async function PATCH(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
@@ -164,14 +164,14 @@ export async function PATCH(
   })
 
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   const body = await req.json()
   const parsed = patchSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json(
-      { error: 'Invalid request', details: parsed.error.flatten() },
+      { error: '请求参数不正确', details: parsed.error.flatten() },
       { status: 400 }
     )
   }
@@ -184,7 +184,7 @@ export async function PATCH(
     } else if (await getMaskById(parsed.data.maskId, session.user.id)) {
       maskIdUpdate = parsed.data.maskId
     } else {
-      return NextResponse.json({ error: 'Unknown maskId' }, { status: 400 })
+      return NextResponse.json({ error: '所选面具不存在' }, { status: 400 })
     }
   }
 
@@ -213,7 +213,7 @@ export async function DELETE(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
@@ -223,7 +223,7 @@ export async function DELETE(
   })
 
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   // 删除前收集会话内消息引用的附件文件(消息会随会话级联删除)

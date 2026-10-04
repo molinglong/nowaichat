@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
     const userId = session.user.id
     // 临时区隔离:分支新对话继承会话模式(临时模式下只能分支临时对话,反之亦然)
@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as BranchRequestBody
     const sourceId = body?.sourceId
     if (!sourceId) {
-      return NextResponse.json({ error: 'sourceId required' }, { status: 400 })
+      return NextResponse.json({ error: '缺少参数 sourceId' }, { status: 400 })
     }
     const draft = typeof body.draft === 'string' ? body.draft.trim() : ''
 
@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
       include: { messages: { orderBy: { createdAt: 'asc' } } },
     })
     if (!source) {
-      return NextResponse.json({ error: 'Source conversation not found' }, { status: 404 })
+      return NextResponse.json({ error: '原对话不存在或已被删除' }, { status: 404 })
     }
 
     const nonSystemMessages = source.messages.filter((m) => m.role !== 'system')
@@ -310,7 +310,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[branch] unexpected error:', err)
     return NextResponse.json(
-      { error: 'Internal error', details: err instanceof Error ? err.message : String(err) },
+      { error: '服务器内部错误', details: err instanceof Error ? err.message : String(err) },
       { status: 500 }
     )
   }

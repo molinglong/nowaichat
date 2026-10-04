@@ -14,7 +14,7 @@ import { normalizeWriteContent, normalizeWriteTitle } from "@/lib/write/doc-inpu
 export async function GET(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   // 列表不取 content(可能是几万字的长文),字数看冗余的 charCount;
@@ -42,7 +42,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const userId = await getUserId(req)
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>

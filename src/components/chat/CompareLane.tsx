@@ -4,9 +4,9 @@ import { useRef, useEffect, useMemo } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, MessageSquarePlus, RefreshCw, RotateCw, Settings as SettingsIcon, ThumbsUp } from 'lucide-react'
+import { MessageSquarePlus, RotateCw, ThumbsUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useChatStore } from '@/store/chat-store'
+import { ChatErrorBanner } from './ChatErrorBanner'
 import { MessageList } from './MessageList'
 import { PROVIDER_DOT } from './ModelSelector'
 import { getErrorMessage } from '@/lib/chat-errors'
@@ -59,8 +59,6 @@ export function CompareLane({
   isVoted,
   onVote,
 }: CompareLaneProps) {
-  const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
-  const setSettingsSection = useChatStore((s) => s.setSettingsSection)
   // 每个泳道独立持有自己的 attachmentsRef —— 避免父组件共享 ref 导致多泳道并发 fetch 时
   // 第一个泳道把 ref 清掉、后续泳道 fetch 时读到 undefined 的竞态
   const transportAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
@@ -289,43 +287,14 @@ export function CompareLane({
 
       {/* Lane error banner */}
       {error && errorInfo && (
-        <div className="mx-2 mt-2 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 shrink-0">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-red-600 dark:text-red-400 font-medium break-words">
-                {errorInfo.message}
-              </p>
-              <div className="flex items-center gap-2 mt-1.5">
-                <button
-                  onClick={() => {
-                    clearError()
-                    regenerate()
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
-                    bg-red-500 text-white hover:bg-red-600 transition-colors"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  重试
-                </button>
-                {errorInfo.type === 'api_key' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSettingsSection('providers')
-                      setSettingsOpen(true)
-                    }}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
-                      bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors"
-                  >
-                    <SettingsIcon className="w-3 h-3" />
-                    前往设置
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+        <ChatErrorBanner
+          info={errorInfo}
+          size="compact"
+          onRetry={() => {
+            clearError()
+            regenerate()
+          }}
+        />
       )}
 
       {/* Lane messages (对比模式内禁用编辑用户消息) */}

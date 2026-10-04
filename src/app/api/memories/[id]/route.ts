@@ -13,7 +13,7 @@ interface Params {
 export async function PATCH(req: Request, { params }: Params) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const memory = await prisma.memory.findUnique({
@@ -22,7 +22,7 @@ export async function PATCH(req: Request, { params }: Params) {
   })
 
   if (!memory || memory.userId !== session.user.id) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -53,7 +53,7 @@ export async function PATCH(req: Request, { params }: Params) {
 export async function DELETE(_req: Request, { params }: Params) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const memory = await prisma.memory.findUnique({
@@ -62,7 +62,7 @@ export async function DELETE(_req: Request, { params }: Params) {
   })
 
   if (!memory || memory.userId !== session.user.id) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
+    return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
   }
 
   await prisma.memory.delete({ where: { id: params.id } })

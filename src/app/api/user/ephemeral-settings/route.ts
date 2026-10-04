@@ -26,7 +26,7 @@ const GUEST_PASSWORD_MAX = 64
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const denied = denyIfEphemeral(session)
   if (denied) return denied
@@ -36,7 +36,7 @@ export async function GET() {
     select: { guestPasswordHash: true, ephemeralMemoryInjection: true },
   })
   if (!user) {
-    return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    return NextResponse.json({ error: '用户不存在' }, { status: 404 })
   }
 
   return NextResponse.json({
@@ -49,7 +49,7 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const denied = denyIfEphemeral(session)
   if (denied) return denied
@@ -63,7 +63,7 @@ export async function PUT(req: NextRequest) {
     : undefined
 
   if (guestPassword === undefined && ephemeralMemoryInjection === undefined) {
-    return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
+    return NextResponse.json({ error: '没有需要更新的内容' }, { status: 400 })
   }
 
   const user = await prisma.user.findUnique({
@@ -71,7 +71,7 @@ export async function PUT(req: NextRequest) {
     select: { passwordHash: true, guestPasswordHash: true },
   })
   if (!user || !user.passwordHash) {
-    return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    return NextResponse.json({ error: '用户不存在' }, { status: 404 })
   }
 
   // 主密码验证:访客密码是"开启第二入口"的高权重账户操作,必须本人确认;

@@ -15,7 +15,7 @@ const PROFILE_SELECT = {
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const user = await prisma.user.findUnique({
@@ -23,7 +23,7 @@ export async function GET() {
     select: PROFILE_SELECT,
   })
   if (!user) {
-    return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    return NextResponse.json({ error: '用户不存在' }, { status: 404 })
   }
   return NextResponse.json(user)
 }
@@ -32,14 +32,14 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
 
   const name =

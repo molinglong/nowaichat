@@ -1,36 +1,55 @@
+import {
+  decodeUpstreamError,
+  type UpstreamErrorAction,
+  type UpstreamErrorCode,
+  type UpstreamErrorInfo,
+} from '@/lib/error-catalog'
+
 export interface ChatErrorInfo {
   message: string
   type: 'api_key' | 'rate_limit' | 'network' | 'general'
+  /** 一句话短标题（toast 用） */
+  title: string
+  /** 完整中文说明：发生了什么 + 该做什么 */
+  detail: string
+  /** detail 的首句，toast 用（横幅已承载全文，弹窗不再重复长文） */
+  summary: string
+  action: UpstreamErrorAction | null
+  /** 服务商原始英文（已脱敏），仅供折叠查看与复制 */
+  raw: string
+  code: UpstreamErrorCode
 }
 
+const TYPE_BY_CODE: Record<UpstreamErrorCode, ChatErrorInfo['type']> = {
+  invalid_api_key: 'api_key',
+  config_missing: 'api_key',
+  insufficient_balance: 'general',
+  rate_limit: 'rate_limit',
+  model_not_found: 'general',
+  context_length: 'general',
+  content_policy: 'general',
+  timeout: 'network',
+  network: 'network',
+  server_error: 'general',
+  session_expired: 'general',
+  unknown: 'general',
+}
+
+/**
+ * 错误文案的唯一来源是 `@/lib/error-catalog`。
+ * 这里只做旧接口（message/type）到新接口（detail/action/raw）的适配，
+ * 任何分支都不再把上游英文原文直接当主文案上屏。
+ */
 export function getErrorMessage(error: Error): ChatErrorInfo {
-  const msg = error.message || ''
-
-  // API Key missing
-  if (msg.includes('No API key') || msg.includes('API key') || msg.includes('api key')) {
-    // Try to extract provider name
-    const match = msg.match(/for\s+(\w+)/i)
-    const provider = match?.[1] || ''
-    return {
-      message: provider
-        ? `请先在设置中配置 ${provider} 的 API Key`
-        : '请先在设置中配置对应提供商的 API Key',
-      type: 'api_key',
-    }
+  const info: UpstreamErrorInfo = decodeUpstreamError(error.message || '')
+  return {
+    message: info.detail,
+    type: TYPE_BY_CODE[info.code],
+    title: info.title,
+    detail: info.detail,
+    summary: info.detail.split(/[。；;]/)[0] || info.title,
+    action: info.action,
+    raw: info.raw,
+    code: info.code,
   }
-
-  // Rate limit
-  if (msg.includes('rate') || msg.includes('429') || msg.includes('too many') || msg.includes('Too many')) {
-    return { message: '请求过于频繁，请稍后再试', type: 'rate_limit' }
-  }
-
-  // Network errors
-  if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('ECONNREFUSED')) {
-    return { message: '网络连接失败，请检查网络后重试', type: 'network' }
-  }
-
-  // Fallback: show the real error from the provider so users can see the cause
-  // (e.g. quota exhausted, invalid model, auth failure, etc.)
-  const cleaned = msg.replace(/^AI_APICallError:\s*/i, '').trim()
-  return { message: cleaned || '发生错误，请重试', type: 'general' }
 }

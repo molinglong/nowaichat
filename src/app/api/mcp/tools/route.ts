@@ -12,7 +12,7 @@ import { monitor } from '@/lib/monitor'
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   // 临时会话（访客）：无 MCP 配置，返回空清单
   if (isEphemeralSession(session)) {

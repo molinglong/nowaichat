@@ -12,7 +12,7 @@ import { scheduleReview, type ReviewRating } from '@/lib/study/fsrs'
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
   const rating: ReviewRating = body.rating === 'good' ? 'good' : 'again'
   if (!body.noteId) {
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       where: { id: body.noteId, userId },
     })
     if (!note) {
-      return NextResponse.json({ error: 'Not Found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
 
     const before = note.mastery

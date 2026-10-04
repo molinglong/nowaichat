@@ -8,7 +8,7 @@ import { isEphemeralSession } from '@/lib/ephemeral'
 export async function GET(req: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   // 会话隔离:临时会话只返回临时对话,正常会话只返回正常对话。
@@ -86,7 +86,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -100,7 +100,7 @@ export async function POST(req: Request) {
       include: { messages: { orderBy: { createdAt: 'asc' } } },
     })
     if (!source) {
-      return NextResponse.json({ error: 'Source conversation not found' }, { status: 404 })
+      return NextResponse.json({ error: '原对话不存在或已被删除' }, { status: 404 })
     }
     const targetModel = body.model || source.model
     // 纯单聊消息(无 groupId)全部保留;对比泳道消息仅保留所选模型

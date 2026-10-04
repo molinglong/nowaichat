@@ -20,12 +20,12 @@ export async function POST(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const { query } = await request.json()
     if (!query?.trim()) {
-      return NextResponse.json({ error: 'Query is required' }, { status: 400 })
+      return NextResponse.json({ error: '请先输入查询内容' }, { status: 400 })
     }
 
     const userId = session.user.id
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('[explore/search] Error:', error)
     return NextResponse.json(
-      { error: 'Search failed', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: '搜索失败', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }

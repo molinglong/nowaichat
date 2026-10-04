@@ -14,7 +14,7 @@ import { providers, getEffectiveModels } from "@/lib/ai/registry"
 export async function GET(_req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const userId = session.user.id

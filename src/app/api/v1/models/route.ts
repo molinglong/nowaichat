@@ -24,7 +24,7 @@ export async function OPTIONS() {
 export async function GET(req: NextRequest) {
   const userId = await resolveGatewayUserId(req)
   if (!userId) {
-    return new Response(JSON.stringify({ error: "invalid x-api-key" }), {
+    return new Response(JSON.stringify({ error: "Anthropic API Key 无效，请在设置里检查" }), {
       status: 401,
       headers: { "content-type": "application/json", ...CORS },
     })

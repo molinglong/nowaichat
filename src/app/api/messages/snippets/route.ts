@@ -25,7 +25,7 @@ import { prisma } from '@/lib/db'
 export async function GET(req: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { searchParams } = new URL(req.url)
@@ -54,7 +54,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ fragments: [] })
   }
   if (q.length > 200) {
-    return NextResponse.json({ error: 'q too long' }, { status: 400 })
+    return NextResponse.json({ error: '查询内容过长' }, { status: 400 })
   }
 
   // 防御性: 先确认这些会话都属于当前用户,避免越权查询。

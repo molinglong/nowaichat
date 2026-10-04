@@ -52,7 +52,7 @@ async function resolveUniqueSlug(userId: string, name: string): Promise<string> 
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const servers = await prisma.mcpServer.findMany({
     where: { userId: session.user.id },
@@ -65,7 +65,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -142,7 +142,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
 
@@ -165,7 +165,7 @@ export async function PATCH(request: Request) {
       select: { id: true, headerName: true },
     })
     if (!existing) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
 
     const data: Record<string, unknown> = {}
@@ -209,7 +209,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   try {
@@ -223,7 +223,7 @@ export async function DELETE(request: Request) {
       select: { id: true },
     })
     if (!existing) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     await prisma.mcpServer.delete({ where: { id: body.id } })
     monitor('mcp_deleted', { id: body.id })

@@ -16,13 +16,13 @@ export async function GET(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
   const rootId = new URL(req.url).searchParams.get('rootId')
   if (!rootId) {
-    return NextResponse.json({ error: 'rootId query parameter is required' }, { status: 400 })
+    return NextResponse.json({ error: '缺少参数 rootId' }, { status: 400 })
   }
 
   // 归属校验(含临时区隔离):只允许查看本人同区会话的归档
@@ -31,7 +31,7 @@ export async function GET(
     select: { id: true },
   })
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   const rows = await prisma.message.findMany({

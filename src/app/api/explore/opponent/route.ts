@@ -12,13 +12,13 @@ export async function POST(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const { topic, model: modelId, conversationHistory, opponentHistory } = await request.json()
 
     if (!topic?.trim()) {
-      return NextResponse.json({ error: 'Topic is required' }, { status: 400 })
+      return NextResponse.json({ error: '请先填写议题' }, { status: 400 })
     }
 
     const userId = session.user.id
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     // 获取模型对应的 API Key
     const provider = getProviderForModel(modelId)
     if (!provider) {
-      return NextResponse.json({ error: 'Unknown model' }, { status: 400 })
+      return NextResponse.json({ error: '模型不存在或已下架' }, { status: 400 })
     }
 
     const keyRecord = await prisma.apiKey.findUnique({
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     })
 
     if (!keyRecord?.encryptedKey) {
-      return NextResponse.json({ error: `No API key for ${provider.name}` }, { status: 401 })
+      return NextResponse.json({ error: `还没有配置 ${provider.name} 的 API Key，请先到设置里填写` }, { status: 401 })
     }
 
     const apiKey = decrypt(keyRecord.encryptedKey)
@@ -91,7 +91,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('[explore/opponent] Error:', error)
     return NextResponse.json(
-      { error: 'Failed to generate opponent response', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: '生成反驳观点失败', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }

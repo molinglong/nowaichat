@@ -14,7 +14,7 @@ function sanitizeStylePreset(v: string | null | undefined): string | null {
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
   const { id } = params
@@ -23,7 +23,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: '请求体不是合法的 JSON' }, { status: 400 })
   }
   const parsed = maskInputSchema.safeParse(body)
   if (!parsed.success) {
@@ -48,10 +48,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       },
     })
     if (updated.count === 0) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     const row = await prisma.mask.findFirst({ where: { id, userId } })
-    if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    if (!row) return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     return NextResponse.json(maskRowToDto(row))
   } catch (err) {
     console.error('[masks] update failed:', err)
@@ -63,7 +63,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const userId = session.user.id
   const { id } = params
@@ -78,7 +78,7 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
       }),
     ])
     if (del.count === 0) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     return NextResponse.json({ ok: true, conversationsCleared: convs.count })
   } catch (err) {

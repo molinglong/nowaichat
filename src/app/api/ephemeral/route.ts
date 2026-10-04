@@ -19,7 +19,7 @@ import { monitor } from '@/lib/monitor'
 export async function GET(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const denied = denyIfEphemeral(session)
   if (denied) return denied
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       },
     })
     if (!conversation) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
     }
     const messages = await prisma.message.findMany({
       where: { conversationId: previewId, archived: false },
@@ -86,7 +86,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
   const denied = denyIfEphemeral(session)
   if (denied) return denied
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
   const action = body?.action
   const id = typeof body?.id === 'string' ? body.id : ''
   if ((action !== 'restore' && action !== 'delete') || !id) {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+    return NextResponse.json({ error: '请求参数不正确' }, { status: 400 })
   }
 
   // 归属校验:只允许操作本人隔离区内的对话
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
     select: { id: true },
   })
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   if (action === 'restore') {

@@ -31,17 +31,17 @@ export async function POST(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const { topic, userMessages, opponentMessages, model: modelIdInput } = await request.json()
 
     if (!topic?.trim()) {
-      return NextResponse.json({ error: 'Topic is required' }, { status: 400 })
+      return NextResponse.json({ error: '请先填写议题' }, { status: 400 })
     }
 
     if ((!userMessages || userMessages.length === 0) && (!opponentMessages || opponentMessages.length === 0)) {
-      return NextResponse.json({ error: 'No messages to summarize' }, { status: 400 })
+      return NextResponse.json({ error: '没有可摘要的消息' }, { status: 400 })
     }
 
     const userId = session.user.id
@@ -160,7 +160,7 @@ ${historyText.join('\n\n')}`
   } catch (error) {
     console.error('[explore/summary] Error:', error)
     return NextResponse.json(
-      { error: 'Summary generation failed', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: '摘要生成失败', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }

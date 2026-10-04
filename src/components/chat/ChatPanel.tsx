@@ -5,7 +5,8 @@ import { useChat } from '@ai-sdk/react'
 import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, ChevronDown, RefreshCw, Settings as SettingsIcon } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
+import { ChatErrorBanner } from './ChatErrorBanner'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
@@ -164,6 +165,9 @@ interface ChatPanelProps {
   /** 跳转桥: /chat?q= 传入的自动发送文本(bento「继续对话」等外部入口);
    *  mount 后空会话自动发出一次,随后清掉 URL 参数防刷新重发 */
   autoSendText?: string
+  /** 学习模式(/study 导师对话流):随请求上报服务端强制挂载课本/练题工具并注入教学能力段;
+   *  同时关闭首条消息后的 URL 改写(/study 无 c/[id] 子路由,进页即开课,刷新=新开课) */
+  studyMode?: boolean
 }
 
 export function ChatPanel({
@@ -179,6 +183,7 @@ export function ChatPanel({
   initialMaskId,
   initialCompareVote,
   autoSendText,
+  studyMode,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
   // 写作画布/预览面板/文件编辑器打开时桌面端压缩聊天区让位(与面板同宽并排,豆包式)
@@ -580,6 +585,8 @@ export function ChatPanel({
           get mcpEnabled() { return mcpEnabledRef.current },
           get stylePreset() { return conversationStylePresetRef.current },
           get maskId() { return conversationMaskIdRef.current },
+          // 学习模式:页面级常量(prop),服务端据此强挂教学工具+能力段
+          ...(studyMode ? { studyMode: true } : {}),
           // AI 设置控制: 每次请求前读取最新客户端设置快照,服务端注入 system prompt(读写对称)
           get settingsSnapshot() {
             return buildSettingsSnapshot()
@@ -624,14 +631,19 @@ export function ChatPanel({
               setConversationTitle(decodeURIComponent(newConvTitle))
             }
             // Update URL without full navigation
-            window.history.replaceState(null, '', `/chat/c/${newConvId}`)
+            // 学习模式不改写:/study 没有 c/[id] 子路由,改写会 404/劫持到 /chat;
+            // 会话由 conversationId state 维持,刷新 /study = 开新课,语义自洽
+            if (!studyMode) {
+              window.history.replaceState(null, '', `/chat/c/${newConvId}`)
+            }
           }
           return response
         },
       }),
     // transport 内部所有运行时值都通过 ref 读取最新值,
     // 这里只依赖稳定的 store setter(来自 zustand,引用恒定),避免 transport 被频繁重建
-    [setConversationId, setCurrentConversationId, setConversationTitle, bumpConversationVersion]
+    // studyMode 是页面级常量 prop,进依赖仅满足 exhaustive-deps,不会引起重建
+    [setConversationId, setCurrentConversationId, setConversationTitle, bumpConversationVersion, studyMode]
   )
 
   // Ref to setMessages,避免在 useChat 初始化器内部自引用导致循环依赖
@@ -1951,8 +1963,8 @@ export function ChatPanel({
   useEffect(() => {
     if (error && error !== lastErrorRef.current) {
       lastErrorRef.current = error
-      toast.error(errorInfo?.message ?? '请求失败,请重试', {
-        title: errorInfo?.type === 'api_key' ? '缺少 API Key' : '请求失败',
+      toast.error(errorInfo?.summary ?? '请求失败,请重试', {
+        title: errorInfo?.title ?? '请求失败',
         timeout: 6000,
       })
     } else if (!error) {
@@ -1995,56 +2007,7 @@ export function ChatPanel({
 
       {/* Error banner(桌面端下移让位浮动工具簇: 横幅全宽,右缘正落在无底板浮簇底下) */}
       {error && errorInfo && (
-        <div className="mx-4 mt-3 mb-0 md:mt-12 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-red-600 dark:text-red-400 font-medium">
-              {errorInfo.message}
-            </p>
-            {process.env.NODE_ENV === 'development' && error.message && (
-              <p className="mt-1 text-xs text-red-400/70 dark:text-red-400/60 font-mono truncate">
-                {error.message}
-              </p>
-            )}
-            <div className="flex items-center gap-2 mt-2">
-              <button
-                onClick={handleRetry}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                  bg-red-500 text-white
-                  hover:bg-red-600 transition-colors
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                重试
-              </button>
-              {errorInfo.type === 'api_key' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSettingsSection('providers')
-                    setSettingsOpen(true)
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                    bg-surface-muted text-content-secondary
-                    hover:bg-surface-subtle transition-colors
-                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
-                >
-                  <SettingsIcon className="w-3.5 h-3.5" />
-                  前往设置
-                </button>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={() => clearError()}
-            className="shrink-0 p-1 rounded-md text-red-400 hover:text-red-600 dark:hover:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
-            aria-label="关闭错误提示"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        <ChatErrorBanner info={errorInfo} onRetry={handleRetry} onClose={() => clearError()} />
       )}
 
       {/* Mask bar - 当前生效的面具 chip(仅对话态;欢迎态由输入框下方胶囊行承担入口),点击弹出切换面板 */}

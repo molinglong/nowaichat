@@ -11,7 +11,7 @@ import { SEARCH_ENGINES, type SearchEngineId } from "@/lib/ai/search-engines"
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const keys = await prisma.searchApiKey.findMany({
@@ -53,17 +53,17 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json()
   const { engine, apiKey } = body
 
   if (!engine || typeof engine !== "string") {
-    return NextResponse.json({ error: "engine is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少参数 engine" }, { status: 400 })
   }
   if (!apiKey || typeof apiKey !== "string") {
-    return NextResponse.json({ error: "apiKey is required" }, { status: 400 })
+    return NextResponse.json({ error: "请先填写 API Key" }, { status: 400 })
   }
   if (!SEARCH_ENGINES[engine as SearchEngineId]) {
     return NextResponse.json(
@@ -105,14 +105,14 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ error: "登录已失效，请重新登录后再试" }, { status: 401 })
   }
 
   const body = await req.json()
   const { engine } = body
 
   if (!engine || typeof engine !== "string") {
-    return NextResponse.json({ error: "engine is required" }, { status: 400 })
+    return NextResponse.json({ error: "缺少参数 engine" }, { status: 400 })
   }
 
   try {
@@ -126,6 +126,6 @@ export async function DELETE(req: NextRequest) {
     })
     return NextResponse.json({ success: true })
   } catch {
-    return NextResponse.json({ error: "Key not found" }, { status: 404 })
+    return NextResponse.json({ error: "密钥不存在或已被删除" }, { status: 404 })
   }
 }

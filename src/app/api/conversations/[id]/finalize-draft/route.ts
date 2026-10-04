@@ -17,7 +17,7 @@ export async function POST(
 ) {
   const session = await auth()
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
   }
 
   const { id } = params
@@ -28,7 +28,7 @@ export async function POST(
     select: { id: true },
   })
   if (!conversation) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
   const result = await prisma.message.updateMany({

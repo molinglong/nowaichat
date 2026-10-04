@@ -36,13 +36,13 @@ export async function POST(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const { content, topic } = await request.json()
 
     if (!content?.trim()) {
-      return NextResponse.json({ error: 'Content is required' }, { status: 400 })
+      return NextResponse.json({ error: '请先提供要处理的内容' }, { status: 400 })
     }
 
     const userId = session.user.id
@@ -240,7 +240,7 @@ ${topic ? `辩论主题：${topic}\n` : ''}${searchResults ? `搜索证据：\n$
   } catch (error) {
     console.error('[explore/fact-check] Error:', error)
     return NextResponse.json(
-      { error: 'Fact check failed', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: '事实核查失败', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }

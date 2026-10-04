@@ -50,6 +50,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json" },
     },
+    {
+      // 错误提示可读性用例:复用 admin 会话(mock /api/chat,不打真实上游)
+      name: "error-smoke",
+      testMatch: /error-copy\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
   ],
   webServer: {
     command: "npm run dev",

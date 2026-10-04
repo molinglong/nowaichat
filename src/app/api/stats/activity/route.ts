@@ -19,13 +19,13 @@ export async function GET(request: Request) {
   try {
     const session = await auth()
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: '登录已失效，请重新登录后再试' }, { status: 401 })
     }
 
     const url = new URL(request.url)
     const weeks = Number(url.searchParams.get('weeks') ?? 14)
     if (!Number.isFinite(weeks) || weeks < 1 || weeks > 52) {
-      return NextResponse.json({ error: 'Invalid weeks' }, { status: 400 })
+      return NextResponse.json({ error: '时间范围参数不正确' }, { status: 400 })
     }
 
     // 计算起始日期（含今天）
@@ -84,6 +84,6 @@ export async function GET(request: Request) {
       currentStreak: currentStreak > 0 ? currentStreak : undefined,
     })
   } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: '服务器内部错误' }, { status: 500 })
   }
 }
