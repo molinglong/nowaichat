@@ -9,6 +9,7 @@ import {
   type ModelMessage,
   type UIMessageChunk,
 } from "ai"
+import type { SharedV4ProviderOptions } from "@ai-sdk/provider"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { decrypt } from "@/lib/crypto"
@@ -66,6 +67,10 @@ import {
   createCustomModelTool,
 } from "@/lib/ai/custom-model-tool"
 import { buildCustomModelSection } from "@/lib/ai/custom-model-tool.server"
+import {
+  DELETE_CUSTOM_MODEL_TOOL_NAME,
+  createDeleteCustomModelTool,
+} from "@/lib/ai/delete-custom-model-tool"
 import {
   MEMORY_TOOL_NAME,
   MEMORY_TOOL_PROMPT,
@@ -139,6 +144,8 @@ interface ChatRequestBody {
   localFilesEnabled?: boolean // 客户端(Tauri)本地文件能力:仅桌面端且用户开关开启时上报 true,服务端据此注入 local_file 工具
   workspaceContext?: string // 工作区快照(客户端组装:目录树+AGENT.md 约定,≤8KB):仅 local_file 注入时采纳,注入 system
   codePanelOpen?: boolean // 客户端上报:代码编辑器面板是否打开,服务端据此注入 code_edit 工具
+  /** 「只重答这条」:就地改写该 user 消息并把新回答插回原时间位置,后续消息不归档 */
+  reanswerEdit?: { editedId?: string; oldContent: string }
 }
 
 /** 客户端传入的消息（UIMessage 格式的结构化子集）*/
@@ -386,6 +393,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
     }
 
+    // 「只重答这条」标记:仅单聊(无 groupId)、非临时区且会话归属成立时生效
+    const reanswerEdit = !groupId && !isEphemeral && conversationOwned ? body.reanswerEdit ?? null : null
+
     // 解析最终生效的面具:body > DB conv;未知 id 视为无面具。
     const effectiveMask = await getMaskById(requestedMaskRef ?? conversationMaskId, userId)
     const effectiveMaskId = effectiveMask?.ref ?? null
@@ -578,6 +588,42 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           role: "user",
           content: contentParts,
         } as ModelMessage
+      }
+    }
+  }
+
+  // 可视化意图钉子:小模型(qwen-turbo 级)在长 system prompt 下会忽略「数据可视化规范」,
+  // 被检索纪律带跑成"查课本→纯文字分析",整个 chart 管线拿不到块。在末条 user 消息尾部
+  // 补一行定向提醒(注意力贴着用户消息,小模型也能命中);只改模型上下文,不入库、客户端不显示。
+  // 触发词用图表专名而非泛「画X」,避免误伤 [IMG:] 生图请求。
+  const CHART_INTENT_RE =
+    /折线图|柱状图|条形图|饼图|面积图|散点图|图表|数据可视化|可视化|思维导图|知识导图|脑图/
+  {
+    const userMsgIdxForChart = messages.map((m) => m.role).lastIndexOf("user")
+    if (userMsgIdxForChart !== -1) {
+      const c = messages[userMsgIdxForChart].content
+      const lastUserText =
+        typeof c === "string"
+          ? c
+          : Array.isArray(c)
+            ? c
+                .filter((p) => (p as { type?: string }).type === "text")
+                .map((p) => (p as { text?: string }).text || "")
+                .join("\n")
+            : ""
+      if (CHART_INTENT_RE.test(lastUserText)) {
+        console.log(`[chat] chart nudge fired (userMsgIdx=${userMsgIdxForChart})`)
+        const NUDGE =
+          "\n\n[system:本次请求要求图表/可视化——必须输出 ```chart 或 ```mindmap 代码块(格式见数据可视化规范),禁止只给文字分析,禁止用[IMG:]生图;数据用你掌握的知识,不要以课本检索无果为由不画图]"
+        const msg = messages[userMsgIdxForChart]
+        if (typeof msg.content === "string") {
+          msg.content += NUDGE
+        } else if (Array.isArray(msg.content)) {
+          const parts = msg.content as { type: string; text?: string }[]
+          const lastText = [...parts].reverse().find((p) => p.type === "text")
+          if (lastText) lastText.text = (lastText.text || "") + NUDGE
+          else parts.push({ type: "text", text: NUDGE })
+        }
       }
     }
   }
@@ -783,9 +829,23 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   if (!(hasImageAttachments && !modelDef.supportsVision)) {
     systemParts.push([
       '## 生图能力',
-      '用户想要生成图片时，在图片应出现的位置输出[IMG:详细描述]（用用户语言描述主体、风格、构图、光线），每条回复最多 2 张。',
+      '用户想要生成图片（绘画、照片、插画等美术需求）时，在图片应出现的位置输出[IMG:详细描述]（用用户语言描述主体、风格、构图、光线），每条回复最多 2 张。数据图表类可视化不要用生图，按「数据可视化规范」输出。',
     ].join('\n'))
   }
+
+  // 数据可视化规范:界面能直接渲染 ```chart 图表卡(recharts)、```mindmap 导图卡(markmap)
+  // 与 ```html 预览面板,没有"图表走生图"的通路——不写这条,模型会把"画个折线图"理解成
+  // 生图产出一 JPG 位图,或把任何可视化都写成 html 代码让用户自己点预览。
+  // data 键名钉死 name/value 与前端 ChartCard 默认 xKey/yKey 对齐,格式越松解析失败率越高。
+  systemParts.push([
+    '## 数据可视化规范',
+    '用户需要图表或数据可视化（趋势、对比、占比、分布等）时，禁止用[IMG:]生图，禁止只给文字分析，必须按以下方式输出图表（本规范优先于知识库检索：数据用你掌握的知识，不因检索无果而不画图）：',
+    '- 常规图表输出一个 ```chart 代码块，块内为纯 JSON：{"type":"line","title":"标题(含单位)","data":[{"name":"2000年","value":17.71},{"name":"2001年","value":17.03}]}。type 取 bar|line|pie|area|scatter；data 每行第一个键固定是类目名 name，其余键都是数值。',
+    '- 多序列对比（两国人口、城乡收入、多指标并列）同样用 ```chart 块，不要退到 html：data 每行写 {"name":"1990年","中国":11.35,"印度":8.73}（每个序列一个键，键名即图例名）。饼图只有单序列。图表块之后附一句文字解读。',
+    '- 思维导图/知识结构/概念关系梳理输出一个 ```mindmap 代码块，块内为 Markdown 大纲（用 #/##/### 标题或 - 缩进列表表达层级），界面会渲染成可交互导图。不要用 html 画思维导图。',
+    '- 复杂交互可视化（地图、大屏、多图联动、动画）才输出一个 ```html 代码块（可用 CDN 引入 ECharts），用户可在代码块上点「预览」查看效果。',
+    '- 图表数据要完整（逐年/逐项都给出），不要省略中间数据。',
+  ].join('\n'))
 
   // 联网搜索能力(仅在用户配置了联网搜索 Key 且本次请求主动开启了 webSearch 时才挂上工具)
   // - webSearchEnabled: 客户端本次是否主动开启,默认 false,避免模型无脑触发搜索消耗额度。
@@ -854,6 +914,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 中转站/自定义模型:AI 只起草配置,Key 由用户在卡片粘贴(同设置控制开关)
   const customModelTool =
     aiControlEnabled && !isEphemeral && !groupId ? createCustomModelTool() : null
+  // 删除自定义模型(聊天/生图):删除走确认卡片+计算题双层防护(同设置控制开关)
+  const deleteCustomModelTool =
+    aiControlEnabled && !isEphemeral && !groupId ? createDeleteCustomModelTool() : null
   const memoryTool = memoryEnabled && !isEphemeral && !groupId ? createMemoryTool(userId) : null
   const maskGeneratorTool = !isEphemeral && !groupId ? createMaskGeneratorTool() : null
   const todoTool = !isEphemeral && !groupId ? createTodoTool(userId) : null
@@ -978,17 +1041,24 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     ].join('\n'))
   }
 
-  // 课本知识库能力段:与 web_search 能力段同理,触发清单写在这里(模型自主决策依据)
+  // 课本知识库能力段:与 web_search 能力段同理,触发清单+检索纪律写在这里(模型自主决策依据)。
+  // 检索纪律是踩坑总结:①中文整句无空格,整句当 query 必然 ILIKE 查空 → 强制拆关键词;
+  // ②课本/资料混库,概念题与答题套路需要的来源不同 → kind 分流,拿不准各查一次。
   if (knowledgeTool) {
     systemParts.push([
       '## 课本知识库检索能力',
-      '你拥有 search_knowledge 工具(检索用户上传的课本/教材)。当用户问题涉及以下场景时，**主动调用 search_knowledge** 获取课本原文后再作答:',
+      '你拥有 search_knowledge 工具(检索用户上传的课本与资料:课本=教材原文,资料=答题模板/提纲/讲义)。当用户问题涉及以下场景时，**主动调用 search_knowledge** 获取原文后再作答:',
       '- 解释课本上的概念、定义、公式、法则(如「什么是相反数」「乘法分配律怎么说」)',
       '- 用户明确要求翻书/查课本时，按教材回答。',
+      '- 解答题目(选择题/材料题/填空/大题)时,凡涉及具体史实、事件、人物、制度、概念、公式,先检索课本再作答——不因「我记得答案」跳过;题干数据/材料是表象,考点才是检索对象。',
       '- 讲评习题时需要引用教材原文佐证。',
       '- 你对某知识点的标准表述没有把握,需要以教材为准',
       '- 给用户出题(练习/变式/测验)时输出试卷块协议(:::choice/:::question 题块+紧跟 :::answer 答案块,答案块以**答案：X**」开头,渲染时答案默认折叠,用户先做后看;出题前若知识库覆盖该学科,先检索相关章节的【例题】【练习】举一反三,题块首行写检索到的真实出处「参考教材 §x.x 例N·学科」;知识库没有该学科课本(如语文),出处改标课文篇目「参考篇目名·学科」,用你确知的教材篇目,不得编造章节号或篇名',
-      `闲聊、翻译、写代码、通用常识不需要调用。${knowledgeSubjectHint}回答时优先引用课本原文并标注来源(书名+章节);课本原文与你的知识冲突时,以课本为准。`,
+      '检索纪律(每次调用必须遵守):',
+      '- **先查后答是硬规则**:凡回答涉及具体史实/知识点(事件、人物、文件、制度、概念、公式),无论你多有把握,都必须先调用 search_knowledge 查课本(kind="textbook")——你的记忆只作底稿,检索命中时以课本原文为准作答;检索无果才按自己的知识作答。禁止跳过检索、凭记忆直讲课本覆盖的学科内容',
+      '- query 只传 2-4 个学科关键词,**禁止把用户的问题整句直接当 query**(整句匹配不到任何课文);先从题目里提取考点词再检索,如「矛盾 普遍性 特殊性」「相反数 定义」;材料题给的数字/地名是表象,提它背后的考点词,如题干给德国铁路/煤/钢增长数据问「主要原因」,检索「德国 统一 经济」或「第二次工业革命 德国」,而不是「铁路 煤产量」。',
+      '- kind 分流:概念/定义/公式/翻书/讲评/出题 → kind="textbook"(查课本原文);答题思路/大题怎么答/答题模板 → kind="material"(查资料);拿不准就先用 textbook 查一次,再用 material 查一次,两边结果按来源标注使用。',
+      `闲聊、翻译、写代码、通用常识不需要调用。画图表/数据可视化也不需要调用——用户要图表时按「数据可视化规范」直接用你掌握的数据输出 \`\`\`chart 块,检索无果绝不构成改写成纯文字分析的理由。${knowledgeSubjectHint}回答时优先引用检索到的原文并标注来源:课本标注「书名+章节」,资料标注「资料名」;课本原文与你的知识冲突时,以课本为准。`,
     ].join('\n'))
   }
 
@@ -1132,6 +1202,10 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     isNewConversation = true
   }
 
+  // 「只重答这条」: 被编辑 user 行的原 createdAt/库 id,用于草稿行时间插槽(见下)
+  let editedUserCreatedAt: Date | null = null
+  let editedUserId: string | null = null
+
   // Persist the last user message before streaming
   if (userContent) {
     if (groupId) {
@@ -1161,19 +1235,63 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       const editedFrom = (
         lastRawUserMsg?.metadata as { editedFrom?: unknown } | undefined
       )?.editedFrom
-      await prisma.message.create({
-        data: {
-          conversationId: convId,
-          role: "user",
-          content: userContent,
-          ...(attachments.length > 0
-            ? { attachments: JSON.stringify(attachments) }
-            : {}),
-          ...(typeof editedFrom === "string" && editedFrom
-            ? { metadata: JSON.stringify({ editedFrom }) }
-            : {}),
-        },
-      })
+      // 「只重答这条」: 就地改写被编辑的 user 行,不再新建 user 行(旧回答与后续消息原样保留)。
+      // editedUserCreatedAt(外层声明)供草稿行做时间插槽,把新回答插回该消息与下一条之间。
+      if (reanswerEdit) {
+        // 主路径: 客户端 PATCH 后回传的真实库 id,直接命中
+        const target = reanswerEdit.editedId
+          ? await prisma.message.findFirst({
+              where: {
+                conversationId: convId!,
+                archived: false,
+                role: "user",
+                id: reanswerEdit.editedId,
+              },
+              select: { id: true, createdAt: true },
+            })
+          : null
+        // 兜底: 无 id 时按新文本匹配(PATCH 已把原行就地改成新文本;取最早一条=被改的原行,
+        // 而非冒烟修复前历史残留的重复新行)。oldContent 不再可靠,不参与定位。
+        const fallback = target
+          ? null
+          : await prisma.message.findFirst({
+              where: {
+                conversationId: convId!,
+                archived: false,
+                role: "user",
+                content: userContent,
+              },
+              orderBy: { createdAt: "asc" },
+              select: { id: true, createdAt: true },
+            }).catch(() => null)
+        const located = target ?? fallback
+        if (located) {
+          await prisma.message.update({
+            where: { id: located.id },
+            data: { content: userContent },
+          })
+          editedUserCreatedAt = located.createdAt
+          editedUserId = located.id
+        } else {
+          // 定位失败(库内查无此行):退化为普通追加重答,至少不丢本次新文本
+          console.warn("[chat] reanswerEdit target not found; falling back to append")
+        }
+      }
+      if (!editedUserCreatedAt) {
+        await prisma.message.create({
+          data: {
+            conversationId: convId,
+            role: "user",
+            content: userContent,
+            ...(attachments.length > 0
+              ? { attachments: JSON.stringify(attachments) }
+              : {}),
+            ...(typeof editedFrom === "string" && editedFrom
+              ? { metadata: JSON.stringify({ editedFrom }) }
+              : {}),
+          },
+        })
+      }
     }
   }
 
@@ -1185,6 +1303,36 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 放在用户消息落库之后,保证列表时序:用户消息在前,草稿行在后。
   if (!groupId) {
     try {
+      // 「只重答这条」: 新回答排在旧回答之后、下一条存活消息之前(旧回答与后续保持原顺序)
+      let slotCreatedAt: Date | undefined
+      if (editedUserCreatedAt) {
+        const prevAnswer = await prisma.message.findFirst({
+          where: {
+            conversationId: convId!,
+            archived: false,
+            streaming: false,
+            role: "assistant",
+            createdAt: { gt: editedUserCreatedAt },
+            ...(editedUserId ? { id: { not: editedUserId } } : {}),
+          },
+          orderBy: { createdAt: "asc" },
+          select: { createdAt: true },
+        })
+        const anchorAt = prevAnswer?.createdAt ?? editedUserCreatedAt
+        const nextMsg = await prisma.message.findFirst({
+          where: {
+            conversationId: convId!,
+            archived: false,
+            streaming: false,
+            createdAt: { gt: anchorAt },
+          },
+          orderBy: { createdAt: "asc" },
+          select: { createdAt: true },
+        })
+        const upper = nextMsg?.createdAt ?? new Date()
+        const mid = Math.floor((anchorAt.getTime() + upper.getTime()) / 2)
+        slotCreatedAt = mid > anchorAt.getTime() ? new Date(mid) : new Date()
+      }
       const draft = await prisma.message.create({
         data: {
           conversationId: convId!,
@@ -1192,6 +1340,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           content: "",
           model: modelId,
           streaming: true,
+          ...(slotCreatedAt ? { createdAt: slotCreatedAt } : {}),
         },
       })
       draftMessageId = draft.id
@@ -1232,7 +1381,15 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // Mask persona:面具人格放最前(人格层优先于摘要/记忆/风格/能力说明)。
   // 末尾统一追加逃生舱暗语(MASK_ESCAPE_HATCH),内置与自定义面具都适用
   if (effectiveMask) {
-    systemParts.unshift(`${effectiveMask.systemPrompt}\n\n${MASK_ESCAPE_HATCH}`)
+    let persona = `${effectiveMask.systemPrompt}\n\n${MASK_ESCAPE_HATCH}`
+    // 示范对话以真实 user/assistant 消息注入(见下方 few-shot 拼装),
+    // 不声明"是示例"会被模型当成刚发生的历史,新对话开头接着示范内容续聊。
+    if (effectiveMask.fewShot.length > 0) {
+      persona +=
+        '\n\n消息开头若有几轮标注为示范的对话,那只是你的风格示例,不是你和用户已发生的真实历史。' +
+        '不要延续或提及示范里的话题,收到用户新消息时按你的人设从头回应。'
+    }
+    systemParts.unshift(persona)
     console.log(`[chat] Mask persona injected: ${effectiveMask.ref}`)
   }
 
@@ -1281,7 +1438,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     (cmSupportsReasoning || /dashscope\.aliyuncs\.com/i.test(cmBaseURL))
       ? { providerOptions: { openai: { reasoningEffort: "medium" } } }
       : {}),
-    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || providerModelTool || memoryTool || maskGeneratorTool || knowledgeTool || practiceTool || todoTool || writeDocTool || writeCodeTool || tripTool || localFileTool || mcpToolCount > 0)
+    ...((searchTool || urlReaderTool || clarifyTool || settingsTool || providerModelTool || customModelTool || deleteCustomModelTool || memoryTool || maskGeneratorTool || knowledgeTool || practiceTool || todoTool || writeDocTool || writeCodeTool || tripTool || localFileTool || mcpToolCount > 0)
       ? {
           tools: {
             ...(searchTool ? { web_search: searchTool } : {}),
@@ -1294,6 +1451,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(settingsTool ? { [SETTINGS_TOOL_NAME]: settingsTool } : {}),
             ...(providerModelTool ? { [PROVIDER_MODEL_TOOL_NAME]: providerModelTool } : {}),
             ...(customModelTool ? { [ADD_CUSTOM_MODEL_TOOL_NAME]: customModelTool } : {}),
+            ...(deleteCustomModelTool
+              ? { [DELETE_CUSTOM_MODEL_TOOL_NAME]: deleteCustomModelTool }
+              : {}),
             ...(memoryTool ? { [MEMORY_TOOL_NAME]: memoryTool } : {}),
             ...(maskGeneratorTool ? { [MASK_TOOL_NAME]: maskGeneratorTool } : {}),
             ...(todoTool ? { [TODO_TOOL_NAME]: todoTool } : {}),
@@ -1303,6 +1463,50 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             ...(localFileTool ? { [LOCAL_FILE_TOOL_NAME]: localFileTool } : {}),
             ...(codeEditTool ? { [CODE_EDIT_TOOL_NAME]: codeEditTool } : {}),
             ...(previewCheckTool ? { [PREVIEW_CHECK_TOOL_NAME]: previewCheckTool } : {}),
+          },
+        }
+      : {}),
+    // 课本类面具首步强制检索——凡绑定 subject 的学科面具(政治/历史/数学/英语)一律命中。
+    // 小模型在长 system prompt 下会凭已知答案跳过 search_knowledge,纯指令约束不完全可靠
+    // (思考模式下尤其如此:推理里两次想到课本又放下,最终凭记忆作答);第 0 步定向
+    // toolChoice 保证必检索,后续步骤恢复自由。
+    // deepThink 分支:思考开启的请求里强制 tool_choice 会被上游 400(DeepSeek/DashScope
+    // 实测,错误不以 APICallError 透出,前端只见兜底文案)。改用 per-step providerOptions
+    // 把第 0 步临时切成非思考请求再强制检索,第 1 步起恢复 call 级思考配置——AI SDK
+    // prepareStep 的 providerOptions 与 call 级做逐层深合并(mergeObjects),step 同名值
+    // 覆盖 call 值。千问系以 reasoningEffort:"none" 关思考:DashScope fetch 层
+    // (openai-reasoning-adapter)遇 "none" 强制 enable_thinking:false,与 deepThink 关的
+    // 已验证请求形态完全一致;DeepSeek 系覆写 thinking.type 为 disabled(call 级的
+    // reasoningEffort 会被深合并保留,待实测上游是否接受"thinking disabled + effort"组合,
+    // 若 400 则把 effort 挪到第 1 步起的 per-step 注入)。自定义/中转站模型思考开关不受控,
+    // 维持原 auto 行为(靠能力段软规则),避免 400。
+    ...(knowledgeTool && effectiveMask?.subject
+      ? {
+          prepareStep: ({ stepNumber }: { stepNumber: number }) => {
+            if (stepNumber !== 0) return undefined
+            // 关思考覆盖只对思考参数受控的内置供应商构造;显式标注目标类型——
+            // 否则两个三元分支会被 TS 归一化成联合(注入 openai?: undefined 之类),
+            // 撞上 SharedV4ProviderOptions 的索引签名(JSONObject 拒绝 undefined)。
+            // 千问经 DashScope fetch 层转 enable_thinking:false,与 deepThink 关的
+            // 已验证请求形态一致。
+            const thinkingOff: SharedV4ProviderOptions | undefined =
+              modelDef.provider === "deepseek"
+                ? { deepseek: { thinking: { type: "disabled" } } }
+                : modelDef.provider === "qianwen"
+                  ? { openai: { reasoningEffort: "none" } }
+                  : undefined
+            // deepThink 开且思考关不掉(自定义/中转站)→ 不强制,维持 auto(避免上游 400)
+            if (deepThink && !thinkingOff) return undefined
+            // as const 必须保留:无上下文类型的字面量会把 toolName 拓宽成 string,
+            // 与 PrepareStepResult 的 ToolChoice 工具名联合类型冲突。
+            // 恒定单形状返回:各分支若返回不同键集合的对象,TS 会对返回类型联合做
+            // 归一化(给成员注入 openai?: undefined 之类),撞上 SharedV4ProviderOptions
+            // 的索引签名(JSONObject)报错;providerOptions 传 undefined 时 AI SDK
+            // mergeObjects 跳过该键,等价于不覆盖。
+            return {
+              toolChoice: { type: 'tool', toolName: KNOWLEDGE_TOOL_NAME },
+              providerOptions: thinkingOff,
+            } as const
           },
         }
       : {}),

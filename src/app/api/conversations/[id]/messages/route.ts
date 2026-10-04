@@ -133,10 +133,13 @@ export async function DELETE(
   // C 分支轻量版: 归档代替物理删除,附件文件一并保留(旧版本图片不裂)。
   // archivedRoot 记被编辑消息的**真实数据库 id**(客户端传来的可能是本地临时 id),
   // 回看端点按它拉取旧版本链;返回 archivedRootId 供客户端作为新消息的 editedFrom。
+  // archived: false —— 只归档当前存活分支;已归档行保留各自 root,
+  // 否则编辑更早的消息会把旧历史链整段重挂到新 root(旧版本回看被截断)。
   await prisma.message.updateMany({
     where: {
       conversationId: id,
       createdAt: { gte: targetMessage.createdAt },
+      archived: false,
     },
     data: { archived: true, archivedRoot: targetMessage.id },
   })
@@ -146,4 +149,89 @@ export async function DELETE(
     archived: true,
     archivedRootId: targetMessage.id,
   })
+}
+
+/**
+ * 「仅保存」: 就地更新一条 user 消息的文本,不动后续消息、不归档、不触发重答。
+ * 用于修正错别字等"不该付出截断+重答代价"的编辑。
+ *
+ * Body: { messageId: string; content: string; oldContent?: string }
+ * - oldContent 供临时 id 回退定位(与 DELETE 同款 内容+时间窗 策略)
+ * - metadata 合并 editedAt,供前端显示"已编辑"标记(不写 kind,不影响渲染分支)
+ */
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const session = await auth()
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const { id } = params
+  const body = (await req.json().catch(() => ({}))) as {
+    messageId?: unknown
+    content?: unknown
+    oldContent?: unknown
+  }
+  const messageId = typeof body.messageId === "string" ? body.messageId : ""
+  const content = typeof body.content === "string" ? body.content.trim() : ""
+  const oldContent = typeof body.oldContent === "string" ? body.oldContent : ""
+  if (!messageId || !content) {
+    return NextResponse.json(
+      { error: "messageId and content are required" },
+      { status: 400 }
+    )
+  }
+
+  // 归属校验(含临时区隔离)
+  const conversation = await prisma.conversation.findFirst({
+    where: { id, userId: session.user.id, ...ephemeralScope(session) },
+    select: { id: true },
+  })
+  if (!conversation) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
+  }
+
+  // 仅允许编辑未归档的 user 消息;归档行属于历史版本,不可改
+  let target = await prisma.message.findFirst({
+    where: { id: messageId, conversationId: id, archived: false, role: "user" },
+    select: { id: true, metadata: true },
+  })
+
+  if (!target && oldContent) {
+    // 临时 id 回退: 与 DELETE 同策略(内容+角色+最近10分钟)
+    target = await prisma.message.findFirst({
+      where: {
+        conversationId: id,
+        archived: false,
+        role: "user",
+        content: oldContent,
+        createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, metadata: true },
+    })
+  }
+
+  if (!target) {
+    return NextResponse.json({ error: "Message not found" }, { status: 404 })
+  }
+
+  const editedAt = new Date().toISOString()
+  let metadata: string
+  try {
+    const parsed = target.metadata ? JSON.parse(target.metadata) : null
+    const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+    metadata = JSON.stringify({ ...base, editedAt })
+  } catch {
+    metadata = JSON.stringify({ editedAt })
+  }
+
+  await prisma.message.update({
+    where: { id: target.id },
+    data: { content, metadata },
+  })
+
+  return NextResponse.json({ ok: true, id: target.id })
 }

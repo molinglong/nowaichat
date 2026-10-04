@@ -10,7 +10,8 @@
  *
  * 数据全部来自前端已有的 messages(搜索走 extractToolCallViews,附件走 attachments),
  * 只有摘要需要问服务端拿到"覆盖多少条",走既有的 /context 接口,不新增后端。
- * 桌面端(md+)常驻,显隐由 chat-store.infoPanelOpen 控制;移动端不渲染。
+ * 仅电脑模式渲染(useIsComputerMode:触屏为主的平板/手机一律不显示);
+ * 电脑上常驻,显隐由 chat-store.infoPanelOpen 控制。
  */
 import { useEffect, useMemo, useState } from 'react'
 import {

@@ -23,6 +23,8 @@ import { getErrorMessage } from '@/lib/chat-errors'
 import { buildSettingsSnapshot, executeSettingsOps } from '@/lib/settings/executor'
 import { toast } from '@/lib/toast'
 import { useVisualViewport } from '@/hooks/useVisualViewport'
+import { useIsComputerMode } from '@/hooks/useIsComputerMode'
+import { useMaskMenuMaxHeight } from '@/hooks/useMaskMenuMaxHeight'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
@@ -248,6 +250,8 @@ export function ChatPanel({
 
   // 面具选择面板开关
   const [maskPickerOpen, setMaskPickerOpen] = useState(false)
+  // 面具面板盒高: chip 在页首,向下弹,按 chip 下方可用空间夹取
+  const headerMaskMenu = useMaskMenuMaxHeight(maskPickerOpen, 'down')
   // 自定义面具列表（badge 解析 + picker「我的面具」分组）
   const { data: userMasks } = useQuery({
     queryKey: queryKeys.masks.list(),
@@ -274,8 +278,10 @@ export function ChatPanel({
   // 抽屉是 fixed 浮层 + margin 让位,资料面板是布局内的一列,两者叠加会撑出容器
   const drawerOpen =
     codePanelOpen || writePanelOpen || previewOpen || editorOpen || (inTauri && workMode)
-  // 资料面板(展开或只剩收起的竖标签)是否占着右墙
-  const infoSlotOccupied = !!conversationId && !drawerOpen
+  // 资料面板(展开或只剩收起的竖标签)是否占着右墙;
+  // 电脑模式限定:平板/手机(触屏为主)整列不渲染,让位量随之归零
+  const isComputerMode = useIsComputerMode()
+  const infoSlotOccupied = isComputerMode && !!conversationId && !drawerOpen
   
   // Auto-enable deepThink for reasoning models (like DeepSeek-R1), but allow user to toggle off
   const shouldAutoEnableDeepThink = initialModel && allModels.find(m => m.id === initialModel)?.supportsReasoning
@@ -499,6 +505,9 @@ export function ChatPanel({
   }, [])
   const conversationIdRef = useRef(initialConversationId)
   const attachmentsRef = useRef<Attachment[] | undefined>(undefined)
+  // 「只重答这条」: 一次性标记,transport 发请求时读取并经顶层 body 传给 /api/chat
+  // (metadata 通道服务端只白名单取 editedFrom,自定义字段到不了服务端)
+  const reanswerEditRef = useRef<{ editedId?: string; oldContent: string } | null>(null)
   // 消息区滚动容器(供 OutlineSidebar 做 scroll-spy / 平滑滚动)
   const [messagesScrollEl, setMessagesScrollEl] = useState<HTMLDivElement | null>(null)
   const setCurrentConversationId = useChatStore((s) => s.setCurrentConversationId)
@@ -595,6 +604,10 @@ export function ChatPanel({
           // Attachments are read from ref at send time
           get attachments() {
             return attachmentsRef.current
+          },
+          // 「只重答这条」标记: 发送时读取一次性 ref(见 handleReanswerMessage),发出后即清
+          get reanswerEdit() {
+            return reanswerEditRef.current
           },
         },
         // Intercept response to capture conversation ID from header
@@ -1127,8 +1140,10 @@ export function ChatPanel({
     const prev = prevStatusRef.current
     prevStatusRef.current = status
     // 'ready' → 'submitted'/'streaming' 表示新一轮开始,清掉横幅
-    if (prev === 'ready' && status !== 'ready' && pendingContinuation) {
+    if (prev === 'ready' && status !== 'ready') {
       setPendingContinuation(null)
+      // 消费「只重答这条」一次性标记:本轮 transport 已读取(或本轮根本不是重答)
+      reanswerEditRef.current = null
     }
   }, [status, pendingContinuation, setPendingContinuation])
 
@@ -1704,6 +1719,9 @@ export function ChatPanel({
             .map((p) => p.text)
             .join('')
         : ''
+      // 带附件的消息重发时保留原附件(否则编辑文本 = 静默丢图)
+      const oldAtts = (oldMessage as (UIMessage & { attachments?: Attachment[] }) | undefined)
+        ?.attachments
 
       // Delete the old message and all subsequent messages from the DB
       const convId = conversationIdRef.current
@@ -1711,18 +1729,26 @@ export function ChatPanel({
       // 回看链路(archivedRoot / editedFrom)必须用真实 id
       let editedFromId = messageId
       if (convId) {
+        let res: Response
         try {
-          const res = await fetch(
+          res = await fetch(
             `/api/conversations/${convId}/messages?messageId=${encodeURIComponent(messageId)}&content=${encodeURIComponent(oldText)}`,
             { method: 'DELETE' }
           )
-          const data = await res.json().catch(() => ({}))
-          if (typeof data?.archivedRootId === 'string' && data.archivedRootId) {
-            editedFromId = data.archivedRootId
-          }
         } catch (err) {
           console.error('Failed to delete old messages:', err)
-          toast.error('编辑失败:无法清理旧消息', { title: '编辑消息' })
+          toast.error('编辑失败:旧消息归档未完成,请重试', { title: '编辑消息' })
+          throw err
+        }
+        if (!res.ok) {
+          // 归档失败即中止:继续截断+重发会让 DB 残留旧分支行(库/端不一致,重载后新旧并存)
+          console.error('Failed to archive old messages:', res.status)
+          toast.error('编辑失败:旧消息归档未完成,请重试', { title: '编辑消息' })
+          throw new Error(`archive failed: HTTP ${res.status}`)
+        }
+        const data = await res.json().catch(() => ({}))
+        if (typeof data?.archivedRootId === 'string' && data.archivedRootId) {
+          editedFromId = data.archivedRootId
         }
       }
 
@@ -1733,12 +1759,165 @@ export function ChatPanel({
       const truncated = msgs.slice(0, editIndex)
       setMessages(truncated)
 
+      // 附件随重发带回(与 handleSend 同款时序:transport 在请求时读 ref)
+      attachmentsRef.current = oldAtts && oldAtts.length > 0 ? oldAtts : undefined
+      if (oldAtts && oldAtts.length > 0) pendingAttachmentsRef.current = oldAtts
+
       // C 分支轻量版: 新消息带 editedFrom 指向被编辑消息(真实数据库 id),服务端落库后
       // MessageBubble 据此显示"查看历史版本"回看入口
       sendMessage({ text: newText, metadata: { editedFrom: editedFromId } })
     },
     [setMessages, sendMessage]
   )
+
+  /**
+   * 「仅保存」: 就地更新消息文本(PATCH),不动后续消息、不触发重答。
+   * 失败时抛错 —— 气泡据此停留在编辑态供重试。
+   */
+  const handleSaveEditMessage = useCallback(
+    async (messageId: string, newText: string) => {
+      const msgs = messagesRef.current
+      const oldMessage = msgs.find((m) => m.id === messageId)
+      const oldText = oldMessage
+        ? oldMessage.parts
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text)
+            .join('')
+        : ''
+
+      const convId = conversationIdRef.current
+      if (convId) {
+        let res: Response
+        try {
+          res = await fetch(`/api/conversations/${convId}/messages`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageId, content: newText, oldContent: oldText }),
+          })
+        } catch (err) {
+          console.error('Failed to save edited message:', err)
+          toast.error('保存失败:网络异常,请重试', { title: '编辑消息' })
+          throw err
+        }
+        if (!res.ok) {
+          console.error('Failed to save edited message:', res.status)
+          toast.error('保存失败,请重试', { title: '编辑消息' })
+          throw new Error(`save failed: HTTP ${res.status}`)
+        }
+        // 服务端返回真实 id(临时 id 已按 内容+时间窗 回退定位),与本地 id 不同时无需改写:
+        // 本地消息 id 是 useChat 的会话内标识,后续编辑仍走同样的回退链路
+      }
+
+      // 本地就地替换文本并打 editedAt 标记。metadata 引用变化同时承担"强制重渲"职责:
+      // 气泡比较器对 parts 只看长度指纹,等长文本替换(错别字修正)若无标记会静默不刷新
+      const editedAt = new Date().toISOString()
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m
+          const rawMeta = (m as { metadata?: unknown }).metadata
+          const base =
+            rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta) ? rawMeta : {}
+          const others = m.parts.filter((p) => p.type !== 'text')
+          return {
+            ...m,
+            parts: [{ type: 'text' as const, text: newText }, ...others],
+            metadata: { ...base, editedAt },
+          } as UIMessage
+        })
+      )
+      toast.success('已保存修改', { title: '编辑消息' })
+    },
+    [setMessages]
+  )
+
+  /**
+   * 「只重答这条」: 就地改写该 user 消息并重新生成它的回答,后续消息原位保留(不归档)。
+   * 链路: PATCH 改文本拿真实库 id → 暂存尾巴并截断 → sendMessage 带 reanswerEdit 标记
+   * (服务端改写原行并把新回答时间插回原位) → 流结束后把尾巴接回。
+   * 已知代价: 后续回答仍基于改前的那句话生成,新旧内容可能对不上(用户选择的语义)。
+   */
+  const handleReanswerMessage = useCallback(
+    async (messageId: string, newText: string) => {
+      const msgs = messagesRef.current
+      const editIndex = msgs.findIndex((m) => m.id === messageId)
+      if (editIndex === -1) return
+      const oldMessage = msgs[editIndex]
+      const oldText = oldMessage.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => p.text)
+        .join('')
+
+      const convId = conversationIdRef.current
+      if (!convId) {
+        toast.error('会话尚未建立,无法重答', { title: '编辑消息' })
+        throw new Error('no conversation')
+      }
+
+      // 先就地保存新文本,拿服务端定位的真实库 id(本地可能是 AI SDK 临时 id)
+      let editedId: string | undefined
+      try {
+        const res = await fetch(`/api/conversations/${convId}/messages`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageId, content: newText, oldContent: oldText }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json().catch(() => ({}))
+        if (typeof data?.id === 'string' && data.id) editedId = data.id
+      } catch (err) {
+        console.error('Failed to save edited message for reanswer:', err)
+        toast.error('保存失败,重答未开始,请重试', { title: '编辑消息' })
+        throw err
+      }
+
+      // 暂存并截断: transport 只带前缀+新文本请求;尾巴在流结束后接回。
+      // 函数式更新: messagesRef 由 effect 滞后同步,不能拿它截断后立刻发请求
+      const suffix = msgs.slice(editIndex + 1)
+      suffixHoldRef.current = suffix
+      const prefix = msgs.slice(0, editIndex)
+      setMessages(prefix)
+
+      // 带附件的消息重答时带回原附件(与 handleEditMessage 同款时序);
+      // 无附件必须清空残留,否则会挂到本次请求
+      const oldAtts = (oldMessage as (UIMessage & { attachments?: Attachment[] }) | undefined)
+        ?.attachments
+      if (oldAtts && oldAtts.length > 0) {
+        attachmentsRef.current = oldAtts
+        pendingAttachmentsRef.current = oldAtts
+      } else {
+        attachmentsRef.current = undefined
+        pendingAttachmentsRef.current = undefined
+      }
+
+      // 标记经 transport 顶层 body 传递;每次"空闲→生成中"翻转即消费,
+      // 保证标记只属于紧随其后的那一次发送,不会漏给后续普通消息
+      reanswerEditRef.current = { editedId, oldContent: oldText }
+      sendMessage({ text: newText })
+    },
+    [setMessages, sendMessage]
+  )
+
+  // 编辑确认条的"后续消息条数":稳定引用 + ref 读取。
+  // 不能传数字给气泡 —— 每追加一条消息都会打穿全列表 memo(比较器比对引用)
+  const getFollowingCount = useCallback((messageId: string) => {
+    const msgs = messagesRef.current
+    const idx = msgs.findIndex((m) => m.id === messageId)
+    return idx === -1 ? 0 : msgs.length - idx - 1
+  }, [])
+
+  // 「只重答这条」: 截断期间暂存的尾巴消息,流(或错误)结束后接回消息区末尾。
+  // 以"最后一条是 assistant"为流结束判据:若用户期间另发新消息(末尾为 user),本轮不接回,
+  // 留待该轮流结束再接,避免尾巴插到进行中回答的前面。
+  const suffixHoldRef = useRef<UIMessage[] | null>(null)
+  useEffect(() => {
+    if (!suffixHoldRef.current) return
+    const last = messages[messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    if (last.role === 'assistant' && (status === 'streaming' || status === 'submitted')) return
+    const held = suffixHoldRef.current
+    suffixHoldRef.current = null
+    setMessages((prev) => [...prev, ...held])
+  }, [messages, status, setMessages])
 
   const errorInfo = useMemo(
     () => (error ? getErrorMessage(error) : null),
@@ -1855,6 +2034,7 @@ export function ChatPanel({
         <div className="px-4 pt-2" data-tauri-drag-region="">
           <div className="relative inline-block">
             <button
+              ref={headerMaskMenu.triggerRef}
               onClick={() => setMaskPickerOpen((v) => !v)}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs
                 bg-surface-subtle text-content-secondary border border-line
@@ -1868,8 +2048,9 @@ export function ChatPanel({
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setMaskPickerOpen(false)} />
                 <div
-                  className="absolute left-0 top-full mt-1.5 z-50 w-64 max-h-80 overflow-y-auto
-                    rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                  className="absolute left-0 top-full mt-1.5 z-50 w-64 flex flex-col overflow-hidden
+                    rounded-xl border border-line bg-surface shadow-lg"
+                  style={{ maxHeight: headerMaskMenu.maxHeight }}
                   role="menu"
                 >
                   <MaskPickerMenu
@@ -1968,6 +2149,9 @@ export function ChatPanel({
                   scrollElement={messagesScrollEl}
                   onRegenerate={handleRegenerate}
                   onEditMessage={handleEditMessage}
+                  onSaveEditMessage={handleSaveEditMessage}
+                  onReanswerMessage={handleReanswerMessage}
+                  getFollowingCount={getFollowingCount}
                   onClarifySubmit={handleSend}
                   onLocalFileDecision={handleLocalFileDecision}
                   onOpenEditor={handleOpenEditor}

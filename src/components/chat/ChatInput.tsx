@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug, Check, ChevronRight, MoreHorizontal } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug, Check, ChevronRight, MoreHorizontal, Copy, ClipboardPaste, TextSelect, Eraser } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { copyText } from '@/lib/clipboard'
+import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import { MaskPickerMenu } from './MaskPickerMenu'
@@ -12,6 +14,7 @@ import { ActivityHeatmap } from './ActivityHeatmap'
 import { RecentChats } from './RecentChats'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
+import { useMaskMenuMaxHeight } from '@/hooks/useMaskMenuMaxHeight'
 import { useChatStore } from '@/store/chat-store'
 import { draftKeyFor, setDraft as persistDraft } from '@/lib/draft-storage'
 import { INPUT_INSERT_EVENT } from '@/lib/input-bridge'
@@ -110,6 +113,9 @@ export function ChatInput({
   const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
   // ⋯ 更多工具菜单开合(收纳: 对比模式 + 移动端的面具/MCP)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  // 面具菜单盒高: 两处入口都向下弹(输入框下方),按各自触发钮(桌面=面具钮 / 移动=⋯ 钮)下方空间夹取
+  const desktopMaskMenu = useMaskMenuMaxHeight(maskMenuOpen, 'down')
+  const mobileMaskMenu = useMaskMenuMaxHeight(maskMenuOpen, 'down')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 引用回复状态
@@ -202,6 +208,64 @@ export function ChatInput({
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value)
+  }
+
+  // 输入框右键 → 轮盘(粘贴/复制/全选/清空),替换浏览器原生菜单。
+  // 长按右键同样生效:Host 会向本元素合成 contextmenu,复用此装配逻辑
+  function handleInputContextMenu(e: React.MouseEvent<HTMLTextAreaElement>) {
+    const ta = e.currentTarget
+    const selected = ta.value.slice(ta.selectionStart, ta.selectionEnd)
+    const items: ContextMenuItem[] = [
+      {
+        id: 'paste',
+        label: '粘贴',
+        icon: <ClipboardPaste className="w-3.5 h-3.5" />,
+        onSelect: () => {
+          navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (!text) return
+              setInput((prev) => (prev ? `${prev}${text}` : text))
+              requestAnimationFrame(() => ta.focus())
+            })
+            .catch(() => {})
+        },
+      },
+      {
+        id: 'copy',
+        label: '复制',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        disabled: !selected && !ta.value,
+        onSelect: () => {
+          void copyText(selected || ta.value)
+        },
+      },
+      {
+        id: 'select-all',
+        label: '全选',
+        icon: <TextSelect className="w-3.5 h-3.5" />,
+        disabled: !ta.value,
+        onSelect: () => {
+          ta.focus()
+          ta.select()
+        },
+      },
+      {
+        id: 'clear',
+        label: '清空',
+        icon: <Eraser className="w-3.5 h-3.5" />,
+        danger: true,
+        disabled: !ta.value,
+        dividerBefore: true,
+        onSelect: () => {
+          setInput('')
+          ta.focus()
+        },
+      },
+    ]
+    e.preventDefault()
+    const { openContextMenu } = useContextMenuStore.getState()
+    openContextMenu({ x: e.clientX, y: e.clientY }, items)
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -396,7 +460,8 @@ export function ChatInput({
           <>
             <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
             <div
-              className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+              className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-w-[calc(100vw-2rem)] flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
+              style={{ maxHeight: mobileMaskMenu.maxHeight }}
               role="menu"
             >
               <MaskPickerMenu
@@ -486,6 +551,7 @@ export function ChatInput({
             {hasMaskEntry && (
               <div className="relative hidden sm:block">
                 <button
+                  ref={desktopMaskMenu.triggerRef}
                   onClick={() => setMaskMenuOpen((v) => !v)}
                   className={cn(iconBtnBase, mask ? pillActive : pillIdle)}
                   title={mask ? '当前面具,点击切换' : '选择面具'}
@@ -503,7 +569,8 @@ export function ChatInput({
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
                     <div
-                      className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface shadow-lg py-1.5"
+                      className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 z-50 w-64 flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
+                      style={{ maxHeight: desktopMaskMenu.maxHeight }}
                       role="menu"
                     >
                       <MaskPickerMenu
@@ -522,6 +589,7 @@ export function ChatInput({
             {showMoreBtn && (
               <div className="relative shrink-0">
                 <button
+                  ref={mobileMaskMenu.triggerRef}
                   onClick={() => setMoreMenuOpen((v) => !v)}
                   className={cn(
                     iconBtnBase,
@@ -746,6 +814,7 @@ export function ChatInput({
               value={input}
               onChange={handleChange}
               onKeyDown={handleKeyDown}
+              onContextMenu={handleInputContextMenu}
               placeholder="输入问题..."
               rows={1}
               disabled={isLoading}
@@ -888,7 +957,7 @@ export function ChatInput({
         className={cn(
           'relative flex flex-col rounded-xl border z-20',
           'border-line/60',
-          'bg-surface-glass backdrop-blur-xl',
+          'bg-surface-glass glass-blur',
           'shadow-lg focus-within:border-line-strong',
           'transition-all'
         )}
@@ -973,6 +1042,7 @@ export function ChatInput({
               value={input}
               onChange={handleChange}
               onKeyDown={handleKeyDown}
+              onContextMenu={handleInputContextMenu}
               placeholder="输入消息..."
               disabled={isLoading}
               rows={1}

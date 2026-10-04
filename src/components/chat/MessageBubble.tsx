@@ -8,7 +8,6 @@ import {
   Check,
   RotateCw,
   Pencil,
-  X,
   ChevronDown,
   Brain,
   FileText,
@@ -23,6 +22,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { cn, splitReasoningTail } from '@/lib/utils'
+import { copyText } from '@/lib/clipboard'
 import { useTypewriter } from '@/lib/useTypewriter'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { ChartCard } from './ChartCard'
@@ -282,10 +282,22 @@ interface MessageBubbleProps {
   message: UIMessage
   isStreaming?: boolean
   isLastAssistant?: boolean
+  /** 本条是否是会话列表最后一条:"正在生成"判定的依据(见 rich 门控注释) */
+  isLastMessage?: boolean
   canRegenerate?: boolean
   onRegenerate?: () => void
   canEdit?: boolean
-  onEdit?: (messageId: string, newText: string) => void
+  /** 「保存并重答」:归档此消息及其后续,然后以新文本重发(异步实现,失败应抛错) */
+  onEdit?: (messageId: string, newText: string) => void | Promise<void>
+  /** 「仅保存」:就地更新文本,不动后续消息、不重答(未提供则不显示该按钮) */
+  onSaveEdit?: (messageId: string, newText: string) => void | Promise<void>
+  /** 「只重答这条」:就地更新文本并重新生成该轮回答,后续消息原位保留(未提供则不显示该按钮) */
+  onReanswer?: (messageId: string, newText: string) => void | Promise<void>
+  /**
+   * 统计该消息之后还有多少条消息(编辑确认条提示用)。
+   * 必须是稳定引用的惰性 getter —— 若改传数字,每次追加消息都会打穿全列表 memo
+   */
+  getFollowingCount?: (messageId: string) => number
   /** 键盘导航选中状态 */
   isFocused?: boolean
   /** 外层 ref callback，用于滚动到视野 */
@@ -316,10 +328,14 @@ function MessageBubbleInner({
   message,
   isStreaming,
   isLastAssistant,
+  isLastMessage,
   canRegenerate,
   onRegenerate,
   canEdit,
   onEdit,
+  onSaveEdit,
+  onReanswer,
+  getFollowingCount,
   isFocused,
   wrapperRef,
   prevUserContent,
@@ -347,6 +363,14 @@ function MessageBubbleInner({
     typeof (messageMeta as { editedFrom?: unknown }).editedFrom === 'string'
       ? ((messageMeta as { editedFrom?: unknown }).editedFrom as string)
       : null
+  // 「仅保存」路径的编辑标记:无归档链(没有历史版本可看),只提示内容已改过
+  const savedEditAt =
+    isUser &&
+    !editedFrom &&
+    messageMeta &&
+    typeof (messageMeta as { editedAt?: unknown }).editedAt === 'string'
+      ? ((messageMeta as { editedAt?: unknown }).editedAt as string)
+      : null
   // 卡片用的"摘要正文":剥掉首行 `## 来自上文的上下文摘要...`,
   // 因为卡片头部已经有自己的标题,避免重复
   const summaryContent = useMemo(() => {
@@ -368,6 +392,10 @@ function MessageBubbleInner({
   const [copied, setCopied] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
+  // 提交中(保存并重答要等 DELETE 归档往返):禁用确认条按钮,避免重复提交
+  const [isSaving, setIsSaving] = useState(false)
+  // 进入编辑态时惰性取一次"后续消息条数",确认条据此显示归档影响面
+  const [followingCount, setFollowingCount] = useState(0)
   // 思考框展开状态: null=未手动干预(自动行为接管),true/false=用户点过折叠按钮后的选择
   const [userShowReasoning, setUserShowReasoning] = useState<boolean | null>(null)
   const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
@@ -579,8 +607,9 @@ function MessageBubbleInner({
   // beginEdit 是无事件版本:右键菜单项也要进编辑态(菜单里拿不到原 MouseEvent)
   const beginEdit = useCallback(() => {
     setEditValue(text)
+    setFollowingCount(getFollowingCount ? getFollowingCount(message.id) : 0)
     setIsEditing(true)
-  }, [text])
+  }, [text, getFollowingCount, message.id])
 
   const startEditing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -593,40 +622,61 @@ function MessageBubbleInner({
     setIsEditing(false)
   }, [])
 
-  const commitEdit = useCallback(() => {
+  /**
+   * 提交编辑。三种语义:
+   * - 'resend' 保存并重答: 父级归档此消息及其后续,再以新文本重发(有破坏性,确认条已提示影响面)
+   * - 'save'   仅保存:     就地更新文本,不动后续消息、不触发重答
+   * - 'reanswer' 只重答这条: 就地更新文本并重新生成该轮回答,后续消息原位保留
+   * 失败时父级抛错 → 停留在编辑态,用户可重试或取消。
+   */
+  const submitEdit = useCallback(async (mode: 'save' | 'resend' | 'reanswer') => {
+    if (isSaving) return
     const trimmed = editValue.trim()
-    if (trimmed && trimmed !== text && onEdit) {
-      onEdit(message.id, trimmed)
+    if (!trimmed || trimmed === text) {
+      setIsEditing(false)
+      return
     }
-    setIsEditing(false)
-  }, [editValue, text, onEdit, message.id])
+    const handler = mode === 'save' ? onSaveEdit : mode === 'reanswer' ? onReanswer : onEdit
+    if (!handler) {
+      setIsEditing(false)
+      return
+    }
+    setIsSaving(true)
+    try {
+      await handler(message.id, trimmed)
+      setIsEditing(false)
+    } catch {
+      // 错误提示由父级 toast 负责;保持编辑态供重试
+    } finally {
+      setIsSaving(false)
+    }
+  }, [isSaving, editValue, text, onSaveEdit, onReanswer, onEdit, message.id])
 
   const handleEditKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      commitEdit()
+      // Enter=主操作(保存并重答);Ctrl/Cmd+Enter=仅保存;Alt+Enter=只重答这条
+      if (e.altKey && onReanswer) void submitEdit('reanswer')
+      else void submitEdit(e.metaKey || e.ctrlKey ? 'save' : 'resend')
     } else if (e.key === 'Escape') {
       e.preventDefault()
-      cancelEditing()
+      if (!isSaving) cancelEditing()
     }
-  }, [commitEdit, cancelEditing])
+  }, [submitEdit, cancelEditing, isSaving, onReanswer])
 
-  const handleCopy = useCallback(() => {
-    // 检查 Clipboard API 可用性(非 https / 旧浏览器会失败)
-    if (!navigator.clipboard?.writeText) {
-      toast.error('当前浏览器不支持自动复制,请手动选择文本', { title: '复制失败' })
-      return
-    }
-    navigator.clipboard.writeText(bodyText)
-      .then(() => {
+  const copyPayload = useCallback((text: string) => {
+    // copyText 内部:Clipboard API 被拒(无 transient activation / webview 权限受限)时退 execCommand 兜底
+    void copyText(text).then((ok) => {
+      if (ok) {
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
-      })
-      .catch((err) => {
-        console.error('Failed to copy:', err)
+      } else {
         toast.error('复制失败,请手动选择文本', { title: '复制' })
-      })
-  }, [bodyText])
+      }
+    })
+  }, [])
+
+  const handleCopy = useCallback(() => copyPayload(bodyText), [copyPayload, bodyText])
 
   const handleCopyDebounced = useSingleFlight(handleCopy, [bodyText])
 
@@ -781,16 +831,16 @@ function MessageBubbleInner({
   // 无可用项时(如空正文)不 preventDefault,保留浏览器默认菜单。
   const handleMessageContextMenu = useCallback((e: React.MouseEvent) => {
     const canCopy = bodyText.length > 0
+    // 选区必须在"装配菜单"这一刻抓取:扇区上的左键 mousedown 会清掉 window 选区,
+    // 等 onSelect 再读就只剩整段了(用户报"选一句却复制整段"根因)
+    const selText = window.getSelection()?.toString() ?? ''
     const candidates: (ContextMenuItem | false | undefined)[] = [
       canCopy && {
         id: 'copy',
         label: '复制',
         icon: <Copy className="w-3.5 h-3.5" />,
-        submenu: [
-          { id: 'copy-text', label: '纯文本', icon: <FileText className="w-3.5 h-3.5" />, onSelect: handleCopy },
-          { id: 'copy-md', label: 'Markdown', icon: <Code2 className="w-3.5 h-3.5" />, onSelect: handleCopyMarkdown },
-          { id: 'copy-html', label: 'HTML（带样式）', icon: <FileType className="w-3.5 h-3.5" />, onSelect: handleCopyHtml },
-        ],
+        // 轮盘改版定案:复制只保留纯文本一条路,Markdown/HTML 入口从右键菜单移除
+        onSelect: () => copyPayload(selText.trim() ? selText : bodyText),
       },
       isUser && canEdit && onEdit && {
         id: 'edit',
@@ -833,7 +883,7 @@ function MessageBubbleInner({
     openContextMenu({ x: e.clientX, y: e.clientY }, items)
   }, [
     bodyText, isUser, isAssistant, canEdit, onEdit, isLastAssistant, canRegenerate,
-    onRegenerate, beginEdit, handleCopy, handleCopyMarkdown, handleCopyHtml,
+    onRegenerate, beginEdit, copyPayload,
     handleRegenerateDebounced, handleSaveToStudy, studySaveState, isStreaming,
     message.id, message.role,
   ])
@@ -867,6 +917,7 @@ function MessageBubbleInner({
             <textarea
               ref={textareaRef}
               value={editValue}
+              aria-label="编辑消息内容"
               onChange={(e) => {
                 setEditValue(e.target.value)
                 // Auto-resize
@@ -875,28 +926,60 @@ function MessageBubbleInner({
                 ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
               }}
               onKeyDown={handleEditKeyDown}
-              onBlur={commitEdit}
               rows={1}
               className="w-full resize-none bg-transparent text-sm leading-relaxed text-accent-foreground outline-none px-3 py-1.5 min-h-[24px] max-h-[200px]"
             />
           </div>
-          <div className="flex items-center justify-end gap-1 mt-1">
-            <button
-              onMouseDown={(e) => { e.preventDefault(); cancelEditing() }}
-              className="p-1 rounded-md text-content-muted hover:text-red-500 hover:bg-surface-subtle transition-colors"
-              title="取消"
-              aria-label="取消"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onMouseDown={(e) => { e.preventDefault(); commitEdit() }}
-              className="p-1 rounded-md text-content-muted hover:text-green-500 hover:bg-surface-subtle transition-colors"
-              title="确认"
-              aria-label="确认"
-            >
-              <Check className="w-3.5 h-3.5" />
-            </button>
+          {/* 确认条:失焦不提交(只有点按钮 / Enter 才提交),破坏性动作的影响面前置告知 */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="mr-auto text-[11px] text-content-muted select-none">
+              {isSaving
+                ? '处理中…'
+                : followingCount > 0
+                  ? `保存并重答将归档后续 ${followingCount} 条；「只重答这条」保留它们`
+                  : '保存并重答将重新生成回答'}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={cancelEditing}
+                className="px-2.5 py-1 rounded-md text-xs text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                取消
+              </button>
+              {onSaveEdit && (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => void submitEdit('save')}
+                  title="仅就地修改文本,不重新生成回答（Ctrl/⌘+Enter）"
+                  className="px-2.5 py-1 rounded-md text-xs border border-line text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  仅保存
+                </button>
+              )}
+              {onReanswer && (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => void submitEdit('reanswer')}
+                  title="改这句并重新生成它的回答,后续消息保留（Alt+Enter）。注意:后续回答仍基于改前的内容"
+                  className="px-2.5 py-1 rounded-md text-xs border border-line text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  只重答这条
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => void submitEdit('resend')}
+                title="归档此消息之后的对话并重新生成回答（Enter）"
+                className="px-2.5 py-1 rounded-md text-xs bg-accent text-accent-foreground hover:opacity-90 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
+              >
+                保存并重答
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -994,11 +1077,18 @@ function MessageBubbleInner({
             {/* 回合变更摘要条(P1):聚合本条消息里 local_file 的文件变更,可展开逐文件撤销 */}
             <TurnFileSummary message={message} />
             {displayText ? (
-              <div className="relative text-sm text-content-primary leading-relaxed">
-                {/* rich 以「整条消息是否在生成」为粒度,不跟单个 text part 的 state 翻转:
-                    工具轮次间隙最后 text part 是 done 而 isStreaming 仍 true,若用
-                    !showCursor 判定,每轮工具调用都会 plain↔rich 反复横跳(闪烁主源) */}
-                <MarkdownRenderer content={displayText} messageId={message.id} rich={isAssistant && !isStreaming && !isTyping} />
+              <div className="relative text-[15px] text-content-primary leading-[1.85]">
+                {/* rich 以「本条消息是否在生成」为粒度,不跟单个 text part 的 state 翻转:
+                    工具轮次间隙最后 text part 是 done 而会话仍 streaming,若用
+                    !showCursor 判定,每轮工具调用都会 plain↔rich 反复横跳(闪烁主源)。
+                    isStreaming 是会话级布尔:生成位 = 最后一条消息(submitted 阶段只有
+                    新 user 消息垫底、assistant 占位未进列表,此时必须让全部历史消息
+                    保持 rich,否则旧 chart/mindmap 卡整个生成窗口期闪回原始 JSON) */}
+                <MarkdownRenderer
+                  content={displayText}
+                  messageId={message.id}
+                  rich={isAssistant && !isTyping && (!isStreaming || !isLastMessage)}
+                />
                 {showCursor && (
                   <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-content-secondary animate-pulse align-middle" />
                 )}
@@ -1072,8 +1162,8 @@ function MessageBubbleInner({
                 )}
               </div>
             )}
-            <div className="rounded-lg bg-accent px-3 py-1.5">
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-accent-foreground">{text}</p>
+            <div className="rounded-2xl rounded-br-[6px] bg-accent px-4 py-2.5">
+              <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.75] text-accent-foreground">{text}</p>
             </div>
           </div>
         )}
@@ -1119,7 +1209,16 @@ function MessageBubbleInner({
         )}
 
         {/* Action bar */}
-        <div className={cn('flex items-center gap-0.5 mt-1', isUser ? 'justify-end' : 'justify-start')}>
+        <div className={cn('msg-actions flex items-center gap-0.5 mt-1', isUser ? 'justify-end' : 'justify-start')}>
+          {/* 「仅保存」编辑标记:内容就地改过、无历史版本链可看 */}
+          {savedEditAt && (
+            <span
+              className="text-[10px] text-content-muted/60 mr-2 select-none"
+              title="内容已修改,未重新生成回答"
+            >
+              已编辑
+            </span>
+          )}
           {/* 完整日期时间 + token:仅 assistant 消息永久显示 */}
           {isAssistant && msgCreatedAt && (
             <span className="text-[10px] text-content-muted/60 mr-2 select-none font-mono whitespace-nowrap">
@@ -1305,10 +1404,14 @@ function areMessageBubblePropsEqual(
   if (prev.message.role !== next.message.role) return false
   if (prev.isStreaming !== next.isStreaming) return false
   if (prev.isLastAssistant !== next.isLastAssistant) return false
+  if (prev.isLastMessage !== next.isLastMessage) return false
   if (prev.canRegenerate !== next.canRegenerate) return false
   if (prev.canEdit !== next.canEdit) return false
   if (prev.onRegenerate !== next.onRegenerate) return false
   if (prev.onEdit !== next.onEdit) return false
+  if (prev.onSaveEdit !== next.onSaveEdit) return false
+  if (prev.onReanswer !== next.onReanswer) return false
+  if (prev.getFollowingCount !== next.getFollowingCount) return false
   if (prev.isFocused !== next.isFocused) return false
   if (prev.prevUserContent !== next.prevUserContent) return false
   if (prev.contentVisibilityOff !== next.contentVisibilityOff) return false

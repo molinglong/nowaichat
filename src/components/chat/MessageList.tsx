@@ -22,7 +22,14 @@ interface MessageListProps {
   isStreaming: boolean
   className?: string
   onRegenerate?: () => void
-  onEditMessage?: (messageId: string, newText: string) => void
+  /** 「保存并重答」:归档该消息及其后续后以新文本重发 */
+  onEditMessage?: (messageId: string, newText: string) => void | Promise<void>
+  /** 「仅保存」:就地改文本,不动后续消息、不重答 */
+  onSaveEditMessage?: (messageId: string, newText: string) => void | Promise<void>
+  /** 「只重答这条」:就地改文本并重新生成该轮回答,后续消息原位保留 */
+  onReanswerMessage?: (messageId: string, newText: string) => void | Promise<void>
+  /** 统计消息 id 之后的消息条数(编辑确认条用)。稳定引用的惰性 getter,勿传数字 */
+  getFollowingCount?: (messageId: string) => number
   /** 澄清问答:提交回答文本(通常接 ChatPanel 的 handleSend,复用排队/发送全链路) */
   onClarifySubmit?: (answersText: string) => void
   /** local_file:决策(批准/拒绝),透传给 ToolCallCard 内的 LocalFileCard */
@@ -55,6 +62,9 @@ export function MessageList({
   className,
   onRegenerate,
   onEditMessage,
+  onSaveEditMessage,
+  onReanswerMessage,
+  getFollowingCount,
   onClarifySubmit,
   onLocalFileDecision,
   onOpenEditor,
@@ -339,10 +349,17 @@ export function MessageList({
     prevUserContent: prevUserContentById.get(message.id),
     isStreaming,
     isLastAssistant: index === lastAssistantIndex,
+    // "正在生成"判定必须用 isLastMessage 而非 isLastAssistant:submitted 阶段
+    // (请求在途、assistant 占位还没进 messages)旧 assistant 仍是 lastAssistant,
+    // 若用它豁免会把上一条卡片误退回纯文本,闪回原始 JSON
+    isLastMessage: index === messages.length - 1,
     canRegenerate: canRegenerateAll,
     onRegenerate,
     canEdit: canEditAll,
     onEdit: onEditMessage,
+    onSaveEdit: onSaveEditMessage,
+    onReanswer: onReanswerMessage,
+    getFollowingCount,
     onClarifySubmit,
     onLocalFileDecision,
     onOpenEditor,

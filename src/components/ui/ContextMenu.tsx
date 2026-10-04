@@ -5,6 +5,14 @@ import { createPortal } from 'react-dom'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
+import { WheelMenu } from './WheelMenu'
+
+/** 转盘模式总开关:false 一键回退旧列表菜单 */
+const WHEEL_MODE = true
+/** 转盘直径(px)。140/160/180/210 四档体验后定稿 */
+const WHEEL_SIZE = 180
+/** 游戏式长按:右键按住超过该毫秒数即呼出轮盘并隐藏光标 */
+const HOLD_WHEEL_MS = 180
 
 /** 菜单与屏幕边缘的最小留白 */
 const VIEWPORT_MARGIN = 8
@@ -32,6 +40,10 @@ export function ContextMenuHost() {
   const closeContextMenu = useContextMenuStore((s) => s.closeContextMenu)
 
   const menuRef = useRef<HTMLDivElement>(null)
+  /** 长按模式:轮盘跟随准星,松手即结算(交互在 WheelMenu 内实现) */
+  const [holdMode, setHoldMode] = useState(false)
+  /** 长按松手后短暂吞掉原生 contextmenu,防止场景方把它当"轻点右键"重开菜单 */
+  const ignoreContextMenuUntil = useRef(0)
   // null = 未测量,按 x/y 原位渲染;useLayoutEffect 会在绘制前纠正,不产生闪烁
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
   /**
@@ -69,7 +81,61 @@ export function ContextMenuHost() {
     if (open) return
     setSubmenu(null)
     cancelSubmenuClose()
+    setHoldMode(false)
   }, [open, cancelSubmenuClose])
+
+  // ── 游戏式长按右键检测(常驻,不依赖 open 状态) ──
+  // mousedown(右键) → 按住超 HOLD_WHEEL_MS 仍在 → 进入 holdMode,
+  // 并向锚点元素合成一次 contextmenu,复用场景方既有的"组装菜单项"逻辑。
+  // 松手结算在 WheelMenu 内做;这里只负责吞掉松手后紧跟的原生 contextmenu。
+  useEffect(() => {
+    let holdTimer: number | null = null
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return
+      const { clientX: ax, clientY: ay } = e
+      holdTimer = window.setTimeout(() => {
+        holdTimer = null
+        setHoldMode(true)
+        document
+          .elementFromPoint(ax, ay)
+          ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: ax, clientY: ay }))
+      }, HOLD_WHEEL_MS)
+    }
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 2) return
+      if (holdTimer !== null) {
+        window.clearTimeout(holdTimer)
+        holdTimer = null
+      }
+      // 长按处无场景响应(空白区右键什么都没开出)→ WheelMenu 不会挂载,
+      // 它的 mouseup 结算不存在,这里兜底复位 holdMode
+      window.setTimeout(() => {
+        if (!useContextMenuStore.getState().open) setHoldMode(false)
+      }, 0)
+    }
+    const onContextMenuCapture = (e: MouseEvent) => {
+      if (Date.now() < ignoreContextMenuUntil.current) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+    window.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('mouseup', onMouseUp, true)
+    window.addEventListener('contextmenu', onContextMenuCapture, true)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('mouseup', onMouseUp, true)
+      window.removeEventListener('contextmenu', onContextMenuCapture, true)
+    }
+  }, [])
+
+  const endHold = useCallback((outcome: 'executed' | 'cancelled' | 'stay') => {
+    // executed/cancelled 后浏览器会补发原生 contextmenu,吞掉防止场景方在松手点重开菜单;
+    // stay(中心原地松手)不吞:让 Host 的"菜单上右键"分支压住默认菜单即可
+    if (outcome !== 'stay') ignoreContextMenuUntil.current = Date.now() + 300
+    setHoldMode(false)
+    if (outcome === 'cancelled') closeContextMenu()
+  }, [closeContextMenu])
 
   // 定位:渲染后测量实际尺寸,越界即翻转(useLayoutEffect 保证绘制前完成,无闪烁)
   useLayoutEffect(() => {
@@ -191,6 +257,28 @@ export function ContextMenuHost() {
   if (!open) return null
 
   const visibleItems = items.filter((it) => !it.hidden)
+
+  // 转盘模式:3~8 项且无二级子菜单时以轮盘渲染,其余场景(代码块子菜单等)回退列表
+  const wheelEligible =
+    WHEEL_MODE &&
+    !items.some((it) => it.submenu) &&
+    visibleItems.length >= 3 &&
+    visibleItems.length <= 8
+  if (wheelEligible) {
+    return createPortal(
+      <WheelMenu
+        items={visibleItems}
+        x={x}
+        y={y}
+        size={WHEEL_SIZE}
+        onAction={runItem}
+        menuRef={menuRef}
+        holdMode={holdMode}
+        onHoldEnd={endHold}
+      />,
+      document.body
+    )
+  }
 
   // isSubmenu=true 时行不再接管顶层子菜单开合(否则悬停子菜单叶子项会把父菜单重置关闭)
   const renderItems = (list: ContextMenuItem[], isSubmenu = false) =>
