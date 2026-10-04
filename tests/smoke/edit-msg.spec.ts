@@ -1,3 +1,4 @@
+import fs from "node:fs"
 import { test, expect, type Page } from "@playwright/test"
 
 /**
@@ -31,11 +32,14 @@ async function switchToDeepSeek(page: Page) {
     .locator('xpath=//button[@aria-label="发送"]/preceding-sibling::*[1]//button')
     .first()
   const searchBox = page.getByPlaceholder("搜索模型...")
-  const deepseekItem = page.getByRole("button", { name: /^DeepSeek-/ }).first()
+  // 模型行可访问名以厂商色块首字母开头(D DeepSeek-V3 · …),不再 /^DeepSeek-/ 锚定;
+  // 改走搜索 + ↵ 选中高亮行(过滤后高亮自动收回首行)
   await expect(async () => {
-    if (await searchBox.isVisible()) await selectorBtn.click()
+    if (await searchBox.isVisible().catch(() => false)) await page.keyboard.press("Escape")
     await selectorBtn.click()
-    await deepseekItem.click({ timeout: 5_000 })
+    await searchBox.fill("DeepSeek")
+    await page.keyboard.press("Enter")
+    await expect(selectorBtn).toContainText("DeepSeek", { timeout: 5_000 })
   }).toPass({ timeout: 60_000 })
   // 触发器文本已变为所选模型名,确认切换真正生效
   await expect(selectorBtn).toContainText("DeepSeek")
@@ -170,18 +174,19 @@ test("带附件消息重发保留附件", async ({ page }) => {
   await gotoFreshChat(page)
   await switchToDeepSeek(page)
 
-  // 1x1 PNG(内联,避免依赖磁盘文件)
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==",
-    "base64"
-  )
+  // 夹具取仓库内真实 PNG:DeepSeek 会拒收 1x1 占位图(HTTP 400 "unsupported image"),
+  // 真图才走得通视觉链路 —— 本用例主题正是"带图编辑重答不静默丢图"
   await page.locator('input[type="file"]').first().setInputFiles({
     name: "edit-smoke.png",
     mimeType: "image/png",
-    buffer: png,
+    buffer: fs.readFileSync("public/brand/mark.png"),
   })
+  // setInputFiles 只触发上传,附件要等 POST /api/upload 返回才进 attachments 态;
+  // 上传中列表已渲染同名文件(u.name),故以只在落定后才有的「移除」按钮为判据。
+  // 不等就发送会静默丢附件(测的是竞态,不是产品缺陷)
+  await expect(page.getByRole("button", { name: "移除" })).toBeVisible({ timeout: 30_000 })
 
-  const v1 = "编辑冒烟:带图,请只回复 ok"
+  const v1 = "编辑冒烟:带附件,请只回复 ok"
   await sendAndWaitReply(page, v1)
   const convId = await convIdFromUrl(page)
 
@@ -190,7 +195,7 @@ test("带附件消息重发保留附件", async ({ page }) => {
     await expect(attLinks).toHaveCount(1)
 
     await page.getByRole("button", { name: "编辑", exact: true }).first().click()
-    const v2 = "编辑冒烟:带图改说法,请只回复 ok"
+    const v2 = "编辑冒烟:带附件改说法,请只回复 ok"
     await page.getByRole("textbox", { name: "编辑消息内容" }).fill(v2)
     await page.getByRole("button", { name: "保存并重答" }).click()
     await waitReplyDone(page)

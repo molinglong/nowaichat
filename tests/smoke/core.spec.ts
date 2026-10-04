@@ -23,11 +23,14 @@ test("发送消息收到流式回复", async ({ page }) => {
     .locator('xpath=//button[@aria-label="发送"]/preceding-sibling::*[1]//button')
     .first()
   const searchBox = page.getByPlaceholder("搜索模型...")
-  const deepseekItem = page.getByRole("button", { name: /^DeepSeek-/ }).first()
+  // 模型行可访问名以厂商色块首字母开头(D DeepSeek-V3 · …),不再 /^DeepSeek-/ 锚定;
+  // 改走搜索 + ↵ 选中高亮行(过滤后高亮自动收回首行),顺带覆盖键盘选择路径
   await expect(async () => {
-    if (await searchBox.isVisible()) await selectorBtn.click()
+    if (await searchBox.isVisible().catch(() => false)) await page.keyboard.press("Escape")
     await selectorBtn.click()
-    await deepseekItem.click({ timeout: 5_000 })
+    await searchBox.fill("DeepSeek")
+    await page.keyboard.press("Enter")
+    await expect(selectorBtn).toContainText("DeepSeek", { timeout: 5_000 })
   }).toPass({ timeout: 60_000 })
   await input.fill("用一句话介绍你自己")
   await page.getByRole("button", { name: "发送", exact: true }).first().click()
