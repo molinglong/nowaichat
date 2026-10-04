@@ -1,0 +1,31 @@
+# 版面配置:人教高中历史(中外历史纲要)
+# 勘测来源:《中外历史纲要(上)》豆包实测(convert7.py 验证)+《(下)》勘测复核,两册规则一致
+# 消费方:scripts/pdf2html-textbook.py(待落地);字段契约见 scripts/pdf2html-prompt.md
+book:
+  title: 历史
+  grade: 必修 中外历史纲要
+  publisher: 人民教育出版社
+layout:
+  heading_sizes:
+    unit: 27.5            # 单元标题(多行合并)
+    lesson: 24.0          # 课标题(多行合并)
+    section: 14.0         # 小节标题
+  unit_pattern: '^第\s*\S{1,3}\s*单元'          # 单元标题须以「第X单元」开头(防扉页书名大字误判)
+  lesson_pattern: '^第\s*\d{1,2}\s*课|活动课|后记'  # PDF 提取的「第1 课」数字与课间有空格,须容忍
+  body_min: 11.6          # 正文实为 12.0;11.x 多为地图洲名,不进正文
+  column_size: 10.5       # 页侧栏目内容字号
+  column_size_min: 10.35  # 防地图标注(7-10 号)混入
+  columns:
+    - { tag: 学习聚焦, cls: '', position: side }        # cls 空 → 内容并回正文
+    - { tag: 思考点, cls: think, position: side }
+    - { tag: 学思之窗, cls: think, position: side }
+    - { tag: 史料阅读, cls: reading, position: side }
+    - { tag: 历史纵横, cls: history, position: side }
+    - { tag: 探究与拓展, cls: explore, position: end }  # 标签字号 14.0(同节标题)
+    - { tag: 问题探究, cls: explore, position: end }    # 标签与内容均 12.0(同正文)→ 课末栏目按标签位置收集,不按字号
+    - { tag: 学习拓展, cls: explore, position: end }    # 同上
+  figure_prefix: '▲'
+  drop:
+    - '仅供个人学习使用，未经授权不得另做他用'   # 水印,20.0 号, y≈817
+    - { kind: page-number, size: 10.5, y_min: 770 }  # 页码:孤立数字,P9/P13 左侧、P12/P14 右侧
+    - { kind: header, size: 9.0, y_min: 770 }        # 页眉:含「中外历史纲要」或「第X课 课名」

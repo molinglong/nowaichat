@@ -519,6 +519,7 @@ model KnowledgeDoc {
   userId         String
   title          String   // 资料名,如「数学 七年级上册」
   subject        String   // 学科,与 NOTE_SUBJECTS 对齐: math/chinese/english/.../other
+  kind           String   @default("textbook") // 资料类型: textbook=课本/教材原文 | material=资料(答题模板/提纲/讲义)
   publisher      String?  // 出版社,如「人民教育出版社」
   grade          String?  // 年级/册别,如「七年级 上册」
   sourceUploadId String?  // 原始文件追溯(UploadFile.id);直接导入文本/HTML 时为空

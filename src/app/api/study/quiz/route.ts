@@ -55,8 +55,10 @@ export async function POST(req: NextRequest) {
     ? (body.difficulty as string)
     : 'medium'
 
-  // 1. 课本检索(与 chat 工具同一共享检索核心)
-  const hits = await searchKnowledgeChunks(userId, topic, body.subject)
+  // 1. 课本检索(与 chat 工具同一共享检索核心)。
+  // 出题必须基于课本例题/练习举一反三,故先查 textbook;该学科没课本(如只有答题模板)再回退查全部
+  let hits = await searchKnowledgeChunks(userId, topic, body.subject, 'textbook')
+  if (!hits.length) hits = await searchKnowledgeChunks(userId, topic, body.subject)
   if (!hits.length) {
     return NextResponse.json(
       { error: `课本中未找到与「${topic}」相关的内容，请先上传对应教材或换个说法` },

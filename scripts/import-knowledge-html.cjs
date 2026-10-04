@@ -50,12 +50,19 @@ if (!HTML_PATH || !fs.existsSync(HTML_PATH)) {
 }
 const USER_EMAIL = args.user || 'admin@qq.com'
 const SUBJECT_OVERRIDE = args.subject
+const KIND = args.kind === 'material' || args.kind === 'textbook' ? args.kind : null
 
 /** 按书名猜学科(与 NOTE_SUBJECTS 对齐) */
 function guessSubject(text) {
-  const map = [['数学', 'math'], ['语文', 'chinese'], ['英语', 'english'], ['物理', 'physics'], ['化学', 'chemistry'], ['生物', 'biology'], ['历史', 'other'], ['地理', 'other'], ['政治', 'other']]
+  const map = [['数学', 'math'], ['语文', 'chinese'], ['英语', 'english'], ['物理', 'physics'], ['化学', 'chemistry'], ['生物', 'biology'], ['历史', 'history'], ['地理', 'geography'], ['政治', 'politics']]
   for (const [kw, sub] of map) if (text.includes(kw)) return sub
   return 'other'
+}
+
+/** 按标题猜资料类型(与迁移回填同规则):资料关键词命中 → material,否则课本 */
+const MATERIAL_TITLE_RE = /答题模板|提纲|秘籍|讲义|笔记/
+function guessKind(title) {
+  return MATERIAL_TITLE_RE.test(title) ? 'material' : 'textbook'
 }
 
 // —— HTML → 纯文本 ——
@@ -101,14 +108,14 @@ function tokenizeBody(body) {
       continue
     }
     if (m[4] !== undefined) {
-      // div: 从 <div 起做标签平衡扫描,取完整块
+      // div: 从 <div 起做标签平衡扫描,取完整块(整标签匹配,防 end 停在 > 前、正文残留「</div」)
       const start = m.index
       let depth = 0, i = start, end = -1
-      const tagRe = /<\/?div\b/g
+      const tagRe = /<\/?div\b[^>]*>/g
       tagRe.lastIndex = start
       let t
       while ((t = tagRe.exec(body))) {
-        depth += t[0] === '</div' ? -1 : 1
+        depth += t[0].startsWith('</div') ? -1 : 1
         if (depth === 0) { end = tagRe.lastIndex; break }
       }
       if (end === -1) end = body.length
@@ -234,6 +241,7 @@ async function main() {
   // 书名 + 册别组合作为资料名(同科目不同册不冲突,幂等判断也因此准确)
   const title = (typeof args.title === 'string' && args.title) || [meta.book, meta.grade].filter(Boolean).join(' ').trim() || titleTag.trim()
   const subject = SUBJECT_OVERRIDE || guessSubject(title)
+  const kind = KIND || guessKind(title)
   const grade = meta.grade || null
   const publisher = meta.publisher || null
 
@@ -253,8 +261,8 @@ async function main() {
 
     const docId = crypto.randomUUID()
     await pool.query(
-      `INSERT INTO "KnowledgeDoc" (id, "userId", title, subject, publisher, grade, "charCount", "chunkCount") VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [docId, userId, title, subject, publisher, grade, charCount, chunks.length]
+      `INSERT INTO "KnowledgeDoc" (id, "userId", title, subject, kind, publisher, grade, "charCount", "chunkCount") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [docId, userId, title, subject, kind, publisher, grade, charCount, chunks.length]
     )
     // 批量插入切块(多值参数化;id 用 uuid,内容与栏目已在上游处理)
     const COLS = 10
@@ -276,7 +284,7 @@ async function main() {
       const k = c.chapter || '(无章)'
       byChapter[k] = (byChapter[k] || 0) + 1
     }
-    console.log(`\n导入完成: ${title} [${subject}] ${grade || ''} ${publisher || ''}`)
+    console.log(`\n导入完成: ${title} [${subject}/${kind}] ${grade || ''} ${publisher || ''}`)
     console.log(`切块: ${chunks.length} 块 / 共 ${charCount} 字符,归属用户: ${USER_EMAIL}`)
     for (const [k, v] of Object.entries(byChapter)) console.log(`  ${k}: ${v} 块`)
     console.log('\n示例切块:')

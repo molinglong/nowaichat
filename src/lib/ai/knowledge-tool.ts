@@ -16,18 +16,34 @@ import { z } from 'zod'
 
 export const KNOWLEDGE_TOOL_NAME = 'search_knowledge'
 
+/** 资料类型: textbook=课本/教材原文 | material=资料(答题模板/提纲/讲义) */
+export const KNOWLEDGE_KINDS = ['textbook', 'material'] as const
+export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number]
+
+/** 资料类型中文名(能力段与结果标注用) */
+export const KNOWLEDGE_KIND_LABELS: Record<KnowledgeKind, string> = {
+  textbook: '课本',
+  material: '资料',
+}
+
 export const knowledgeInputSchema = z.object({
   query: z
     .string()
     .min(1)
     .max(60)
-    .describe("检索关键词，2-6 个词，如「相反数 定义」「乘法法则」「数轴」"),
+    .describe("检索关键词，2-4 个学科关键词，如「相反数 定义」「矛盾 普遍性 特殊性」；禁止传整句问题"),
   subject: z
     .string()
     .max(20)
     .optional()
     .describe(
       '学科过滤(math/chinese/english/physics/chemistry/biology/history/geography/politics/other)；不确定学科就不传，查全部'
+    ),
+  kind: z
+    .enum(KNOWLEDGE_KINDS)
+    .optional()
+    .describe(
+      '资料类型过滤：textbook=课本/教材原文，material=资料(答题模板/提纲/讲义)。概念/公式/翻书/出题传 textbook，答题套路传 material；拿不准就不传，查全部'
     ),
 })
 
@@ -49,6 +65,7 @@ export const KNOWLEDGE_SUBJECT_LABELS: Record<string, string> = {
 
 export interface KnowledgeHit {
   doc: string
+  kind: string
   chapter: string | null
   section: string | null
   heading: string
