@@ -30,6 +30,8 @@
         #1a1a1c;
       color: #d1d1d6;
     }
+    .mark img.mark-light { display: none; }
+    .mark img.mark-dark { display: block; }
   }
   .card { text-align: center; }
   .mark {
@@ -41,8 +43,10 @@
     justify-content: center;
     border-radius: 50%;
     border: 1px solid rgba(128,128,134,0.4);
-    font-size: 18px;
   }
+  /* 品牌标记(明暗自适应: 深色下换反白图,红点保持原色) */
+  .mark img { width: 24px; height: auto; display: block; }
+  .mark .mark-dark { display: none; }
   .msg { font-size: 13px; letter-spacing: 0.05em; opacity: 0.75; }
   .retry {
     display: none;
@@ -72,7 +76,10 @@
 </head>
 <body>
   <div class="card" id="card">
-    <div class="mark">a</div>
+    <div class="mark">
+      <img class="mark-light" src="../mark.png" alt="">
+      <img class="mark-dark" src="../mark-invert.png" alt="">
+    </div>
     <div class="msg"><span class="dot"></span><span id="text">正在连接服务器</span></div>
     <button class="retry" id="retry">重试</button>
   </div>

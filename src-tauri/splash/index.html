@@ -25,6 +25,8 @@
       --btn-bg: #2c2c2e;
       --btn-hover: #3a3a3c;
     }
+    .mark.mark-light { display: none; }
+    .mark.mark-dark { display: block; }
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -48,6 +50,10 @@
     text-align: center;
     padding: 0 32px;
   }
+  /* 品牌锁标: 标记 + 文字; 深色下换反白图(红点保持原色,不用 filter 反相) */
+  .lockup { display: flex; align-items: center; gap: 11px; }
+  .mark { width: 30px; height: auto; display: block; }
+  .mark-dark { display: none; }
   .logo {
     font-size: 28px;
     font-weight: 600;
@@ -92,7 +98,11 @@
 </head>
 <body>
   <div class="panel">
-    <div class="logo">aichatt</div>
+    <div class="lockup">
+      <img class="mark mark-light" src="./mark.png" alt="">
+      <img class="mark mark-dark" src="./mark-invert.png" alt="">
+      <div class="logo">aichatt</div>
+    </div>
     <div class="status" id="status">正在连接服务器</div>
     <button id="retry" type="button">重试</button>
     <div class="hint" id="hint"></div>
