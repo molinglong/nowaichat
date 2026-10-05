@@ -2096,7 +2096,9 @@ export function ChatPanel({
         // data-tauri-drag-region:客户端下这一行本身就是空白带(chip 只占左侧一小块),
         // 整行挂拖动区 → 除 chip 与其弹层外的区域都能抓窗(chat 顶部好抓手 +1)。
         // 注意只挂属性不写 -webkit-app-region,避免子元素继承拖拽区把弹层点击吃掉。
-        <div className="px-4 pt-2" data-tauri-drag-region="">
+        // max-md:hidden:trial 原型定稿——手机端此 chip 与悬浮圆钮(← ☰/⚙)位置重叠,
+        // 面具入口已收进输入框 ⋯「面具」行(带当前面具名),此处整行下线
+        <div className="px-4 pt-2 max-md:hidden" data-tauri-drag-region="">
           <div className="relative inline-block">
             <button
               ref={headerMaskMenu.triggerRef}
