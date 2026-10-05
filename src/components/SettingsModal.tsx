@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen } from 'lucide-react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import {
@@ -23,11 +23,11 @@ import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
 import { detectModelCapabilities } from '@/lib/ai/model-capabilities'
-import { ReplyLengthSlider } from '@/components/chat/ReplyLengthSlider'
-import { getReplyLengthLabel } from '@/lib/ai/reply-length'
 import { useChatStore, type BackdropMode } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
-import { getStylePresetLabel } from '@/lib/ai/style'
+import { getStylePresetLabel, STYLE_PRESETS } from '@/lib/ai/style'
+import { ReplyLengthSlider } from '@/components/chat/ReplyLengthSlider'
+import { getReplyLengthLabel, REPLY_LENGTH_LEVELS } from '@/lib/ai/reply-length'
 import { useIsTauri, getNotifyOnReply, setNotifyOnReply } from '@/lib/tauri'
 import { pickWorkspaceDir, getWorkspaceDir, LOCAL_FILES_SYNC_KEY } from '@/lib/tauri-files'
 import { toast } from '@/lib/toast'
@@ -36,6 +36,7 @@ import { queryKeys } from '@/lib/query/keys'
 import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory/import-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
 import McpSettings from '@/components/settings/McpSettings'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
 const REPLY_LENGTH_STORAGE_KEY = 'chat:replyLength'
@@ -589,6 +590,261 @@ function NavButton({
   )
 }
 
+// 移动端一级列表行：图标块 + 标签 + 当前值摘要 + ›（桌面端不用，见 NavButton）
+function MobileSettingsRow({
+  item,
+  summary,
+  onClick,
+  lead,
+}: {
+  item: NavItem
+  summary?: string
+  onClick: () => void
+  lead?: React.ReactNode
+}) {
+  const Icon = item.icon
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full min-h-[52px] items-center gap-3 px-3.5 py-2 text-left touch-manipulation active:bg-surface-subtle/70"
+      style={{ WebkitTapHighlightColor: 'transparent' }}
+    >
+      {lead ?? (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-content-primary">
+          <Icon className="h-4 w-4" />
+        </span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-[15.5px] text-content-primary">{item.label}</span>
+      {summary ? (
+        <span className="max-w-[46%] shrink-0 truncate text-[13.5px] text-content-muted">{summary}</span>
+      ) : null}
+      <ChevronRight className="h-4 w-4 shrink-0 text-content-muted/50" />
+    </button>
+  )
+}
+
+/* ── 二级页控件原语（P3 统一行式，2026-10-05 定案）─────────────────────────
+   桌面端保持既有「卡片 + 分段器」形态一像素不动；≤md 一律收成 ≥52px 的行：
+   开关 → 行右侧大开关；分段 / 配色网格 → 「标签 + 当前值 + ›」，点开推入第三层单选页。
+   单一真源：选项、当前值、写回函数只声明一次，两个断点共用同一份数据。 */
+type PickerOption = { value: string; label: string; hint?: string; swatch?: string }
+type PickerSpec = {
+  title: string
+  help?: string
+  value: string
+  options: PickerOption[]
+  onPick: (value: string) => void
+}
+type OpenPicker = (spec: PickerSpec) => void
+const MobilePickerCtx = createContext<OpenPicker | null>(null)
+
+/** 开关滑块:移动端 46×28(拇指可稳按),桌面端维持原 36×20 */
+function MSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'relative shrink-0 rounded-full transition-colors',
+        on ? 'bg-accent' : 'bg-surface-subtle',
+        'h-[28px] w-[46px] md:h-5 md:w-9'
+      )}
+    >
+      <span
+        className={cn(
+          'absolute rounded-full bg-white transition-transform dark:bg-surface',
+          'left-[2px] top-[2px] h-6 w-6',
+          on ? 'translate-x-[18px]' : 'translate-x-0',
+          'md:left-0.5 md:top-0.5 md:h-4 md:w-4',
+          on && 'md:translate-x-4'
+        )}
+      />
+    </span>
+  )
+}
+
+/** 开关行。调用方把它放进既有的卡片容器里即可,两断点共用同一份 label/help */
+function MSwitchRow({
+  label,
+  help,
+  checked,
+  onChange,
+  className,
+  disabled,
+}: {
+  label: string
+  help?: string
+  checked: boolean
+  onChange: (next: boolean) => void
+  className?: string
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'flex min-h-[52px] w-full items-center justify-between gap-3 py-2 text-left touch-manipulation active:bg-surface-subtle/50 md:min-h-0',
+        disabled && 'cursor-not-allowed opacity-40',
+        className
+      )}
+      style={{ WebkitTapHighlightColor: 'transparent' }}
+    >
+      <span className="min-w-0">
+        <span className="block truncate text-[15.5px] text-content-primary md:text-xs md:text-content-secondary">{label}</span>
+        {help && <span className="mt-0.5 block text-[12.5px] leading-snug text-content-muted md:text-[11px]">{help}</span>}
+      </span>
+      <MSwitch on={checked} />
+    </button>
+  )
+}
+
+/** 移动端摘要行:标签 + 当前值 + ›,点开推入第三层单选页。桌面端不渲染 */
+function MPickerRow<T extends string>({
+  label,
+  options,
+  value,
+  onPick,
+  help,
+  className,
+}: {
+  label: string
+  options: readonly { value: T; label: string; hint?: string; swatch?: string }[]
+  value: T
+  onPick: (next: T) => void
+  help?: string
+  className?: string
+}) {
+  const openPicker = useContext(MobilePickerCtx)
+  const current = options.find((o) => o.value === value)
+  return (
+    <button
+      onClick={() =>
+        openPicker?.({
+          title: label,
+          help,
+          value,
+          options: options.map((o) => ({ value: o.value, label: o.label, hint: o.hint, swatch: o.swatch })),
+          onPick: (v) => onPick(v as T),
+        })
+      }
+      className={cn(
+        'flex min-h-[52px] w-full items-center gap-3 py-2 text-left touch-manipulation active:bg-surface-subtle/70 md:hidden',
+        className
+      )}
+      style={{ WebkitTapHighlightColor: 'transparent' }}
+    >
+      <span className="min-w-0 flex-1 truncate text-[15.5px] text-content-primary">{label}</span>
+      <span className="max-w-[46%] shrink-0 truncate text-[13.5px] text-content-muted">{current?.label ?? value}</span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-content-muted/50" />
+    </button>
+  )
+}
+
+/** 单选一行的两种皮肤:桌面 = 卡片内分段胶囊;移动 = 摘要行 + 推入单选页 */
+function MSegRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  help,
+  className,
+}: {
+  label: string
+  options: readonly { value: T; label: string; hint?: string; swatch?: string }[]
+  value: T
+  onChange: (next: T) => void
+  help?: string
+  /** 桌面端分段器容器附加类(通常是 mt-2.5 这类与卡片头的间距) */
+  className?: string
+}) {
+  return (
+    <>
+      <div className={cn('hidden md:flex rounded-lg bg-surface-muted p-0.5 gap-0.5', className)}>
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            aria-pressed={value === opt.value}
+            className={cn(
+              'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
+              value === opt.value
+                ? 'bg-accent text-accent-foreground shadow-sm'
+                : 'text-content-muted hover:text-content-primary'
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <MPickerRow
+        label={label}
+        options={options}
+        value={value}
+        onPick={onChange}
+        help={help}
+        className={className}
+      />
+    </>
+  )
+}
+
+/** 第三层:推入式单选页(仅移动端)。盖满卡片,自带与三簇同一条 14px 基线的页头。
+ *  shown 由父层的「挂载 → double RAF → true」驱动,右推/右出用 translate-x 过渡 */
+function MobilePickerPage({ spec, back, shown, onClose }: { spec: PickerSpec; back: string; shown: boolean; onClose: () => void }) {
+  return (
+    <div
+      data-m-picker
+      className={cn(
+        'absolute inset-0 z-40 flex flex-col bg-background md:hidden transition-transform duration-300 ease-out',
+        shown ? 'translate-x-0' : 'translate-x-full'
+      )}
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-line/60 bg-surface pl-5 pr-[var(--m-chrome-inset)] pt-[var(--m-chrome-top)] pb-2">
+        <button
+          onClick={onClose}
+          aria-label={`返回${back}`}
+          className="-ml-3 flex h-10 shrink-0 items-center rounded-lg px-2 text-content-secondary touch-manipulation active:bg-surface-subtle/70"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          <ChevronLeft className="h-[22px] w-[22px]" />
+        </button>
+        <h3 className="min-w-0 truncate text-[17px] font-semibold text-content-primary">{spec.title}</h3>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
+        {spec.help && <p className="pt-3 text-[12.5px] leading-relaxed text-content-muted">{spec.help}</p>}
+        <div className="mt-2 divide-y divide-line/50 overflow-hidden rounded-xl border border-line/60 bg-surface">
+          {spec.options.map((o) => {
+            const on = o.value === spec.value
+            return (
+              <button
+                key={o.value}
+                onClick={() => {
+                  spec.onPick(o.value)
+                  onClose()
+                }}
+                className="flex min-h-[52px] w-full items-center gap-3 px-3.5 py-2 text-left touch-manipulation active:bg-surface-subtle/70"
+                style={{ WebkitTapHighlightColor: 'transparent' }}
+              >
+                {o.swatch && (
+                  <span aria-hidden className="h-4 w-4 shrink-0 rounded-full border border-line/70" style={{ background: o.swatch }} />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15.5px] text-content-primary">{o.label}</span>
+                  {o.hint && <span className="block text-[12.5px] leading-snug text-content-muted">{o.hint}</span>}
+                </span>
+                {on && <Check className="h-[18px] w-[18px] shrink-0 text-accent" />}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function SettingsModal({
   forceOpen = false,
   onRequestClose,
@@ -666,6 +922,10 @@ export function SettingsModal({
   const [memoryImportError, setMemoryImportError] = useState<string | null>(null)
   const [refCopied, setRefCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
+  // 移动端主从：false=一级分组列表，true=当前分区详情（推入）。桌面端不用这个开关
+  const [mobileInDetail, setMobileInDetail] = useState(false)
+  // 第三层(移动端单选页)。back 记的是打开它时所在的分区名,页头「‹ 分区名」用它
+  const [mobilePicker, setMobilePicker] = useState<(PickerSpec & { back: string }) | null>(null)
   // 外观是一维的: 上面那排主题(浅色/深色/跟随系统/格子)四选一,
   // 下面那排按主题切换 —— 非格子时选配色,格子时选日出/白天/暮色/晚上,
   // 那个"按时间自动"开关则决定光态是手选还是由时间解析
@@ -876,8 +1136,7 @@ export function SettingsModal({
       .then((list) => {
         if (!alive) return
         const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : []
-        // 列表接口单页上限 100,数量取服务端 total 而不是本页条数(否则封顶 20)
-        setEphCount(typeof list?.total === 'number' ? list.total : items.length)
+        setEphCount(items.length)
       })
       .catch(() => { if (alive) setEphCount(0) })
     return () => { alive = false }
@@ -1078,7 +1337,7 @@ export function SettingsModal({
 
   // 隔离区:转正(回到正常历史) / 删除(级联清理,不可恢复)
   const handleEphemeralAction = async (action: 'restore' | 'delete', id: string) => {
-    if (action === 'delete' && !window.confirm('确定彻底删除这条临时对话吗？消息与附件将一并清除，不可恢复。')) return
+    if (action === 'delete' && !(await confirmDialog({ title: '彻底删除临时对话', message: '消息与附件将一并清除，不可恢复。', danger: true, okText: '彻底删除' }))) return
     setEphemeralActingId(id)
     try {
       const r = await fetch('/api/ephemeral', {
@@ -1141,7 +1400,10 @@ export function SettingsModal({
     if (!settingsOpen || !settingsSection) return
     const target = settingsSection as SectionId
     // 临时模式:受限板块(账户管理类)一律回落到「总览」
-    setActiveSection(isEphemeral && !EPHEMERAL_SAFE_SECTIONS.has(target) ? 'overview' : target)
+    const next = isEphemeral && !EPHEMERAL_SAFE_SECTIONS.has(target) ? 'overview' : target
+    setActiveSection(next)
+    // 深链语义是「跳到那一屏」:移动端若停在一级列表,内容列是隐藏的,点了等于没到
+    if (next !== 'overview') setMobileInDetail(true)
     setSettingsSection(null)
   }, [settingsOpen, settingsSection, setSettingsSection, isEphemeral])
 
@@ -1277,6 +1539,8 @@ export function SettingsModal({
   
   useEffect(() => {
     if (!settingsOpen) return
+    setMobileInDetail(false) // 每次开面板从一级列表起步，不继承上次停留的详情屏
+    setMobilePicker(null) // 第三层单选页同理:重开面板不该还盖在详情上
     setShown(false) // 复位上一次会话残留(桌面等直接 setSettingsOpen 关闭的路径不经过 closePending)
     // double RAF:确保首帧(off-screen)已绘制,下一帧再切 visible 才能触发 slide-up 过渡
     let raf2 = 0
@@ -1341,6 +1605,55 @@ export function SettingsModal({
       }
     }
   }, [currentConversationId, setConversationStylePreset])
+
+  // 把风格写进当前会话(桌面端 StylePicker 静止 250ms 后调它;移动端单选页点选即调它)
+  const persistStylePreset = useCallback(
+    (preset: string) => {
+      if (!currentConversationId) {
+        // 无会话:仅 toast 一次(不写 DB)
+        toast.success(`对话风格已切换为${getStylePresetLabel(preset)}`)
+        return
+      }
+      fetch(`/api/conversations/${currentConversationId}/style`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stylePreset: preset }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to persist style')
+          toast.success(`对话风格已切换为${getStylePresetLabel(preset)}`)
+        })
+        .catch((err) => {
+          console.error('Failed to persist style:', err)
+          toast.error('对话风格保存失败，请重试')
+        })
+    },
+    [currentConversationId]
+  )
+
+  // 把篇幅写进当前会话(与风格同款:无会话只 toast 不写 DB)
+  const persistReplyLength = useCallback(
+    (level: string) => {
+      if (!currentConversationId) {
+        toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
+        return
+      }
+      fetch(`/api/conversations/${currentConversationId}/style`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replyLength: level }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to persist reply length')
+          toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
+        })
+        .catch((err) => {
+          console.error('Failed to persist reply length:', err)
+          toast.error('回复长度保存失败，请重试')
+        })
+    },
+    [currentConversationId]
+  )
 
   // Init appearance from localStorage
   useEffect(() => {
@@ -1522,7 +1835,7 @@ export function SettingsModal({
   }
 
   async function handleDelete(providerId: string) {
-    if (!confirm(`确定要删除 ${providerId} 的 API Key 吗？`)) return
+    if (!(await confirmDialog({ title: '删除 API Key', message: `确定要删除 ${providerId} 的 API Key 吗？`, danger: true, okText: '删除' }))) return
     try {
       const res = await fetch('/api/keys', {
         method: 'DELETE',
@@ -1592,7 +1905,7 @@ export function SettingsModal({
   }
 
   async function handleDeleteSearchKey(engine: string) {
-    if (!confirm(`确定要删除 ${engine} 联网搜索 Key 吗？`)) return
+    if (!(await confirmDialog({ title: '删除联网搜索 Key', message: `确定要删除 ${engine} 联网搜索 Key 吗？`, danger: true, okText: '删除' }))) return
     setSearchKeyDeleting(engine)
     try {
       const res = await fetch('/api/search/keys', {
@@ -1640,7 +1953,7 @@ export function SettingsModal({
   }
 
   async function handleDeleteAmapKeys() {
-    if (!confirm('确定删除地图 Key 配置吗？删除后将回退到服务器默认配置。')) return
+    if (!(await confirmDialog({ title: '删除地图 Key', message: '确定删除地图 Key 配置吗？', detail: '删除后将回退到服务器默认配置。', danger: true, okText: '删除' }))) return
     setAmapSaving(true)
     try {
       const res = await fetch('/api/amap/keys', { method: 'DELETE' })
@@ -1760,7 +2073,7 @@ export function SettingsModal({
 
   async function handleDeleteMemory(id: string) {
     // 与对话/面具删除保持一致的二次确认,防误触
-    if (!confirm('确定要删除这条记忆吗？删除后不可恢复。')) return
+    if (!(await confirmDialog({ title: '删除记忆', message: '确定要删除这条记忆吗？', detail: '删除后不可恢复。', danger: true, okText: '删除' }))) return
     setMemoryDeleting(id)
     try {
       const res = await fetch(`/api/memories/${id}`, { method: 'DELETE' })
@@ -1959,7 +2272,7 @@ export function SettingsModal({
   }
 
   async function handleDeleteImageModel(id: string) {
-    if (!confirm('确定要删除此自定义模型吗？')) return
+    if (!(await confirmDialog({ title: '删除自定义模型', message: '确定要删除此自定义模型吗？', danger: true, okText: '删除' }))) return
     setImageCmDeleting(id)
     try {
       await fetch('/api/image-settings', {
@@ -1982,6 +2295,49 @@ export function SettingsModal({
     }
   }
 
+  const sectionTitle = [
+    TOP_ITEM,
+    ...(isEphemeral ? [EPHEMERAL_SESSION_ITEM] : []),
+    ...(isEphemeral
+      ? EPHEMERAL_NAV_GROUPS.flatMap((g) => g.items)
+      : NAV_GROUPS.flatMap((g) => g.items)),
+  ].find((i) => i.id === activeSection)?.label
+  // 二级页里的 MSegRow / MPickerRow 靠它推入第三层单选页;back 用当前分区名,与「‹ 设置」同一套语义。
+  // 位置是硬约束:必须在下面那道 `if (!settingsOpen) return null` 之前 —— 守卫之后再排 hook,
+  // 关闭态就少一个 hook,一开面板即 "Rendered more hooks than during the previous render"。
+  const openMobilePicker = useCallback<OpenPicker>(
+    (spec) => setMobilePicker({ ...spec, back: sectionTitle || '设置' }),
+    [sectionTitle]
+  )
+
+  // 第三层的滑入/滑出:卸载必须等滑出播完,所以关闭走「复位 shown → 300ms 后卸载」。
+  // 待卸载的 timer 存进 ref:期间重开要清掉,否则新的单选页会被上一次关闭的尾巴收走。
+  const pickerUnmountTimer = useRef<number | null>(null)
+  const [pickerShown, setPickerShown] = useState(false)
+  useEffect(() => {
+    if (!mobilePicker) {
+      setPickerShown(false)
+      return
+    }
+    if (pickerUnmountTimer.current !== null) {
+      window.clearTimeout(pickerUnmountTimer.current)
+      pickerUnmountTimer.current = null
+    }
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPickerShown(true))
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
+  }, [mobilePicker])
+  const closeMobilePicker = useCallback(() => {
+    setPickerShown(false)
+    if (pickerUnmountTimer.current !== null) window.clearTimeout(pickerUnmountTimer.current)
+    pickerUnmountTimer.current = window.setTimeout(() => {
+      pickerUnmountTimer.current = null
+      setMobilePicker(null)
+    }, 300)
+  }, [])
+
   if (!settingsOpen) return null
 
   const configured = providers.filter((p) => keys.some((k) => k.provider === p.id))
@@ -1990,13 +2346,21 @@ export function SettingsModal({
   // Use the pre-calculated sorted configured list
   const sortedConfiguredList = sortedConfigured
 
-  const sectionTitle = [
-    TOP_ITEM,
-    ...(isEphemeral ? [EPHEMERAL_SESSION_ITEM] : []),
-    ...(isEphemeral
-      ? EPHEMERAL_NAV_GROUPS.flatMap((g) => g.items)
-      : NAV_GROUPS.flatMap((g) => g.items)),
-  ].find((i) => i.id === activeSection)?.label
+  // 移动端一级行的「当前值摘要」：只读父层已有的状态。面具 / MCP / API 令牌的数据在各自子组件里
+  // （MasksSettings / McpSettings / ApiTokensSection），父层拿不到 —— 宁可不显示也不编数字
+  const themeLabel = THEME_CHOICES.find((t) => t.value === themeChoice)?.label
+  const sectionSummary: Partial<Record<SectionId, string>> = {
+    providers: configured.length ? `${configured.length} 个` : undefined,
+    models: customModels.length ? `${customModels.length} 个` : undefined,
+    search: SEARCH_ENGINE_LIST.find((e) => e.id === searchEngine)?.name,
+    image: imageModel ? imageModel.replace(/^builtin:/, '') : undefined,
+    memory: memoryEnabled ? `${memories.length} 条` : '已关闭',
+    clarify: clarifyEnabled ? '开' : '关',
+    localfiles: inTauri ? (localFilesEnabled ? '开' : '关') : '仅桌面端',
+    general: [themeLabel, getStylePresetLabel(conversationStylePreset)].filter(Boolean).join(' · '),
+    account: profile?.name || profile?.email || undefined,
+    session: ephCount != null ? `${ephCount} 段` : undefined,
+  }
 
   const renderProviderCard = (provider: ProviderInfo) => {
     const existingKey = getKeyForProvider(provider.id)
@@ -2109,9 +2473,9 @@ export function SettingsModal({
           </div>
         )}
 
-        {/* Input row */}
+        {/* Input row(移动端竖排:Key 输入框整行,测试/保存各整行) */}
         <div className="space-y-2">
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 md:flex-row">
             <div className="relative flex-1">
               <input
                 type={isPasswordVisible ? 'text' : 'password'}
@@ -2142,7 +2506,7 @@ export function SettingsModal({
                 onClick={() => handleTest(provider.id)}
                 disabled={isTesting}
                 className={cn(
-                  'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                  'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 shrink-0',
                   'bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 active:scale-95',
                   'disabled:opacity-50 disabled:cursor-not-allowed'
                 )}
@@ -2221,36 +2585,46 @@ export function SettingsModal({
         onPointerMove={onCardPointerMove}
         onPointerUp={onCardPointerUp}
         onPointerCancel={onCardPointerCancel}
-        className={`relative flex flex-col overflow-hidden transition-[transform,opacity,background-color,border-color] duration-300 ease-out ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 md:translate-y-0 md:opacity-100'} ${forceOpen
+        className={`m-set relative flex flex-col overflow-hidden transition-[transform,opacity,background-color,border-color] duration-300 ease-out ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 md:translate-y-0 md:opacity-100'} ${forceOpen
           ? 'h-full w-full rounded-none border-0 shadow-none'
-          : 'w-full md:w-[90%] lg:w-[750px] max-w-none md:max-w-[calc(100vw-2rem)] h-[90dvh] md:h-[36rem] max-h-[calc(100dvh-1rem)] md:max-h-[calc(100dvh-2rem)] rounded-t-2xl md:rounded-xl border border-line/60 shadow-2xl md:pointer-events-auto'}`}
+          : 'w-full md:w-[90%] lg:w-[750px] max-w-none md:max-w-[calc(100vw-2rem)] h-[100dvh] md:h-[36rem] max-h-none md:max-h-[calc(100dvh-2rem)] rounded-none md:rounded-xl border-0 md:border border-line/60 shadow-2xl md:pointer-events-auto'}`}
       >
-        {/* Header with macOS red dot */}
-        <div className="relative flex items-center px-4 pt-3 pb-2.5 border-b border-line/60 shrink-0 bg-surface md:hidden">
-          {/* 移动端:抽屉顶部拖动指示条 */}
-          <span
-            aria-hidden
-            className="md:hidden absolute top-1.5 left-1/2 -translate-x-1/2 h-1 w-10 rounded-full bg-line-strong/60"
-          />
-          {/* 桌面端:macOS 红色关闭圆点;移动端:箭头/文字关闭按钮 */}
-          <button
-            onClick={() => setSettingsOpen(false)}
-            className="hidden md:flex w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 transition-colors group items-center justify-center shrink-0 mr-3"
-            aria-label="关闭"
-          >
-            <svg className="w-1.5 h-1.5 text-red-950 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+        {/* Provider 不产生 DOM 节点,卡片的 flex 布局不受影响;供二级页里的 MSegRow 推入第三层 */}
+        <MobilePickerCtx.Provider value={openMobilePicker}>
+        {/* Header with macOS red dot —— 移动端(≤md)整块是"页头",✕ 必须与顶部 chrome
+            同一基线(设置钮原位),否则 设置钮→面板内关闭 又跳一次;桌面端不用这行。
+            进详情不新建第二条页头带(那会私藏一份 padding 破坏 --m-chrome-top 基线),
+            而是就地换成「‹ + 分区名」,✕ 恒在最右原位 */}
+        <div className="relative flex items-center justify-between gap-3 pl-5 pr-[var(--m-chrome-inset)] pt-[var(--m-chrome-top)] pb-2 border-b border-line/60 shrink-0 bg-surface md:hidden">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {mobileInDetail ? (
+              <>
+                {/* 返回只给箭头:「设置」二字与 17px 分区名同量级,页头会挤出两个标题 */}
+                <button
+                  onClick={() => setMobileInDetail(false)}
+                  className="-ml-3 flex h-10 shrink-0 items-center rounded-lg px-2 text-content-secondary touch-manipulation active:bg-surface-subtle/70"
+                  aria-label="返回设置列表"
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  <ChevronLeft className="h-[22px] w-[22px]" />
+                </button>
+                <h3 className="min-w-0 truncate text-[17px] font-semibold text-content-primary">{sectionTitle}</h3>
+              </>
+            ) : (
+              /* 20px 与 40×40 关闭钮(18px 叉)同量级;26px 大标题在一个只有标题的带里会显得空而贵 */
+              <h2 className="text-[20px] font-semibold tracking-[0.01em] text-content-primary">设置</h2>
+            )}
+          </div>
           <button
             onClick={requestClose}
-            className="md:hidden shrink-0 -ml-1 px-3 py-1.5 rounded-md text-xs text-content-secondary hover:text-content-primary hover:bg-surface-subtle/60 active:scale-95 transition-all touch-manipulation"
+            className="shrink-0 flex h-10 w-10 items-center justify-center rounded-lg text-content-secondary active:scale-90 active:bg-surface-subtle/70 transition-transform touch-manipulation"
             aria-label="关闭"
             style={{ WebkitTapHighlightColor: 'transparent' }}
           >
-            关闭
+            <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
           </button>
-          <h2 className="text-sm font-semibold text-content-primary">设置</h2>
         </div>
 
         {/* Body: 移动端 nav 在上(横向滚动 Tabs)+ 内容在下;桌面端左侧 nav + 右侧 内容 */}
@@ -2260,7 +2634,7 @@ export function SettingsModal({
           <div aria-hidden className="hidden md:block absolute left-0 top-0 w-48 h-2 bg-surface pointer-events-none" />
           <div aria-hidden className="hidden md:block absolute left-0 bottom-0 w-48 h-2 bg-surface pointer-events-none" />
           {/* Sidebar —— 移动端:顶部水平 Tabs 滚动条;桌面端:左侧固定栏(顶部红点标题栏固定,导航项独立滚动) */}
-          <nav className="md:m-2 md:mr-0 w-full md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 glass-blur md:rounded-xl md:border md:border-line/60 overflow-hidden md:flex md:flex-col md:px-2 md:py-2">
+          <nav className="hidden md:m-2 md:mr-0 md:w-44 shrink-0 bg-surface-muted/60 dark:bg-surface/40 glass-blur md:rounded-xl md:border md:border-line/60 overflow-hidden md:flex md:flex-col md:px-2 md:py-2">
             {/* 桌面端:固定标题栏——红点不随下方导航项滚动;标题栏语义手柄(立即拖动,双击复位居中) */}
             <div
               data-drag-handle
@@ -2296,9 +2670,9 @@ export function SettingsModal({
                 </svg>
               </button>
             </div>
-            {/* 导航项滚动区:移动端横向滚动 Tabs;桌面端纵向滚动(红点固定在上方不随动) */}
-            <div className="flex-1 md:min-h-0 overflow-x-auto md:overflow-y-auto md:mt-2 scroll-contain">
-              <div className="flex md:flex-col gap-0.5 px-2 py-1.5 md:px-0 md:py-0 md:gap-0 md:space-y-2 min-w-max md:min-w-0">
+            {/* 导航项滚动区:移动端横向滚动 Tabs(两端渐隐+隐滚动条,让被切的最后一项读作「可滑」);桌面端纵向滚动(红点固定在上方不随动) */}
+            <div className="flex-1 md:min-h-0 overflow-x-auto md:overflow-y-auto md:mt-2 scroll-contain max-md:h-scroll-fade">
+              <div className="flex md:flex-col gap-0.5 px-4 py-1.5 md:px-0 md:py-0 md:gap-0 md:space-y-2 min-w-max md:min-w-0">
                 {/* 总览(独立项):两种模式均显示,内容按 isEphemeral 分叉 */}
                 <NavButton
                   item={TOP_ITEM}
@@ -2335,6 +2709,84 @@ export function SettingsModal({
             </div>
           </nav>
 
+          {/* 移动端一级分组列表（主从）：组标题常驻、一行一分区、右侧当前值摘要。
+              桌面端整块 md:hidden（导航仍走上面的侧栏）；进详情时收起，由内容列接管。
+              卡片本体在移动端是透明的（桌面端要靠玻璃透出页背），所以这一列必须自带底色，否则组间缝隙露出遮罩；
+              列底用 background、行卡用 surface，与预览页 P1 的「凹底 + 浮卡」同构 */}
+          <div
+            data-m-list
+            aria-hidden={mobileInDetail || undefined}
+            className={cn(
+              'w-full min-h-0 flex-1 overflow-y-auto overscroll-contain bg-background px-4 pb-6 md:hidden',
+              // 详情是滑过来的覆盖层,列表留在它身后(这里再 display:none 会在滑动过程中露出透明卡背)
+              mobileInDetail && 'pointer-events-none'
+            )}
+          >
+            {/* 顶部行占掉原「总览」位:手机端不再进仪表盘(桌面侧栏的总览不受影响)。
+                正常模式 → 账号信息(头像 + 昵称 + 邮箱摘要);临时模式 → 会话管理(剩余时间)。
+                「账户」分组里那行账号信息随之移除,同一列表不留两个入口。 */}
+            <div className="pt-3">
+              <div className="divide-y divide-line/50 overflow-hidden rounded-xl border border-line/60 bg-surface">
+                {isEphemeral ? (
+                  <MobileSettingsRow
+                    item={EPHEMERAL_SESSION_ITEM}
+                    summary={sessionRemaining ?? undefined}
+                    onClick={() => {
+                      setActiveSection(EPHEMERAL_SESSION_ITEM.id)
+                      setMobileInDetail(true)
+                    }}
+                  />
+                ) : (
+                  <MobileSettingsRow
+                    item={{ id: 'account', label: profile?.name || session?.user?.name || '账号信息', icon: User }}
+                    summary={profile?.email || session?.user?.email || undefined}
+                    onClick={() => {
+                      setActiveSection('account')
+                      setMobileInDetail(true)
+                    }}
+                    lead={
+                      profile?.image ? (
+                        <img
+                          src={profile.image}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="h-7 w-7 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[12.5px] font-medium text-accent">
+                          {(profile?.name || profile?.email || session?.user?.email || '?').charAt(0).toUpperCase()}
+                        </span>
+                      )
+                    }
+                  />
+                )}
+              </div>
+            </div>
+            {(isEphemeral ? EPHEMERAL_NAV_GROUPS.filter((g) => g.title !== '会话') : NAV_GROUPS)
+              .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'account') }))
+              .filter((g) => g.items.length)
+              .map((group) => (
+              <div key={group.title} className="pt-4">
+                <div className="px-1 pb-1.5 text-[12px] font-semibold tracking-[0.02em] text-content-muted">
+                  {group.title}
+                </div>
+                <div className="divide-y divide-line/50 overflow-hidden rounded-xl border border-line/60 bg-surface">
+                  {group.items.map((item) => (
+                    <MobileSettingsRow
+                      key={item.id}
+                      item={item}
+                      summary={sectionSummary[item.id]}
+                      onClick={() => {
+                        setActiveSection(item.id)
+                        setMobileInDetail(true)
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
           {/* 侧栏圆角缺口衬底:玻璃四角圆角让出的方形小缺口会露出透明页背(看似直角)。
               每块 12x12 衬底用径向渐变实现「反向(凹)圆角」:朝玻璃曲线中心的 12px 半圆保持透明(玻璃照常透出页背),
               以外填 bg-surface(与缝隙色条同色),恰好补齐缺口且不与玻璃重叠 */}
@@ -2359,11 +2811,23 @@ export function SettingsModal({
             style={{ backgroundImage: 'radial-gradient(circle at 0% 0%, transparent 11.5px, rgb(var(--surface)) 12px)' }}
           />
 
-          {/* 右列:内容滚动区 + 底部 ESC 提示(桌面端与侧栏并列,移动端在其下方) */}
-          <div className="flex-1 min-h-0 min-w-0 flex flex-col bg-surface">
-          <div data-no-drag className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pb-3">
-            {/* Section title —— 标题栏语义拖拽手柄:横贯内容宽,按下立即拖动窗口;sticky 钉在滚动区顶部,内容上滑时标题不随滚 */}
-            <div data-drag-handle className="sticky top-0 z-10 -mx-4 px-4 pt-3 pb-3 md:pt-5 bg-surface cursor-grab active:cursor-grabbing select-none touch-none">
+          {/* 右列:内容滚动区 + 底部 ESC 提示(桌面端与侧栏并列;移动端是盖在分组列上的「右推层」)。
+              移动端不能用 hidden 切进切出 —— display:none 参与不了 transition,推入/弹回就成了瞬切;
+              改成绝对定位 + translate-x,off-screen 时被卡片的 overflow-hidden 裁掉,并标 aria-hidden 让探针和读屏都忽略它 */}
+          <div
+            data-m-detail
+            aria-hidden={isDesktop || mobileInDetail ? undefined : true}
+            className={cn(
+              'flex flex-1 min-h-0 min-w-0 flex-col bg-surface',
+              'absolute inset-0 z-30 pointer-events-none translate-x-full transition-transform duration-300 ease-out',
+              mobileInDetail && 'translate-x-0 pointer-events-auto',
+              'md:static md:z-auto md:pointer-events-auto md:translate-x-0'
+            )}
+          >
+          <div data-no-drag className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 pt-3 pb-3 md:pt-0">
+            {/* Section title —— 桌面端标题栏语义拖拽手柄:横贯内容宽,按下立即拖动窗口;sticky 钉在滚动区顶部,内容上滑时标题不随滚。
+                移动端不在这里显示标题:页头带已经承载「‹ 设置 + 分区名」,再显示一次就是双标题 */}
+            <div data-drag-handle className="hidden sticky top-0 z-10 -mx-4 items-center bg-surface px-4 pb-3 pt-5 cursor-grab select-none active:cursor-grabbing md:flex md:touch-none">
               <h3 className="text-base font-semibold text-content-primary text-left">
                 {sectionTitle}
               </h3>
@@ -2441,7 +2905,7 @@ export function SettingsModal({
                     </div>
                     <button
                       onClick={handleSignOut}
-                      className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                      className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0 max-md:hidden"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       退出登录
@@ -2659,6 +3123,21 @@ export function SettingsModal({
                     </button>
                   </div>
                 </div>
+
+                {/* 危险区隔离(方案 C .gcard.danger):手机端退出登录从问候行挪到列表末尾整行居中,
+                    拇指热区不再有一击即登出的按钮(登出无二次确认,重进还要输密码) */}
+                {session?.user && (
+                  <div className="md:hidden rounded-2xl border border-red-500/25 bg-surface/60 overflow-hidden">
+                    <button
+                      onClick={handleSignOut}
+                      className="w-full min-h-[50px] flex items-center justify-center gap-1.5 text-[13px] font-semibold text-red-500 active:bg-red-50/60 dark:active:bg-red-950/30 transition-colors"
+                      style={{ WebkitTapHighlightColor: 'transparent' }}
+                    >
+                      <LogOut className="w-4 h-4" />
+                      退出登录
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2684,9 +3163,9 @@ export function SettingsModal({
                   return (
                     <div className="space-y-3">
 
-                      {/* 引擎滑块选择器 */}
+                      {/* 引擎选择:桌面 = 音量风格滑块轨道;移动 = 整行点开第三层单选页(滑块在 390px 上拇指对不准两档) */}
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
-                        <div className="flex items-center justify-between mb-2">
+                        <div className="mb-2 hidden items-center justify-between md:flex">
                           <div className="flex items-center gap-1.5">
                             <Globe className="w-4 h-4 text-content-secondary" />
                             <p className="text-xs font-medium text-content-secondary">选择引擎</p>
@@ -2696,8 +3175,8 @@ export function SettingsModal({
                           </p>
                         </div>
 
-                        {/* 滑块轨道 */}
-                        <div className="relative">
+                        {/* 滑块轨道(仅桌面) */}
+                        <div className="relative hidden md:block">
                           {/* 左/右标签 */}
                           <div className="flex justify-between items-center mb-1.5 px-0.5">
                             <span className={cn(
@@ -2743,6 +3222,15 @@ export function SettingsModal({
                             />
                           </div>
                         </div>
+                        <MPickerRow
+                          label="选择引擎"
+                          options={SEARCH_ENGINE_LIST.map((e) => ({ value: e.id, label: e.name, hint: e.desc }))}
+                          value={searchEngine}
+                          onPick={(v) => {
+                            useChatStore.getState().setSearchEngine(v)
+                            setSearchTestResult(null)
+                          }}
+                        />
                       </div>
 
                       {/* 当前引擎 Key 配置卡片 */}
@@ -2786,8 +3274,8 @@ export function SettingsModal({
                           </div>
                         )}
 
-                        {/* 输入框 */}
-                        <div className="flex gap-2">
+                        {/* 输入框(移动端竖排:输入框一整行 + 保存整行,横排在 390px 上挤到按不准) */}
+                        <div className="flex flex-col gap-2 md:flex-row">
                           <div className="relative flex-1">
                             <input
                               type={passwordVisible ? 'text' : 'password'}
@@ -2809,7 +3297,7 @@ export function SettingsModal({
                             onClick={() => handleSaveSearchKey(searchEngine)}
                             disabled={!draft.trim() || saving}
                             className={cn(
-                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 shrink-0',
                               draft.trim() && !saving
                                 ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
                                 : 'bg-surface-muted text-content-muted cursor-not-allowed'
@@ -2845,7 +3333,7 @@ export function SettingsModal({
                           </span>
                         </div>
 
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center">
                           <input
                             type="text"
                             value={searchQuery}
@@ -2935,8 +3423,8 @@ export function SettingsModal({
                                 ? amapInfo?.config?.secMasked
                                 : amapInfo?.config?.wsMasked
                             return (
-                              <div key={f.key} className="flex items-center gap-2">
-                                <span className="w-20 shrink-0 text-[11px] text-content-secondary">{f.label}</span>
+                              <div key={f.key} className="flex flex-col gap-1.5 md:flex-row md:items-center md:gap-2">
+                                <span className="shrink-0 text-[11px] text-content-secondary md:w-20">{f.label}</span>
                                 <div className="relative flex-1">
                                   <input
                                     type={f.show ? 'text' : 'password'}
@@ -2963,7 +3451,7 @@ export function SettingsModal({
                             onClick={handleSaveAmapKeys}
                             disabled={amapSaving || (!amapDraft.jsKey.trim() && !amapDraft.sec.trim() && !amapDraft.ws.trim())}
                             className={cn(
-                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 shrink-0',
                               (amapDraft.jsKey.trim() || amapDraft.sec.trim() || amapDraft.ws.trim()) && !amapSaving
                                 ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
                                 : 'bg-surface-muted text-content-muted cursor-not-allowed'
@@ -3005,7 +3493,7 @@ export function SettingsModal({
                             {imageBuiltinModels.length}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                           {imageBuiltinModels.map((m: Record<string, unknown>) => (
                             <button
                               key={m.id as string}
@@ -3141,7 +3629,7 @@ export function SettingsModal({
                       </summary>
 
                       <div className="space-y-2.5 mt-2.5">
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                           <input
                             type="text"
                             value={imageCmForm.name}
@@ -3236,7 +3724,7 @@ export function SettingsModal({
                         <p className="text-xs font-medium text-content-secondary text-left">图片尺寸</p>
                         {imageSizeSaving && <Loader2 className="w-3 h-3 text-content-muted animate-spin" />}
                       </div>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="hidden grid-cols-3 gap-2 md:grid">
                         {[
                           { value: '1024*1024', label: '1:1', desc: '1024×1024' },
                           { value: '720*1280', label: '9:16', desc: '720×1280 (竖)' },
@@ -3260,6 +3748,17 @@ export function SettingsModal({
                           </button>
                         ))}
                       </div>
+                      <MPickerRow
+                        label="图片尺寸"
+                        help="选完即自动保存;自定义端点可另填尺寸"
+                        options={[
+                          { value: '1024*1024', label: '1:1', hint: '1024×1024' },
+                          { value: '720*1280', label: '9:16 竖', hint: '720×1280' },
+                          { value: '1280*720', label: '16:9 横', hint: '1280×720' },
+                        ]}
+                        value={imageSize}
+                        onPick={setImageSize}
+                      />
                       <p className="text-[10px] text-content-muted text-left">选择即自动保存</p>
                     </div>
                   </div>
@@ -3491,7 +3990,7 @@ export function SettingsModal({
                         if (ok) toast.success(`已恢复：${name || modelId}`)
                       }}
                       onDelete={async (id) => {
-                        if (!confirm('确定要删除这个用户添加的模型吗？')) return
+                        if (!(await confirmDialog({ title: '删除模型', message: '确定要删除这个用户添加的模型吗？', danger: true, okText: '删除' }))) return
                         const ok = await deleteOverride(id)
                         if (ok) toast.success('已删除')
                       }}
@@ -3744,7 +4243,7 @@ export function SettingsModal({
                           ))}
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                           <input
                             type="text"
                             value={cmForm.name}
@@ -3874,9 +4373,9 @@ export function SettingsModal({
                               自动检测
                             </button>
                           </div>
-                          <div className="grid grid-cols-3 gap-1.5">
+                          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-3">
                             <label
-                              className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                              className="group relative flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-surface-muted text-xs cursor-pointer md:px-2 md:py-1"
                               title="开启后才能在聊天中发送图片给此模型"
                             >
                               <input
@@ -3889,7 +4388,7 @@ export function SettingsModal({
                               <Info className="w-3 h-3 text-content-muted opacity-0 group-hover:opacity-100 transition-opacity" />
                             </label>
                             <label
-                              className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                              className="group relative flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-surface-muted text-xs cursor-pointer md:px-2 md:py-1"
                               title="开启后才能发送 PDF / txt 等附件"
                             >
                               <input
@@ -3902,7 +4401,7 @@ export function SettingsModal({
                               <Info className="w-3 h-3 text-content-muted opacity-0 group-hover:opacity-100 transition-opacity" />
                             </label>
                             <label
-                              className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                              className="group relative flex items-center gap-1.5 px-3 py-2.5 rounded-lg bg-surface-muted text-xs cursor-pointer md:px-2 md:py-1"
                               title="开启后才能显示思考过程（如 DeepSeek-R1）"
                             >
                               <input
@@ -3932,7 +4431,7 @@ export function SettingsModal({
                             onClick={handleCmSave}
                             disabled={cmSaving || (cmForm.keySource === 'own' && !cmForm.apiKey && !cmForm.id)}
                             className={cn(
-                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 shrink-0',
                               !(cmSaving || (cmForm.keySource === 'own' && !cmForm.apiKey && !cmForm.id))
                                 ? 'bg-accent text-accent-foreground hover:bg-accent-hover'
                                 : 'bg-surface-muted text-content-muted cursor-not-allowed'
@@ -4578,29 +5077,12 @@ export function SettingsModal({
                 {activeSection === 'memory' && (
                   <div className="space-y-2.5">
                     {/* 开关 */}
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">记忆功能</p>
-                        <p className="text-[11px] text-content-muted truncate">换新对话时 AI 仍记得关于你的信息</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={memoryEnabled}
-                        onClick={() => handleToggleMemory(!memoryEnabled)}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                          memoryEnabled ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            memoryEnabled && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="记忆功能"
+                      help="换新对话时 AI 仍记得关于你的信息"
+                      checked={memoryEnabled}
+                      onChange={handleToggleMemory}
+                    />
 
                     {/* ── 导入入口（收起时显示为按钮，展开时显示完整面板）──────── */}
                     {memoryImportOpen ? (
@@ -4916,29 +5398,12 @@ export function SettingsModal({
                 {/* 澄清提问 */}
                 {activeSection === 'clarify' && (
                   <div className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">澄清提问</p>
-                        <p className="text-[11px] text-content-muted">信息不足时 AI 先以选项卡片向你确认，再正式回答</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={clarifyEnabled}
-                        onClick={() => handleToggleClarify(!clarifyEnabled)}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                          clarifyEnabled ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            clarifyEnabled && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="澄清提问"
+                      help="信息不足时 AI 先以选项卡片向你确认，再正式回答"
+                      checked={clarifyEnabled}
+                      onChange={handleToggleClarify}
+                    />
                     <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
                       关闭后 AI 直接回答，不再反问。事实、代码、翻译类问题始终直接回答，不会触发确认。
                     </p>
@@ -4948,34 +5413,17 @@ export function SettingsModal({
                 {/* 本地文件(仅桌面端) */}
                 {activeSection === 'localfiles' && (
                   <div className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">允许 AI 操作本地文件</p>
-                        <p className="text-[11px] text-content-muted">
-                          {inTauri
-                            ? '在你授权的工作区文件夹内，AI 可帮你生成/写入文件、删除文件（进回收站）'
-                            : '该能力仅在桌面客户端可用'}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={localFilesEnabled}
-                        disabled={!inTauri}
-                        onClick={() => handleToggleLocalFiles(!localFilesEnabled)}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed',
-                          localFilesEnabled ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            localFilesEnabled && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="允许 AI 操作本地文件"
+                      help={
+                        inTauri
+                          ? '在你授权的工作区文件夹内，AI 可帮你生成/写入文件、删除文件（进回收站）'
+                          : '该能力仅在桌面客户端可用'
+                      }
+                      checked={localFilesEnabled}
+                      disabled={!inTauri}
+                      onChange={handleToggleLocalFiles}
+                    />
 
                     {inTauri ? (
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
@@ -5057,63 +5505,55 @@ export function SettingsModal({
                         setConversationStylePreset(preset)
                         localStorage.setItem(STYLE_OFFSET_STORAGE_KEY, preset)
                       }}
-                      onCommit={(preset) => {
-                        // 切换后(250ms 静止):统一发起一次 fetch + 一次 toast
-                        if (currentConversationId) {
-                          fetch(`/api/conversations/${currentConversationId}/style`, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ stylePreset: preset }),
-                          }).then((res) => {
-                            if (!res.ok) throw new Error('Failed to persist style')
-                            toast.success(`对话风格已切换为${getStylePresetLabel(preset)}`)
-                          }).catch((err) => {
-                            console.error('Failed to persist style:', err)
-                            toast.error('对话风格保存失败，请重试')
-                          })
-                        } else {
-                          // 无会话:仅 toast 一次(不写 DB)
-                          toast.success(`对话风格已切换为${getStylePresetLabel(preset)}`)
-                        }
-                      }}
+                      onCommit={persistStylePreset}
                       label="对话风格"
-                      className="mt-2.5"
+                      className="mt-2.5 hidden md:flex"
+                    />
+                    {/* 移动端:11 个风格 chip 在 390px 下会挤成三行小胶囊,改成摘要行 + 第三层单选 */}
+                    <MSegRow
+                      label="对话风格"
+                      help="选 AI 回答的语气与详略;选中即写入当前会话"
+                      options={STYLE_PRESETS.map((p) => ({ value: p.id, label: p.label, hint: p.tagline }))}
+                      value={(conversationStylePreset as string) || 'balanced'}
+                      onChange={(v) => {
+                        setConversationStylePreset(v)
+                        localStorage.setItem(STYLE_OFFSET_STORAGE_KEY, v)
+                        persistStylePreset(v)
+                      }}
+                      className="md:hidden"
                     />
                     </div>
 
                     {/* 回复长度:篇幅独立于语气可调,长度段在服务端覆盖风格段的详略描述 */}
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
-                      <div className="text-left">
-                        <p className="text-xs text-content-secondary">AI 篇幅</p>
-                        <p className="text-[11px] text-content-muted">只规定篇幅，不改变语气与内容准确性</p>
-                      </div>
-                      <ReplyLengthSlider
-                        value={conversationReplyLength}
-                        onChange={(level) => {
-                          // 立即更新 store + localStorage(轻量、即时)
-                          setConversationReplyLength(level)
-                          localStorage.setItem(REPLY_LENGTH_STORAGE_KEY, level)
-                        }}
-                        onCommit={(level) => {
-                          // 切换后(250ms 静止):与对话风格同款,有会话才落库
-                          if (currentConversationId) {
-                            fetch(`/api/conversations/${currentConversationId}/style`, {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ replyLength: level }),
-                            }).then((res) => {
-                              if (!res.ok) throw new Error('Failed to persist reply length')
-                              toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
-                            }).catch((err) => {
-                              console.error('Failed to persist reply length:', err)
-                              toast.error('回复长度保存失败，请重试')
-                            })
-                          } else {
-                            toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
-                          }
-                        }}
-                        className="mt-2.5"
-                      />
+                    <div className="text-left">
+                      <p className="text-xs text-content-secondary">AI 篇幅</p>
+                      <p className="text-[11px] text-content-muted">只规定篇幅，不改变语气与内容准确性</p>
+                    </div>
+                    <ReplyLengthSlider
+                      value={conversationReplyLength}
+                      onChange={(level) => {
+                        // 立即更新 store + localStorage(轻量、即时)
+                        setConversationReplyLength(level)
+                        localStorage.setItem(REPLY_LENGTH_STORAGE_KEY, level)
+                      }}
+                      onCommit={persistReplyLength}
+                      label="回复长度"
+                      className="mt-2.5 hidden md:flex"
+                    />
+                    {/* 移动端:四档滑杆的停靠点在 390px 上过密,与对话风格同款改摘要行 + 第三层单选 */}
+                    <MSegRow
+                      label="回复长度"
+                      help="只规定篇幅;选中即写入当前会话"
+                      options={REPLY_LENGTH_LEVELS.map((l) => ({ value: l.id, label: l.label, hint: l.tagline }))}
+                      value={(conversationReplyLength as string) || 'standard'}
+                      onChange={(v) => {
+                        setConversationReplyLength(v)
+                        localStorage.setItem(REPLY_LENGTH_STORAGE_KEY, v)
+                        persistReplyLength(v)
+                      }}
+                      className="md:hidden"
+                    />
                     </div>
 
                     {/* 外观是一维的: 上面那排「主题」四选一(浅色/深色/跟随系统/格子),
@@ -5130,29 +5570,21 @@ export function SettingsModal({
                           : '月白·桂花金仅深色可用'}
                       </p>
                     </div>
-                    <div className="mt-2.5 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
-                      {THEME_CHOICES.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() => handleChoiceChange(opt.value)}
-                          className={cn(
-                            'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
-                            themeChoice === opt.value
-                              ? 'bg-accent text-accent-foreground shadow-sm'
-                              : 'text-content-muted hover:text-content-primary'
-                          )}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                    <MSegRow
+                      label="主题"
+                      help="「格子」仅在深色基线上另有四个光态"
+                      options={THEME_CHOICES}
+                      value={themeChoice}
+                      onChange={handleChoiceChange}
+                      className="mt-2.5"
+                    />
                     {themeChoice === 'grid' ? (
                       /* 主题 = 格子: 下面这排选格子的光态(日出 / 白天 / 暮色 / 晚上)。
                          晚上会顺带切到 .dark —— 它是格子下唯一的深底态。
                          上面那行开关决定这排是"手选"还是"按时间自动":自动时
                          这排仍可点(点了即改回手动),高亮段跟着时间走 */
                       <>
-                      <div className="mt-2.5 flex items-center gap-2">
+                      <div className="mt-2.5 hidden items-center gap-2 md:flex">
                         <span className="text-[11px] text-content-muted">按时间自动</span>
                         {/* 卡片内开关:span 避免 button 嵌套 */}
                         <span
@@ -5173,23 +5605,21 @@ export function SettingsModal({
                           />
                         </span>
                       </div>
-                      <div className="mt-2 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
-                        {GRID_TONES.map((t) => (
-                          <button
-                            key={t.value}
-                            onClick={() => handleGridToneChange(t.value)}
-                            aria-pressed={gridTone === t.value}
-                            className={cn(
-                              'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
-                              gridTone === t.value
-                                ? 'bg-accent text-accent-foreground shadow-sm'
-                                : 'text-content-muted hover:text-content-primary'
-                            )}
-                          >
-                            {t.label}
-                          </button>
-                        ))}
-                      </div>
+                      <MSwitchRow
+                        label="按时间自动"
+                        help="按本地时间在你进入格子前就选好光态"
+                        checked={gridToneAuto}
+                        onChange={handleAutoToneToggle}
+                        className="md:hidden"
+                      />
+                      <MSegRow
+                        label="格子光态"
+                        help="四个光态里只有「晚上」是深底;手点任一段即从自动改回手动"
+                        options={GRID_TONES}
+                        value={gridTone}
+                        onChange={handleGridToneChange}
+                        className="mt-2"
+                      />
                       {gridToneAuto ? (
                         <p className="mt-1.5 text-[11px] text-content-muted">
                           自动 · {GRID_TONES.find((t) => t.value === gridTone)?.label}（点任一时段即改回手动）
@@ -5200,7 +5630,8 @@ export function SettingsModal({
                       /* 主题 ≠ 格子: 下面这排选配色。每套配色一个色点 + 名称;
                          月白·桂花金仅深色,选中会自动切到深色。
                          两套起步,故用两列网格换行,避免 flex 等分把名称挤断 */
-                      <div className="mt-2.5 grid grid-cols-2 gap-2">
+                      <>
+                      <div className="mt-2.5 hidden grid-cols-2 gap-2 md:grid">
                         {PALETTES.map((p) => (
                           <button
                             key={p.value}
@@ -5230,6 +5661,15 @@ export function SettingsModal({
                           </button>
                         ))}
                       </div>
+                      <MPickerRow
+                        label="配色"
+                        help="每套配色一个色点;月白·桂花金仅深色可用,选中会自动切到深色"
+                        options={PALETTES}
+                        value={paletteChoice}
+                        onPick={handlePaletteChange}
+                        className="mt-2.5"
+                      />
+                      </>
                     )}
                     </div>
 
@@ -5255,104 +5695,46 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
-                      <div className="mt-2 flex rounded-lg bg-surface-muted p-0.5 gap-0.5">
-                        {BACKDROP_CHOICES.map((opt) => (
-                          <button
-                            key={opt.value}
-                            onClick={() => setBackdropMode(opt.value)}
-                            aria-pressed={backdropMode === opt.value}
-                            className={cn(
-                              'flex-1 whitespace-nowrap px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
-                              backdropMode === opt.value
-                                ? 'bg-accent text-accent-foreground shadow-sm'
-                                : 'text-content-muted hover:text-content-primary'
-                            )}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
+                      <MSegRow
+                        label="背景"
+                        help="壁纸只在新对话欢迎页出现;关闭则为纯色界面"
+                        options={BACKDROP_CHOICES}
+                        value={backdropMode}
+                        onChange={setBackdropMode}
+                        className="mt-2"
+                      />
                     </div>
 
                     {/* 聊天行为:开关组(卡内两行,行间细线分隔) */}
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-1">
-                    <div className="flex items-center justify-between gap-3 py-2">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">思考完毕自动折叠</p>
-                        <p className="text-[11px] text-content-muted">深度思考输出完后自动收起思考框,点击标题可重新展开</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={autoCollapseReasoning}
-                        onClick={() => setAutoCollapseReasoning(!autoCollapseReasoning)}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                          autoCollapseReasoning ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            autoCollapseReasoning && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="思考完毕自动折叠"
+                      help="深度思考输出完后自动收起思考框,点击标题可重新展开"
+                      checked={autoCollapseReasoning}
+                      onChange={setAutoCollapseReasoning}
+                    />
 
                     {/* 回复完成系统通知:仅桌面端;窗口失焦时 AI 回复完成弹系统通知 */}
                     {inTauri && (
-                    <div className="flex items-center justify-between gap-3 py-2 border-t border-line/60">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">回复完成通知</p>
-                        <p className="text-[11px] text-content-muted">窗口失焦时,AI 回复完成弹系统通知提醒</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={notifyOnReply}
-                        onClick={handleToggleNotify}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                          notifyOnReply ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            notifyOnReply && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="回复完成通知"
+                      help="窗口失焦时,AI 回复完成弹系统通知提醒"
+                      checked={notifyOnReply}
+                      onChange={handleToggleNotify}
+                      className="border-t border-line/60"
+                    />
                     )}
 
                     {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项;临时模式不渲染(依赖被 403 的 /api/settings/ai-control) */}
                     {!isEphemeral && (
                     <>
-                    <div className="flex items-center justify-between gap-3 py-2 border-t border-line/60">
-                      <div className="text-left min-w-0">
-                        <p className="text-xs text-content-secondary">AI 设置控制</p>
-                        <p className="text-[11px] text-content-muted">开启后可在对话中让 AI 直接修改主题、侧边栏等设置</p>
-                      </div>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={aiControlEnabled}
-                        onClick={() => handleToggleAiControl(!aiControlEnabled)}
-                        className={cn(
-                          'relative w-9 h-5 rounded-full transition-colors shrink-0',
-                          aiControlEnabled ? 'bg-accent' : 'bg-surface-subtle'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white dark:bg-surface transition-transform',
-                            aiControlEnabled && 'translate-x-4'
-                          )}
-                        />
-                      </button>
-                    </div>
+                    <MSwitchRow
+                      label="AI 设置控制"
+                      help="开启后可在对话中让 AI 直接修改主题、侧边栏等设置"
+                      checked={aiControlEnabled}
+                      onChange={handleToggleAiControl}
+                      className="border-t border-line/60"
+                    />
                       <p className="text-[11px] text-content-muted/80 text-left leading-relaxed pb-2.5">
                         此开关仅能在此手动更改，AI 无法操作。关闭后 AI 会如实告知功能已关闭，不会尝试修改设置。
                       </p>
@@ -5446,7 +5828,7 @@ export function SettingsModal({
                           return (
                             <li key={provider.id} className="flex items-center gap-2">
                               <span className="text-content-secondary shrink-0 min-w-[5rem]">{provider.name}</span>
-                              <a href={url} target="_blank" rel="noopener noreferrer" className="text-content-primary hover:underline truncate">
+                              <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate text-content-primary hover:underline">
                                 {url.replace('https://', '')}
                               </a>
                             </li>
@@ -5506,12 +5888,18 @@ export function SettingsModal({
             )}
           </div>
 
-          {/* Footer status bar —— 位于内容列底部(顶部分隔线已移除) */}
-          <div className="shrink-0 px-4 py-2 flex items-center gap-2 bg-surface">
+          {/* Footer status bar —— 位于内容列底部(顶部分隔线已移除);手机端无实体 ESC 键,整条隐藏 */}
+          <div className="shrink-0 px-4 py-2 items-center gap-2 bg-surface hidden md:flex">
             <kbd className="ml-auto text-[10px] text-content-muted px-1.5 py-0.5 rounded border border-line bg-surface-muted font-mono">ESC</kbd>
           </div>
           </div>
         </div>
+
+          {/* 第三层:移动端推入式单选页(仅有 spec 时挂,盖满整张卡片) */}
+          {mobilePicker && (
+            <MobilePickerPage spec={mobilePicker} back={mobilePicker.back} shown={pickerShown} onClose={closeMobilePicker} />
+          )}
+        </MobilePickerCtx.Provider>
       </div>
     </div>
   )
@@ -5714,7 +6102,7 @@ function PresetModelsManager({
                   {formOpen && form.provider === p.id && (
                     <div className="mt-2 p-2.5 rounded-lg border border-accent/30 bg-accent/5 space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
                       <p className="text-[11px] font-medium text-accent">添加模型到 {p.name}</p>
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
                         <input
                           type="text"
                           value={form.modelId}
