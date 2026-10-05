@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug, Check, ChevronRight, MoreHorizontal, Copy, ClipboardPaste, TextSelect, Eraser } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, FileText, Play, ArrowUp, Columns2, Drama, Settings as SettingsIcon, Brain, Globe, Plug, Check, ChevronRight, ChevronDown, MoreHorizontal, Copy, ClipboardPaste, TextSelect, Eraser, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
 import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
+import { ModelQuickSheet } from './ModelQuickSheet'
+import { PROVIDER_DOT } from '@/lib/ai/provider-meta'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { McpToolMenu } from './McpToolMenu'
 import { MiniSwitch } from '@/components/settings/MiniSwitch'
@@ -15,6 +17,7 @@ import { RecentChats } from './RecentChats'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useMaskMenuMaxHeight } from '@/hooks/useMaskMenuMaxHeight'
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport'
 import { useChatStore } from '@/store/chat-store'
 import { draftKeyFor, setDraft as persistDraft } from '@/lib/draft-storage'
 import { INPUT_INSERT_EVENT } from '@/lib/input-bridge'
@@ -25,6 +28,17 @@ const OSMANTHUS_PTS: [number, number][] = [
   [6, 12], [14, 74], [9, 88], [23, 8], [27, 30], [31, 92], [44, 84], [52, 4],
   [58, 16], [66, 90], [73, 10], [79, 78], [86, 22], [90, 62], [12, 40], [88, 40],
 ]
+
+/** 手机端输入正文行高(15px/24px),长文升半屏的行数判据基准 */
+const MOBILE_LINE_H = 24
+
+/** 半屏编辑器计数文案:字数 + 按 300 字/分折算的通读时长(不足 1 分钟只报字数) */
+function longTextCount(text: string): string {
+  const chars = text.replace(/\s/g, '').length
+  const secs = Math.round((chars / 300) * 60)
+  if (secs < 60) return `${chars} 字`
+  return `${chars} 字 · 约 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
+}
 
 export interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => void
@@ -113,10 +127,20 @@ export function ChatInput({
   const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
   // ⋯ 更多工具菜单开合(收纳: 对比模式 + 移动端的面具/MCP)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
-  // 面具菜单盒高: 两处入口都向下弹(输入框下方),按各自触发钮(桌面=面具钮 / 移动=⋯ 钮)下方空间夹取
-  const desktopMaskMenu = useMaskMenuMaxHeight(maskMenuOpen, 'down')
-  const mobileMaskMenu = useMaskMenuMaxHeight(maskMenuOpen, 'down')
+  // 手机端模型入口:胶囊内不放 ModelSelector,改由 ⋯ 唤 iOS 半屏快切
+  const [modelSheetOpen, setModelSheetOpen] = useState(false)
+  const isMobileViewport = useIsMobileViewport()
+  // 面具菜单盒高: 桌面在胶囊里向下弹;手机端胶囊贴底,同一颗钮改为向上弹,故方向按视口切换
+  const maskMenu = useMaskMenuMaxHeight(maskMenuOpen, isMobileViewport ? 'up' : 'down')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // 手机端严格两钮:胶囊内不放上传钮,⋯ 面板「添加附件」经此句柄代理点击隐藏 input
+  const attachOpenRef = useRef<(() => void) | null>(null)
+  // 手机端长文:>6 行自动升半屏编辑器,≤5 行收回(留 1 行滞回,防阈值抖动反复升降)
+  const [longTextMode, setLongTextMode] = useState(false)
+  // 手动「收起」后按住不自动弹回,直到行数真的落回阈值以下
+  const manualCollapseRef = useRef(false)
+  // 手机端正文当前行数(按内容全高折算),驱动圆角收回与「收起/展开」行
+  const [mobileLines, setMobileLines] = useState(1)
 
   // 引用回复状态
   const replyingTo = useChatStore((s) => s.replyingTo)
@@ -191,12 +215,42 @@ export function ChatInput({
     const textarea = textareaRef.current
     if (!textarea) return
     textarea.style.height = 'auto'
+    if (isMobileViewport && longTextMode) {
+      // 半屏编辑器:高度取 min(55vh, 464px),不再受 164px 单行胶囊上限约束
+      textarea.style.height = `${Math.round(Math.min(window.innerHeight * 0.55, 464))}px`
+      return
+    }
     textarea.style.height = `${Math.min(textarea.scrollHeight, variant === 'welcome' ? 164 : 200)}px`
-  }, [variant])
+  }, [variant, isMobileViewport, longTextMode])
 
   useEffect(() => {
     adjustHeight()
   }, [input, adjustHeight])
+
+  // 升/收判据必须读「内容全高」:临时置 auto 再量 scrollHeight。
+  // 半屏展开后 textarea 高度被编辑器接管,直接量会恒等于编辑器高度 → 永远收不回
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setLongTextMode(false)
+      setMobileLines(1)
+      manualCollapseRef.current = false
+      return
+    }
+    const ta = textareaRef.current
+    if (!ta) return
+    const prev = ta.style.height
+    ta.style.height = 'auto'
+    // 手机端正文 py-2(上下共 16px)要从内容高里扣掉,否则每行档位整体偏 0.7 行
+    const lines = Math.max(0, ta.scrollHeight - 16) / MOBILE_LINE_H
+    ta.style.height = prev
+    setMobileLines(lines)
+    if (lines <= 5) {
+      manualCollapseRef.current = false
+      setLongTextMode(false)
+    } else if (lines > 6 && !manualCollapseRef.current) {
+      setLongTextMode(true)
+    }
+  }, [input, isMobileViewport])
 
   // 发送结束后归还焦点(仅鼠标设备):本 effect 挂载时也会跑一次(isLoading 初始 false),
   // 触屏设备程序性 focus 会立刻弹出软键盘 —— 进主页/AI 回答完都被打断,故 pointer:coarse 一律不抢焦点
@@ -381,14 +435,16 @@ export function ChatInput({
   //   桌面外显 上传/思考/搜索/MCP/面具,对比模式收进 ⋯;
   //   移动端(<sm)只外显 上传/思考/搜索,MCP/面具/对比全部收进 ⋯(390px 实测不溢出)。
   // MCP/面具是弹菜单型入口:桌面从各自钮弹出,移动端从 ⋯ 钮弹出(两端互斥渲染)。
-  const iconBtnBase = 'flex items-center justify-center h-7 w-7 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full transition-colors shrink-0'
+  // 手机端 38px:与原型 tiny-btn 同档,单行胶囊里 4 个钮 + 输入区在 390px 下才不溢出
+  const iconBtnBase = 'flex items-center justify-center h-7 w-7 min-h-[38px] min-w-[38px] sm:min-h-0 sm:min-w-0 rounded-full transition-colors shrink-0'
   const pillIdle = 'bg-surface-muted hover:bg-surface-subtle text-content-secondary'
   const pillActive = 'bg-accent text-accent-foreground'
   const hasCompareEntry = compareModeAvailable && !!onCompareModeChange
+  const currentModel = models.find((m) => m.id === selectedModel)
   const hasMcpEntry = mcpAvailable && !!onMcpEnabledChange
   const hasMaskEntry = !!onMaskChange
-  // ⋯ 钮:有任一收纳项才渲染;桌面端仅当有「对比模式」项时显示(面具/MCP 桌面已外显)
-  const showMoreBtn = hasCompareEntry || hasMcpEntry || hasMaskEntry
+  // ⋯ 钮:手机端恒显(深度思考/搜索/面具/MCP/对比全收在这里);
+  // 桌面端仅当有「对比模式」项时出现(面具/MCP 桌面已外显),用 hidden/max-sm:block 分端控制
   // ⋯ 更多工具/面具/MCP 弹层(welcome 与 standard 两变体共用):
   // 挂在 ⋯ 按钮自身的 wrapper 上,以按钮为锚居中向上弹出;
   // 宽度钳制必须用视口单位(calc(100vw-2rem)):百分比 max-w 相对锚点 wrapper(仅 44px)解析,
@@ -399,26 +455,111 @@ export function ChatInput({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
           <div
-            className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface shadow-lg py-1.5"
+            className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 z-50 w-60 max-w-[calc(100vw-2rem)]
+              rounded-xl border border-line bg-surface shadow-lg py-1.5
+              max-md:left-auto max-md:right-1 max-md:translate-x-0 max-md:w-[min(300px,calc(100vw-16px))]
+              max-md:rounded-2xl max-md:bg-surface/95 max-md:backdrop-blur-xl
+              max-md:max-h-[60vh] max-md:overflow-y-auto
+              max-md:shadow-[0_18px_50px_rgb(0_0_0_/_0.28)]"
             role="menu"
           >
-            {/* 面具(仅移动端): 点击后关闭 ⋯ 菜单,面具选择菜单改从 ⋯ 钮弹出 */}
-            {hasMaskEntry && (
+            {/* 内容组(仅手机端):附件与面具都不再占胶囊位,统一从 ⋯ 进入 */}
+            {isMobileViewport && (
+              <>
+                <div className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-wider text-content-muted">内容</div>
+                <button
+                  className="flex items-center gap-2.5 w-full px-2.5 min-h-[44px] py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
+                  onClick={() => { setMoreMenuOpen(false); attachOpenRef.current?.() }}
+                >
+                  <Paperclip className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium">添加附件</span>
+                    <span className="block text-[10px] text-content-muted truncate">
+                      {attachments.length > 0 ? `已选 ${attachments.length} 个` : '图片 / 文本 / PDF'}
+                    </span>
+                  </span>
+                  <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
+                </button>
+                {hasMaskEntry && (
+                  <button
+                    className="flex items-center gap-2.5 w-full px-2.5 min-h-[44px] py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
+                    onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
+                  >
+                    {mask ? (
+                      <span aria-hidden className="w-3.5 text-center text-[13px] leading-none shrink-0">{mask.avatar}</span>
+                    ) : (
+                      <Drama className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span className="flex-1 min-w-0">
+                      <span className="block font-medium">面具</span>
+                      <span className="block text-[10px] text-content-muted truncate">
+                        {mask ? `${mask.name}` : '未选，用默认人格'}
+                      </span>
+                    </span>
+                    <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
+                  </button>
+                )}
+                <div className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-wider text-content-muted">模型</div>
+              </>
+            )}
+            {/* 模型(手机端专属):md 以下胶囊里撤掉了 ModelSelector,这里补一个入口,点了弹 iOS 半屏快切 */}
+            {!compareMode && (
               <button
-                className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
-                onClick={() => { setMoreMenuOpen(false); setMaskMenuOpen(true) }}
+                className="hidden max-md:flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors text-left"
+                onClick={() => { setMoreMenuOpen(false); setModelSheetOpen(true) }}
               >
-                <span aria-hidden className="text-[15px] leading-none shrink-0">{mask ? mask.avatar : '🎭'}</span>
+                <span
+                  aria-hidden
+                  className={cn(
+                    'h-1.5 w-1.5 flex-none rounded-full',
+                    PROVIDER_DOT[currentModel?.provider ?? ''] ?? 'bg-content-muted'
+                  )}
+                />
                 <span className="flex-1 min-w-0">
-                  <span className="block font-medium">面具</span>
-                  <span className="block text-[10px] text-content-muted truncate">{mask ? mask.name : '选择 AI 人格'}</span>
+                  <span className="block font-medium">切换模型</span>
+                  <span className="block text-[10px] text-content-muted truncate">{currentModel?.name ?? selectedModel}</span>
                 </span>
                 <ChevronRight className="w-3 h-3 text-content-muted shrink-0" />
               </button>
             )}
+            {isMobileViewport && (
+              <div className="px-2.5 pt-2 pb-1 text-[10px] font-medium tracking-wider text-content-muted">工具</div>
+            )}
+            {/* 深度思考 / 智能搜索(仅移动端):胶囊里放不下第 4、5 个钮,收进 ⋯ 行内开关。
+                行本体必须是 div —— MiniSwitch 自身是 button,button 套 button 会被 HTML 解析降级并触发 hydration 报错 */}
+            <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 min-h-[44px] py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors">
+              <button
+                className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                onClick={() => onDeepThinkChange(!deepThink)}
+                aria-pressed={deepThink}
+              >
+                <Brain className="w-3.5 h-3.5 shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block font-medium">深度思考</span>
+                  <span className="block text-[10px] text-content-muted">回答前先展示推理过程</span>
+                </span>
+              </button>
+              <MiniSwitch on={deepThink} onClick={() => onDeepThinkChange(!deepThink)} />
+            </div>
+            {webSearchAvailable && onWebSearchChange && (
+              <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 min-h-[44px] py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors">
+                <button
+                  className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
+                  onClick={() => onWebSearchChange(!webSearch)}
+                  aria-pressed={webSearch}
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-medium">智能搜索</span>
+                    <span className="block text-[10px] text-content-muted">联网检索后再答</span>
+                  </span>
+                </button>
+                <MiniSwitch on={webSearch} onClick={() => onWebSearchChange(!webSearch)} />
+              </div>
+            )}
             {/* MCP 工具(仅移动端): 行内快速开关;点主体进管理菜单 */}
             {hasMcpEntry && (
-              <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors">
+              <div className="flex sm:hidden items-center gap-2.5 w-full px-2.5 min-h-[44px] py-2 rounded-lg text-xs text-content-primary hover:bg-surface-subtle active:bg-surface-subtle transition-colors">
                 <button
                   className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
                   onClick={() => { setMoreMenuOpen(false); setMcpMenuOpen(true) }}
@@ -449,7 +590,7 @@ export function ChatInput({
           </div>
         </>
       )}
-      {/* 移动端: 面具/MCP 管理菜单从 ⋯ 钮弹出(与桌面端各自钮弹出互斥,CSS 断点切换) */}
+      {/* 移动端: MCP 管理菜单从 ⋯ 钮弹出(面具已外显成胶囊内独立钮,不再走 ⋯ 二级) */}
       <div className="sm:hidden">
         {mcpMenuOpen && onMcpEnabledChange && (
           <McpToolMenu
@@ -458,43 +599,67 @@ export function ChatInput({
             onClose={() => setMcpMenuOpen(false)}
           />
         )}
-        {maskMenuOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
-            <div
-              className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-w-[calc(100vw-2rem)] flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
-              style={{ maxHeight: mobileMaskMenu.maxHeight }}
-              role="menu"
-            >
-              <MaskPickerMenu
-                activeMaskId={mask?.id ?? null}
-                userMasks={userMasks}
-                onSelect={(id) => { onMaskChange?.(id); setMaskMenuOpen(false) }}
-                onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
-                onClear={() => { onMaskChange?.(null); setMaskMenuOpen(false) }}
-              />
-            </div>
-          </>
-        )}
       </div>
+      {/* 手机端面具列表:胶囊内不再有独立钮,从 ⋯「面具」进入后贴底浮层展示(与模型快切同构) */}
+      {hasMaskEntry && isMobileViewport && maskMenuOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
+          <div
+            className="fixed inset-x-2 bottom-2 z-50 flex flex-col overflow-hidden rounded-2xl
+              border border-line bg-surface/95 glass-blur shadow-[0_18px_50px_rgb(0_0_0_/_0.28)]"
+            style={{ maxHeight: '55vh' }}
+            role="menu"
+          >
+            <MaskPickerMenu
+              activeMaskId={mask?.id ?? null}
+              userMasks={userMasks}
+              onSelect={(id) => { onMaskChange(id); setMaskMenuOpen(false) }}
+              onManage={() => { onManageMasks?.(); setMaskMenuOpen(false) }}
+              onClear={() => { onMaskChange(null); setMaskMenuOpen(false) }}
+            />
+          </div>
+        </>
+      )}
+      {/* 手机端模型半屏快切(portal 到 body,与欢迎页 hero 胶囊同一条 onModelChange 链路) */}
+      <ModelQuickSheet
+        open={modelSheetOpen}
+        onClose={() => setModelSheetOpen(false)}
+        models={models}
+        selectedModel={selectedModel}
+        onModelChange={onModelChange}
+      />
     </>
   )
+  // 手机端输入形态(桌面恒为 false,DOM 与类名不随之变化):
+  //   mobileCard —— 超过 2 行或挂了附件:圆角从 9999 收回 24px 卡片档,避免高胶囊拉成 stadium
+  //   mobileLong —— 超过 6 行:出现「收起/展开 + 计数」行(半屏编辑器的判据)
+  //   mobileWide —— 半屏展开中或长文:正文整行独占,⋯ + 发送 换到底部
+  // 必须声明在 toolPills 之前:toolPills 的 JSX 求值时就引用了这些标志
+  const mobileCard = isMobileViewport && (mobileLines > 2 || attachments.length > 0)
+  const mobileLong = isMobileViewport && mobileLines > 6
+  const mobileWide = longTextMode || mobileLong
+
   const toolPills = (
     <>
-            <FileUpload
-              attachments={attachments}
-              onAttachmentsChange={setAttachments}
-              disabled={isLoading}
-              hideAttachmentsPreview
-              variant="pill"
-              pillClassName={cn(iconBtnBase, pillIdle, 'border-0')}
-            />
+            {/* 附件钮:桌面外显;手机端撤掉(胶囊只留 ⋯ + 发送),入口改由 ⋯「添加附件」触发 */}
+            {!isMobileViewport && (
+              <FileUpload
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
+                disabled={isLoading}
+                hideAttachmentsPreview
+                variant="pill"
+                pillClassName={cn(iconBtnBase, pillIdle, 'border-0')}
+              />
+            )}
             {/* 深度思考开关(图标钮): 与模型选择器菜单里的开关同源(deepThink 状态) */}
             <button
               onClick={() => onDeepThinkChange(!deepThink)}
               disabled={isLoading}
               className={cn(
                 iconBtnBase,
+                // 手机端收进 ⋯ 面板(见 moreMenus),桌面端保持外显
+                'hidden sm:flex',
                 deepThink ? pillActive : pillIdle,
                 isLoading && 'opacity-50 cursor-not-allowed'
               )}
@@ -511,6 +676,8 @@ export function ChatInput({
                 disabled={isLoading}
                 className={cn(
                   iconBtnBase,
+                  // 手机端收进 ⋯ 面板,桌面端保持外显
+                  'hidden sm:flex',
                   webSearch ? pillActive : pillIdle,
                   isLoading && 'opacity-50 cursor-not-allowed'
                 )}
@@ -549,11 +716,12 @@ export function ChatInput({
                 )}
               </div>
             )}
-            {/* 面具(桌面外显): 未使用显示入口,使用中反色显示 avatar;移动端收纳进 ⋯ */}
-            {hasMaskEntry && (
-              <div className="relative hidden sm:block">
+            {/* 面具钮:桌面(欢迎页胶囊)外显;手机端改由 ⋯ 面板进入,列表用贴底浮层展示。
+                会话页桌面端仍由 ChatPanel 顶部面具 chip 承担,故 standard 变体桌面隐藏 */}
+            {hasMaskEntry && !isMobileViewport && (
+              <div className={cn('relative', variant === 'welcome' ? 'block' : 'hidden')}>
                 <button
-                  ref={desktopMaskMenu.triggerRef}
+                  ref={maskMenu.triggerRef}
                   onClick={() => setMaskMenuOpen((v) => !v)}
                   className={cn(iconBtnBase, mask ? pillActive : pillIdle)}
                   title={mask ? '当前面具,点击切换' : '选择面具'}
@@ -571,8 +739,8 @@ export function ChatInput({
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setMaskMenuOpen(false)} />
                     <div
-                      className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 z-50 w-64 flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
-                      style={{ maxHeight: desktopMaskMenu.maxHeight }}
+                      className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 z-50 w-64 max-md:w-[min(300px,calc(100vw-16px))] max-md:left-auto max-md:right-0 max-md:translate-x-0 max-md:top-auto max-md:bottom-full max-md:mt-0 max-md:mb-1.5 flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
+                      style={{ maxHeight: maskMenu.maxHeight }}
                       role="menu"
                     >
                       <MaskPickerMenu
@@ -587,32 +755,65 @@ export function ChatInput({
                 )}
               </div>
             )}
-            {/* ⋯ 更多工具(收纳菜单): 桌面=对比模式;移动=面具/MCP/对比 */}
-            {showMoreBtn && (
-              <div className="relative shrink-0">
-                <button
-                  ref={mobileMaskMenu.triggerRef}
-                  onClick={() => setMoreMenuOpen((v) => !v)}
-                  className={cn(
-                    iconBtnBase,
-                    !hasCompareEntry && 'sm:hidden',
-                    moreMenuOpen ? pillActive : pillIdle
-                  )}
-                  title="更多工具"
-                  aria-label="更多工具"
-                  aria-haspopup="menu"
-                  aria-expanded={moreMenuOpen}
-                >
-                  <MoreHorizontal className="w-3.5 h-3.5" />
-                </button>
-                {/* ⋯ 弹层: 以按钮为锚居中向上弹出(welcome/standard 共用) */}
-                {moreMenus}
-              </div>
-            )}
+            {/* ⋯ 更多工具(收纳菜单): 桌面=对比模式;手机=附件/面具/模型/深度思考/搜索/MCP/对比。
+                手机端弹层要贴输入卡右缘,故 max-md:static 撤掉自身定位锚点;
+                手机端恒显(它是唯一工具入口),桌面仅当有「对比模式」项时出现 */}
+            <div className={cn('relative shrink-0 max-md:static', !hasCompareEntry && 'hidden max-md:block', mobileWide && 'max-md:ml-auto')}>
+              <button
+                onClick={() => setMoreMenuOpen((v) => !v)}
+                className={cn(iconBtnBase, moreMenuOpen ? pillActive : pillIdle)}
+                title="更多工具"
+                aria-label="更多工具"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </button>
+              {/* ⋯ 弹层: 桌面以按钮为锚居中向上弹出;手机端贴输入卡右缘(两变体共用) */}
+              {moreMenus}
+            </div>
     </>
   )
 
   // 对比模式: 多模型选择行(welcome 与 standard 共用);移动端隐藏(md:flex),开启后替代右侧单模型选择器
+  // 手机端附件宿主:胶囊只留 ⋯ + 发送,上传进度卡挂在正文上方,选文件由 ⋯「添加附件」经 openRef 触发。
+  // 不包 wrapper:wrapper 会是胶囊的一个空 flex 子项,白占一行 + 4px 间距(实测胶囊 54→58)
+  const mobileFileUploadHost = isMobileViewport ? (
+    <FileUpload
+      attachments={attachments}
+      onAttachmentsChange={setAttachments}
+      disabled={isLoading}
+      hideAttachmentsPreview
+      hideTrigger
+      openRef={attachOpenRef}
+    />
+  ) : null
+
+  // 手机端长文顶行:「收起/展开」+ 字数·预计时长。手动收起后此行保留,否则无从再展开
+  const longTextHeader = mobileLong ? (
+    <div className="flex w-full items-center gap-2">
+      <button
+        onClick={() => {
+          if (longTextMode) {
+            manualCollapseRef.current = true
+            setLongTextMode(false)
+          } else {
+            manualCollapseRef.current = false
+            setLongTextMode(true)
+          }
+        }}
+        className="flex items-center gap-0.5 h-6 px-2 rounded-full shrink-0 bg-surface-muted text-[11px] text-content-secondary"
+        aria-label={longTextMode ? '收起长文编辑器' : '展开长文编辑器'}
+      >
+        <ChevronDown className={cn('w-3 h-3 transition-transform', !longTextMode && 'rotate-180')} aria-hidden />
+        {longTextMode ? '收起' : '展开'}
+      </button>
+      <span className="flex-1 min-w-0 text-right text-[11px] text-content-muted truncate">
+        {longTextCount(input)}
+      </span>
+    </div>
+  ) : null
+
   const compareModelsRow =
     compareMode && compareModels && onCompareModelsChange ? (
       <div className="hidden md:flex items-center justify-end gap-1 px-3 pt-1.5">
@@ -658,13 +859,12 @@ export function ChatInput({
       // -webkit-app-region,子元素不继承拖拽区,卡片内控件点击/选词照旧。
       <div
         data-tauri-drag-region=""
-        className={cn('relative flex-1 w-full flex flex-col justify-center px-4', className)}
+        className={cn('relative flex-1 w-full flex flex-col justify-center max-md:justify-start px-4', className)}
         style={{
           // 键盘弹出时让内容贴底(否则依旧被键盘遮住);
           // 没键盘时桌面/移动都垂直居中(只加 paddingBottom 占键盘)。
-          // 取键盘高度与底部安全区的较大者: 键盘弹出时用键盘高度,
-          // 收起时用 Home Indicator 安全区(PWA 全屏模式下非 0)。
-          paddingBottom: 'max(var(--keyboard-height, 0px), var(--sab, 0px))',
+          // --m-input-pad: 手机端胶囊底距(globals.css 断点定义,桌面 0)
+          paddingBottom: 'calc(var(--m-input-pad, 0px) + max(var(--keyboard-height, 0px), var(--sab, 0px)))',
         }}
       >
         {/* 壁纸图与可读性蒙版都合成在 shell 层(WelcomeWallpaperLayer);
@@ -722,9 +922,16 @@ export function ChatInput({
           </>
         )}
 
-        <div className="relative w-full max-w-2xl mx-auto -translate-y-[6vh] md:-translate-y-[8vh]">
+        {/* 方案 C 手机端:h-full + flex-col,hero 由 my-auto 在自由空间垂直居中,
+            输入卡与横滑卡贴底 —— 复刻原型「标语居中/卡片沉底」结构 */}
+        <div className="relative w-full max-w-2xl mx-auto -translate-y-[6vh] md:-translate-y-[8vh]
+          max-md:h-full max-md:flex max-md:flex-col max-md:justify-start max-md:translate-y-0">
           {/* 可选问候语(slot); 整体上移 6vh(移动)/8vh(桌面),视觉重心中间偏上 */}
           {welcomeHeader}
+
+          {/* 最近对话横滑卡已于 2026-10-05 从手机端欢迎页撤下(用户定案:只留问候语 + 输入胶囊)。
+              数据未动,入口仍在抽屉「最近历史」;组件文件 WelcomeCarousel.tsx 保留可随时回挂,
+              与 BottomDock 同一处置口径 */}
 
           {/* 草稿已恢复提示 —— 仅在有草稿时短暂出现 */}
           {draftRestored && input.trim() && (
@@ -759,15 +966,25 @@ export function ChatInput({
             </div>
           )}
 
-          {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构);relative 供 ⋯ 弹层锚定 */}
+          {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构);relative 供 ⋯ 弹层锚定
+              方案 C 手机端:胶囊化(26px 圆角+白玻璃+柔投影,原型 pill-input 材质) */}
           <div
-            className="relative rounded-xl border border-line bg-surface shadow-sm
-              focus-within:border-line-strong focus-within:shadow-md
-              transition-[border-color,box-shadow] duration-200"
+            className={cn(
+              'relative rounded-xl border border-line bg-surface shadow-sm',
+              'focus-within:border-line-strong focus-within:shadow-md',
+              'transition-[border-color,box-shadow] duration-200',
+              'max-md:flex max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
+              'max-md:rounded-full max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+              'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
+              // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
+              mobileCard && 'max-md:rounded-3xl'
+            )}
           >
-            {/* 附件预览(放在 textarea 上方,与 standard 变体一致) */}
+            {mobileFileUploadHost}
+            {longTextHeader}
+            {/* 附件预览(放在 textarea 上方,与 standard 变体一致);手机端整行占满胶囊上方 */}
             {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-2 px-4 pt-3">
+              <div className="flex flex-wrap gap-2 px-4 pt-3 max-md:w-full max-md:px-1 max-md:pt-1">
                 {attachments.map((att, idx) => (
                   <div
                     key={att.url + idx}
@@ -820,38 +1037,49 @@ export function ChatInput({
               placeholder="输入问题..."
               rows={1}
               disabled={isLoading}
-              className="block w-full bg-transparent text-sm text-content-primary placeholder:text-content-muted
-                resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-1 overflow-y-auto disabled:opacity-50"
+              className={cn(
+                'block w-full bg-transparent text-base sm:text-sm text-content-primary placeholder:text-content-muted',
+                'resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-1 overflow-y-auto disabled:opacity-50',
+                'max-md:flex-1 max-md:min-w-0 max-md:px-1.5 max-md:py-2 max-md:text-[15px] max-md:pb-2',
+                // 手机端长文:正文整行独占,⋯ + 发送 换到底部一行
+                mobileWide && 'max-md:w-full max-md:basis-full'
+              )}
               style={{
-                minHeight: '44px',
-                maxHeight: '164px',
+                // 手机端单行胶囊内收严到 36px(见 globals.css --m-ta-min),桌面保持 44px
+                minHeight: 'var(--m-ta-min, 44px)',
+                // 半屏编辑器接管高度时解除 164px 上限(height 由 adjustHeight 按视口写入)
+                maxHeight: isMobileViewport && longTextMode ? 'none' : '164px',
                 lineHeight: '24px',
               }}
             />
 
             {/* 对比模式: 多模型选择行(welcome 与 standard 共用) */}
             {compareModelsRow}
-            {/* 底部工具行: 左=工具胶囊组 右=模型选择+发送 */}
-            <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1">
-              <div className="flex items-center gap-1.5 min-w-0">
+            {/* 底部工具行: 左=工具胶囊组 右=模型选择+发送;手机端两包装 contents → 全部子项并入胶囊单行 */}
+            <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1 max-md:contents">
+              <div className="flex items-center gap-1.5 min-w-0 max-md:contents">
                 {toolPills}
               </div>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1 shrink-0 max-md:contents">
+                {/* 模型入口:手机端走 hero/会话页顶部胶囊,不在胶囊里重复占位 */}
                 {!compareMode && (
-                  <ModelSelector
-                    models={models}
-                    selectedModel={selectedModel}
-                    onModelChange={onModelChange}
-                    compact
-                  />
+                  <div className="max-md:hidden">
+                    <ModelSelector
+                      models={models}
+                      selectedModel={selectedModel}
+                      onModelChange={onModelChange}
+                      compact
+                    />
+                  </div>
                 )}
                 <button
                   onClick={handleSendDebounced}
                   disabled={(!input.trim() && attachments.length === 0) || isLoading}
                   aria-label="发送"
                   className={cn(
-                    // 移动端 ≥44px;桌面 36px
+                    // 手机端 38px 圆钮(原型 tiny-btn 档);桌面 36px;窄屏 44px 触控
                     'shrink-0 flex items-center justify-center w-11 h-11 sm:w-9 sm:h-9 rounded-full transition-colors',
+                    'max-md:w-[38px] max-md:h-[38px]',
                     'active:scale-95 touch-manipulation',
                     (input.trim() || attachments.length > 0) && !isLoading
                       ? 'bg-accent text-accent-foreground hover:bg-accent/90 animate-pop-in'
@@ -878,14 +1106,17 @@ export function ChatInput({
 
   // ============= STANDARD VARIANT =============
   return (
-    // 底部 padding = 间距 + max(软键盘高度, 底部安全区)。
+    // 底部 padding = 0.5rem 基础间距 + max(软键盘高度, 底部安全区)。
     // useVisualViewport hook 会把键盘高度写入 --keyboard-height(桌面上始终 0px);
     // --sab 是 Home Indicator 安全区(浏览器内为 0,PWA 全屏/无键盘时非 0),
     // 取较大者避免键盘弹出时叠加出多余空白。
     // 间距走 --m-input-pad:桌面回落 0.5rem(内联默认值),手机端由 globals 覆写成 0(贴边)
     <div
-      className={cn('relative z-20 px-0 pt-1 md:px-3', className)}
+    // 层级必须高于消息区的错误横幅浮层(z-40):⋯ 面板从胶囊向上弹到 60vh,
+    // 若沿用 z-20 会被横幅吃掉点击(实测 390×844 有横幅时「切换模型」点不动)
+      className={cn('relative z-[42] px-0 pt-1 md:px-3', className)}
       style={{
+        // --m-input-pad: 手机端胶囊底距(globals.css 断点定义,桌面 0.5rem)
         paddingBottom: 'calc(var(--m-input-pad, 0.5rem) + max(var(--keyboard-height, 0px), var(--sab, 0px)))',
       }}
     >
@@ -962,12 +1193,21 @@ export function ChatInput({
           'border-line/60',
           'bg-surface-glass glass-blur',
           'shadow-lg focus-within:border-line-strong',
-          'transition-all'
+          'transition-all',
+          // 方案 C 手机端:与欢迎页同款单行胶囊(圆角拉满 + 白玻璃 + 柔投影)
+          // base 是 flex-col,手机端必须显式改回 row,否则 flex-wrap 会横向开新列
+          'max-md:flex max-md:flex-row max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
+          'max-md:rounded-full max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+          'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
+          // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
+          mobileCard && 'max-md:rounded-3xl'
         )}
       >
+          {mobileFileUploadHost}
+          {longTextHeader}
           {/* Attachments preview row */}
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 px-4 pt-3">
+            <div className="flex flex-wrap gap-2 px-4 pt-3 max-md:w-full max-md:px-1 max-md:pt-1">
               {attachments.map((att, idx) => (
                 <div
                   key={att.url + idx}
@@ -1007,7 +1247,7 @@ export function ChatInput({
 
           {/* 发送前校验错误提示 */}
           {sendError && (
-            <div className="flex items-start gap-1.5 px-4 pt-2">
+            <div className="flex items-start gap-1.5 px-4 pt-2 max-md:w-full max-md:px-1">
               <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
               <p className="text-xs text-red-500 leading-relaxed flex-1 min-w-0">{sendError}</p>
               <button
@@ -1022,7 +1262,7 @@ export function ChatInput({
 
           {/* 草稿已恢复提示 —— 进入会话时短暂浮现,可手动关闭 */}
           {draftRestored && input.trim() && (
-            <div className="flex items-center gap-1.5 px-4 pt-2 text-content-muted">
+            <div className="flex items-center gap-1.5 px-4 pt-2 text-content-muted max-md:w-full max-md:px-1">
               <FileText className="w-3.5 h-3.5 shrink-0" />
               <span className="text-[11px] flex-1 min-w-0">已恢复上次未发送的内容</span>
               <button
@@ -1038,8 +1278,8 @@ export function ChatInput({
             </div>
           )}
 
-          {/* Textarea */}
-          <div className="px-4 pt-3">
+          {/* Textarea —— 手机端 wrapper 用 contents,让 textarea 直接成为胶囊行的 flex 子项 */}
+          <div className="px-4 pt-3 max-md:contents">
             <textarea
               ref={textareaRef}
               value={input}
@@ -1050,11 +1290,16 @@ export function ChatInput({
               disabled={isLoading}
               rows={1}
               className={cn(
-                'w-full resize-none bg-transparent text-sm',
+                'w-full resize-none bg-transparent text-base sm:text-sm',
                 'text-content-primary',
                 'placeholder:text-content-muted',
                 'focus:outline-none disabled:opacity-50',
-                'min-h-[24px] max-h-[200px]'
+                'min-h-[24px] max-h-[200px]',
+                // 方案 C 手机端:单行胶囊内的正文(36px 高、15px 字号、左右贴着胶囊内边距)
+                'max-md:flex-1 max-md:min-w-0 max-md:px-1.5 max-md:py-2 max-md:text-[15px]',
+                'max-md:min-h-[var(--m-ta-min)] max-md:max-h-[164px] max-md:overflow-y-auto',
+                // 手机端长文:正文整行独占并解除 164px 上限,⋯ + 发送 换到底部一行
+                mobileWide && 'max-md:w-full max-md:basis-full max-md:max-h-none'
               )}
             />
           </div>
@@ -1062,28 +1307,32 @@ export function ChatInput({
           {/* 对比模式: 多模型选择行(welcome 与 standard 共用,定义见 compareModelsRow) */}
           {compareModelsRow}
 
-          {/* Bottom controls row: 左侧工具胶囊组(上传/对比/深度思考/智能搜索/MCP/面具) + 右侧模型选择与发送 */}
-          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1.5">
+          {/* Bottom controls row: 左侧工具胶囊组(上传/对比/深度思考/智能搜索/MCP/面具) + 右侧模型选择与发送
+              手机端:两层 wrapper 都 contents,子项直接并入胶囊单行 */}
+          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1.5 max-md:contents">
             {/* 工具胶囊组(移动端只留图标,允许收窄) */}
-            <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0 max-md:contents">
               {toolPills}
             </div>
             {/* Model selector + send button */}
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1 shrink-0 max-md:contents">
               {!compareMode && (
-                <ModelSelector
-                  models={models}
-                  selectedModel={selectedModel}
-                  onModelChange={onModelChange}
-                  compact
-                />
+                <div className="max-md:hidden">
+                  <ModelSelector
+                    models={models}
+                    selectedModel={selectedModel}
+                    onModelChange={onModelChange}
+                    compact
+                  />
+                </div>
               )}
               {isLoading ? (
                 <button
                   onClick={onStop}
                   className={cn(
-                    // 移动端 ≥44px 触控,桌面端 28px
+                    // 手机端 38px 圆钮(与欢迎页胶囊同档),桌面 28px;必须撤掉 44px 触控下限否则 min-* 顶住尺寸
                     'h-7 w-7 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center rounded-full transition-colors shrink-0',
+                    'max-md:min-h-0 max-md:min-w-0 max-md:h-[38px] max-md:w-[38px]',
                     'bg-accent text-accent-foreground hover:bg-accent-hover'
                   )}
                   aria-label="停止生成"
@@ -1096,6 +1345,7 @@ export function ChatInput({
                   disabled={!input.trim() && attachments.length === 0}
                   className={cn(
                     'h-7 w-7 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center rounded-full transition-colors shrink-0',
+                    'max-md:min-h-0 max-md:min-w-0 max-md:h-[38px] max-md:w-[38px]',
                     'active:scale-95 touch-manipulation',
                     (input.trim() || attachments.length > 0)
                       ? 'bg-accent text-accent-foreground hover:bg-accent-hover'

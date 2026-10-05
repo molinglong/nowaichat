@@ -275,6 +275,11 @@ type ToastApi = {
   success: (message: string, opts?: Omit<ToastOptions, 'message'>) => Promise<void>
   warning: (message: string, opts?: Omit<ToastOptions, 'message'>) => Promise<void>
   info: (message: string, opts?: Omit<ToastOptions, 'message'>) => Promise<void>
+  /**
+   * 通道① 轻提示: 底部居中无标题胶囊, 2s 自动收。
+   * 只用于"已复制/已重新生成/已删除"这类即时回执 —— 需要用户决策的一律走确认框, 不要用它。
+   */
+  hint: (message: string) => Promise<void>
   /** 长驻 toast,需要用户主动关闭 */
   sticky: (kind: ToastKind, opts: ToastOptions) => Promise<void>
   /** 销毁所有 toast(测试 / 路由切换时使用) */
@@ -286,6 +291,7 @@ export const toast: ToastApi = {
   success: (message, opts) => show('success', { message, ...opts }),
   warning: (message, opts) => show('warning', { message, ...opts }),
   info: (message, opts) => show('info', { message, ...opts }),
+  hint: (message) => show('info', { message, title: '', position: 'bottomCenter', timeout: 2000 }),
   sticky: (kind, opts) => show(kind, { ...opts, timeout: 0 }),
   destroy: async () => {
     const it = await ensureClient()

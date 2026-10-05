@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
 import { STYLE_PRESETS } from '@/lib/ai/style-presets'
 import { maskInputSchema, type MaskDTO, type MaskFewShotTurn } from '@/lib/ai/mask-types'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface MaskFormState {
   rowId: string | null // null = 新建；非 null = 编辑该裸 cuid
@@ -111,11 +112,11 @@ export default function MasksSettings() {
   }
 
   async function handleDelete(m: MaskDTO) {
-    if (!window.confirm(`确定删除面具「${m.name}」吗？引用它的会话会自动恢复为无面具。`)) return
+    if (!(await confirmDialog({ title: '删除面具', message: `确定删除面具「${m.name}」吗？`, detail: '引用它的会话会自动恢复为无面具。', danger: true, okText: '删除' }))) return
     setDeletingId(m.rowId)
     try {
       await fetchJson<{ ok: boolean }>(`/api/masks/${m.rowId}`, { method: 'DELETE' })
-      toast.success('已删除')
+      toast.hint('已删除')
       await invalidate()
     } catch (e) {
       toast.error(errText(e))

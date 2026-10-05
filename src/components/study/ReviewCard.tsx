@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer'
 import { SUBJECT_LABELS } from '@/lib/study/subject-labels'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface QueueItem {
   id: string
@@ -76,7 +77,7 @@ export function ReviewCard() {
 
   const handleDelete = useCallback(async () => {
     if (!current || submitting) return
-    if (!window.confirm('确定删除这道错题吗?')) return
+    if (!(await confirmDialog({ title: '删除错题', message: '确定删除这道错题吗？', danger: true, okText: '删除' }))) return
     setSubmitting(true)
     try {
       const res = await fetch(`/api/study/notes/${current.id}`, { method: 'DELETE' })

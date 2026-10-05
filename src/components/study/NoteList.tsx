@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer'
 import { SUBJECT_LABELS } from '@/lib/study/subject-labels'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface NoteRow {
   id: string
@@ -53,12 +54,12 @@ export function NoteList() {
   }, [load])
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!window.confirm('确定删除这道错题吗?复习记录会一并删除。')) return
+    if (!(await confirmDialog({ title: '删除错题', message: '确定删除这道错题吗？', detail: '复习记录会一并删除。', danger: true, okText: '删除' }))) return
     try {
       const res = await fetch(`/api/study/notes/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setNotes((prev) => prev.filter((n) => n.id !== id))
-      toast.success('已删除', { title: '错题本' })
+      toast.hint('已删除')
     } catch (err) {
       console.error('[NoteList] delete failed:', err)
       toast.error('删除失败', { title: '错题本' })

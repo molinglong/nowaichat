@@ -16,6 +16,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useChatStore } from '@/store/chat-store'
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport'
+import { ModelQuickSheet } from './ModelQuickSheet'
 import type { ModelDefinition } from '@/lib/ai/types'
 import { PROVIDER_DOT, PROVIDER_NAMES } from '@/lib/ai/provider-meta'
 
@@ -59,6 +61,8 @@ export function ModelSelector({
   compact = false,
 }: ModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false)
+  // 方案 C 手机端:≤md 走 iOS 半屏快切(替代桌面 portal 下拉);服务端首帧 false → 桌面下拉
+  const isMobile = useIsMobileViewport()
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set())
   const [mounted, setMounted] = useState(false)
   // 用 ref 存位置 —— 每次更新不需要重新渲染
@@ -363,7 +367,18 @@ export function ModelSelector({
         <ChevronDown className="w-3 h-3 text-content-muted shrink-0" />
       </button>
 
-      {isOpen && mounted && createPortal(
+      {/* 方案 C 手机端:≤md 走 iOS 半屏快切(记录 usage 由 sheet 负责,此处传原始回调不重复计) */}
+      {isMobile && (
+        <ModelQuickSheet
+          open={isOpen}
+          onClose={() => setIsOpen(false)}
+          models={models}
+          selectedModel={selectedModel}
+          onModelChange={onModelChange}
+        />
+      )}
+
+      {isOpen && !isMobile && mounted && createPortal(
         <div
           ref={dropdownMenuRef}
           className={cn(

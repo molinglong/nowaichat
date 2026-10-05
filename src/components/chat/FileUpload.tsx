@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, DragEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, DragEvent } from 'react'
 import { Paperclip, X, Upload, FileText, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -25,6 +25,10 @@ interface FileUploadProps {
   variant?: 'icon' | 'pill'
   /** pill 变体的样式覆盖(twMerge 合并,后写优先),用于会话页紧凑胶囊 */
   pillClassName?: string
+  /** 不渲染上传触发钮:手机端胶囊只留 ⋯ + 发送,入口由外部经 openRef 唤起 */
+  hideTrigger?: boolean
+  /** 外部触发文件选择的句柄,挂载时写入、卸载时清空 */
+  openRef?: React.MutableRefObject<(() => void) | null>
 }
 
 export function deleteUploadedFile(url: string) {
@@ -94,10 +98,21 @@ export function FileUpload({
   hideAttachmentsPreview = false,
   variant = 'icon',
   pillClassName,
+  hideTrigger = false,
+  openRef,
 }: FileUploadProps) {
   const [uploading, setUploading] = useState<UploadingFile[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // 外部触发入口(手机端 ⋯ 面板「添加附件」):input 始终挂载,点击代理到隐藏 input
+  useEffect(() => {
+    if (!openRef) return
+    openRef.current = () => inputRef.current?.click()
+    return () => {
+      openRef.current = null
+    }
+  }, [openRef])
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -166,20 +181,29 @@ export function FileUpload({
     }
   }
 
+  // 隐藏文件选择器:trigger 收在外部(手机端 ⋯ 面板)时它是本组件唯一的常驻节点
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      multiple
+      accept="image/*,text/*,application/pdf,.xlsx,.xls,.docx,.html,.htm"
+      className="hidden"
+      onChange={(e) => {
+        if (e.target.files) handleFiles(e.target.files)
+        e.target.value = '' // reset
+      }}
+    />
+  )
+
+  // 手机端:无上传进行中且预览由宿主渲染时,只留这个 display:none 的 input。
+  // 若照常挂 flex 容器,它会作为空子项占掉胶囊一整行(实测手机端输入胶囊被顶高 4px)
+  if (hideTrigger && hideAttachmentsPreview && uploading.length === 0) return fileInput
+
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5 max-md:w-full">
       {/* Hidden file input */}
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept="image/*,text/*,application/pdf,.xlsx,.xls,.docx,.html,.htm"
-        className="hidden"
-        onChange={(e) => {
-          if (e.target.files) handleFiles(e.target.files)
-          e.target.value = '' // reset
-        }}
-      />
+      {fileInput}
 
       {/* Attachments preview */}
       {(!hideAttachmentsPreview || uploading.length > 0) &&
@@ -269,7 +293,8 @@ export function FileUpload({
         </div>
       )}
 
-      {/* Drag overlay hint / attach button row */}
+      {/* Drag overlay hint / attach button row —— hideTrigger(手机端)时整块不渲染,只留 input 与进度卡 */}
+      {!hideTrigger && (
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -315,6 +340,7 @@ export function FileUpload({
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

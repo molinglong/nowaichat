@@ -20,6 +20,7 @@ import { readFullFile, undoFile, writeFile, getWorkspaceDir } from '@/lib/tauri-
 import { getIsTauri } from '@/lib/tauri'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
 
 /** Monaco 共享配置(lang 映射/选项/主题/资源路径)从 lib 引入,与代码编辑器共用 */
 import {
@@ -132,8 +133,8 @@ export function FileEditorPanel({ embedded = false }: { embedded?: boolean }) {
     }
   }, [editorFile])
 
-  const requestClose = useCallback(() => {
-    if (dirty && !window.confirm('有未保存的修改,关闭后将丢失。确定关闭?')) return
+  const requestClose = useCallback(async () => {
+    if (dirty && !(await confirmDialog({ title: '关闭编辑器', message: '有未保存的修改，关闭后将丢失。', okText: '确定关闭', danger: true }))) return
     setDirty(false)
     closeEditor()
   }, [dirty, closeEditor])

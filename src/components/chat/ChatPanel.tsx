@@ -9,6 +9,7 @@ import type { UIMessage } from 'ai'
 import { ChevronDown } from 'lucide-react'
 import { ChatErrorBanner } from './ChatErrorBanner'
 import { MessageList } from './MessageList'
+import { HeroModelChip } from './HeroModelChip'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
 import { WriteDocPanel } from '@/components/write/WriteDocPanel'
@@ -2157,9 +2158,12 @@ export function ChatPanel({
           userMasks={userMasks}
           onManageMasks={() => { setSettingsSection('masks'); setSettingsOpen(true) }}
           welcomeHeader={(
-            <div className="text-center mb-8">
+            /* 手机端垂直居中必须上下都 auto:原来写 `my-auto` 又跟一个 `mb-0`,
+               下边距被钉死 → 自由空间全给上边距,整块沉到底。
+               分隔由 auto 边距负责;variant 类在 Tailwind 里排在无修饰类之后,所以能压住 mb-8(桌面仍走 mb-8) */
+            <div className="text-center mb-8 max-md:mt-auto max-md:mb-auto">
               <h2
-                className="text-content-primary text-[24px] md:text-[32px] font-thin leading-[1.2] tracking-[0.02em]"
+                className="m-hero-title text-content-primary text-[24px] md:text-[32px] max-md:text-[28px] font-thin leading-[1.2] tracking-[0.02em]"
                 style={{
                   fontFamily: "'PingFang SC', 'PingFang SC Sub', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif",
                 }}
@@ -2175,15 +2179,19 @@ export function ChatPanel({
                 <span className="grid-night">暮色四合，今天想做点什么？</span>
                 <span className="grid-nightfall">夜深了，今天想做点什么？</span>
               </h2>
-              {/* 副标题: 日期 + 当前模型,给问候语增加层次 */}
-              <p className="mt-3 text-xs text-content-muted tracking-wide">
+              {/* 副标题: 日期 + 当前模型,给问候语增加层次
+                  方案 C 手机端:模型名升级为玻璃胶囊(点击弹半屏快切),普通文本仅桌面显示 */}
+              <p className="m-hero-sub mt-3 text-xs text-content-muted tracking-wide">
                 {getDateLine()}
                 <span className="fest-only fest-tag"> · 中秋</span>
                 <span className="grid-dawn fest-tag"> · 日出</span>
                 <span className="grid-day fest-tag"> · 正午</span>
                 <span className="grid-night fest-tag"> · 暮色</span>
                 <span className="grid-nightfall fest-tag"> · 夜晚</span>
-                {currentModelName ? ` · ${currentModelName}` : ''}
+                <span className="max-md:hidden">{currentModelName ? ` · ${currentModelName}` : ''}</span>
+                <span className="max-md:block mt-1.5">
+                  <HeroModelChip models={mergedModels} selectedModel={currentModel} onModelChange={handleModelChange} />
+                </span>
               </p>
             </div>
           )}
@@ -2319,6 +2327,10 @@ export function ChatPanel({
             onSend={handleSend}
             onStop={handleStop}
             isLoading={isLoading}
+            mask={activeMask}
+            onMaskChange={handleMaskChange}
+            userMasks={userMasks}
+            onManageMasks={() => { setSettingsSection('masks'); setSettingsOpen(true) }}
             models={mergedModels}
             selectedModel={currentModel}
             onModelChange={handleModelChange}
