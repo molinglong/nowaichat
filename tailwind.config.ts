@@ -37,11 +37,20 @@ const config: Config = {
           foreground: "rgb(var(--accent-foreground) / <alpha-value>)",
           soft: "rgb(var(--accent-soft) / <alpha-value>)",
         },
+        // 危险语义色（弹窗三通道：错误卡描边 / 确认框 danger 主按钮）
+        danger: {
+          DEFAULT: "rgb(var(--danger) / <alpha-value>)",
+          soft: "rgb(var(--danger-soft) / <alpha-value>)",
+        },
         // 代码块
         code: {
           header: "rgb(var(--code-header) / <alpha-value>)",
           bg: "rgb(var(--code-bg) / <alpha-value>)",
         },
+      },
+      transitionTimingFunction: {
+        // 浮层进出场统一缓动（与 --ease 同一曲线）
+        pop: "cubic-bezier(0.32, 0.72, 0.28, 1)",
       },
       fontFamily: {
         sans: ['var(--font-sans)', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],

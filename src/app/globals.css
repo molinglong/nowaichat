@@ -85,6 +85,13 @@
   /* 节日点缀金(中秋层的月盘/桂花点/品牌月相/金色标签)。基线给中性金,
      节日配色块内覆盖;始终有值,避免元素在切换过渡态引用未定义变量 */
   --fest-gold: 214 178 106;
+
+  /* 危险语义色(弹窗三通道: 错误卡/确认框主按钮)。基线用卷面红同族而非 tailwind 荧光红,
+     与中性灰体系同饱和度;--ease 为浮层进出场统一缓动 */
+  --danger: 190 26 34;
+  --danger-soft: 254 233 234;
+  --ease: cubic-bezier(0.32, 0.72, 0.28, 1);
+
 }
 
 .dark {
@@ -147,6 +154,11 @@
 
   /* 节日点缀金: 暗色下提亮一档 */
   --fest-gold: 226 186 108;
+
+  /* 危险语义色: 暗底上压一档亮度才不刺眼,soft 做错误卡底色 */
+  --danger: 248 113 113;
+  --danger-soft: 61 20 24;
+
 }
 
 /* ── 配色维度：html[data-pal]（与明暗独立的一维）──────────────────
@@ -400,9 +412,50 @@ html {
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
 
+  /* 手机端顶部 chrome 基线(浮钮簇 / 抽屉头部簇 / 设置面板页头簇共用的同一坐标系)
+     2026-10-05 用户现场改定:去掉原来的 sat+56 空带,三簇一律贴顶;但纯 sat 在真机上是 0
+     (Safari/Chrome 非 PWA 拿不到 safe-area),贴顶=被地址栏压住,所以保底 14px。
+     即:有刘海走安全区,无刘海/浏览器内走 14px,不再有任何一条空带。
+     左右内缩 14px 与同排间距 8px 不变。 */
+  --m-chrome-top: max(var(--sat, 0px), 14px);
+  --m-chrome-inset: 14px;
+  --m-chrome-gap: 8px;
+
   /* 软键盘高度(由 useVisualViewport hook 写入)。键盘未弹出时为 0px。
      ChatInput 等组件用 padding-bottom: var(--keyboard-height, 0px) 顶住键盘。 */
   --keyboard-height: 0px;
+}
+
+/* 手机端设置面板字号下限:桌面密排用的 text-[10px]/text-[11px] 在 390px 屏上属于
+   "看不清"级别,而设置面板里这两档合计上百处 —— 逐条改等于每次改版都要重做一遍。
+   故在 ≤md 按档整体抬一级,且只挂在 .m-set(SettingsModal 卡片)上,聊天界面与其它
+   页面不受影响;桌面端被 media query 挡在外,一行像素都没变。 */
+@media (max-width: 767px) {
+  .m-set .text-\[11px\] { font-size: 12.5px; }
+  .m-set .text-\[10px\] { font-size: 12px; }
+  /* 生图模型卡上的 'turbo'/'plus'/'openai' 徽标用的是 text-[9px],不在 11/10 两档里,单独补 */
+  .m-set .text-\[9px\] { font-size: 12px; }
+  /* 表单控件同档抬到拇指尺寸:桌面用的 py-1/px-2 + 12px select/input 在手机上既按不准,
+     字号又低于 16px —— iOS Safari 对 <16px 的输入框会强制放大页面(聚焦即整屏 zoom)。
+     16px 是这个 zoom 的阈值,顺手把 min-height 抬到 44(iOS HIG 命中区)。 */
+  .m-set input[type="text"],
+  .m-set input:not([type]),
+  .m-set input[type="search"],
+  .m-set input[type="url"],
+  .m-set input[type="number"],
+  .m-set input[type="password"],
+  .m-set textarea,
+  .m-set select {
+    font-size: 16px;
+    min-height: 44px;
+    border-radius: 10px;
+  }
+  /* 桌面遗留的小按钮(py-1 / py-1.5 + 11px,实测 26~32px 高)在手机上按不准,统一抬到 40px 命中区。
+     两个排除项都是实测踩出来的:
+       `:not([class*="min-h-"])` —— 本条不分层,`.m-set button`(0,1,1) 压过 Tailwind 工具类
+         `.min-h-\[52px\]`(0,1,0),不排除会把主从列表的 52px 整行压回 44px;
+       `:not(.absolute)` —— 输入框右侧的眼睛显隐钮是绝对定位贴边的,抬到 40px 会撑破输入框。 */
+  .m-set button:not([class*="min-h-"]):not(.absolute) { min-height: 40px; }
 }
 
 body {
@@ -478,6 +531,19 @@ body {
   /* 聊天消息滚动容器:防止整页橡皮筋回弹 */
   .scroll-contain {
     overscroll-behavior: contain;
+  }
+
+  /* 方案 C 手机端设置 Tabs 用:横向滚动条藏掉(全局 *::-webkit-scrollbar 会给出可见轨道),
+     两端用 mask 渐隐 —— 最后一项被切一半时读作「还能往右滑」而不是「界面被截断」。
+     只挂在 <md 的横向滚动容器上(桌面端侧栏是纵向的,不需要)。 */
+  .h-scroll-fade {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+  }
+  .h-scroll-fade::-webkit-scrollbar {
+    display: none;
   }
 
   /* ── 统一玻璃配方(全站单一事实源):模糊 20px + 饱和度 180% ──
@@ -2007,4 +2073,132 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
 }
 .chart-card .recharts-pie-sector path {
   stroke: rgb(var(--surface));
+}
+
+/* ═══════════════ 方案 C · 手机端壳层(≤767px)═══════════════
+   设计来源: D:\项目表1\手机端方案C-完整交互.html(用户定稿原型,2026-10-03)。
+   壁纸=全局主视觉:移动端去掉桌面共用的 0.6 基座蒙版,改「每页渐变蒙版」三档 ——
+   欢迎页最透(壁纸是主角)/ 会话页居中 / 功能页最重(保卡片可读)。
+   桌面端(≥768px)不受本段任何规则影响。 ═══════════════ */
+@media (max-width: 767px) {
+  /* 输入胶囊底距(ChatInput 两变体经 --m-input-pad 消费;桌面默认值写在组件内联) */
+  :root {
+    --m-input-pad: 1.25rem;
+    /* 胶囊内 textarea 的行高下限:桌面 44px 触控高度在单行胶囊里过高,手机端收到 36px */
+    --m-ta-min: 36px;
+  }
+
+  /* 壁纸:蒙版职责移交 .mobile-page-scrim,只留原图;定位与原型一致(主体偏上) */
+  .welcome-wallpaper {
+    background-image: url('/wallpaper/bizhi.jpg');
+    background-position: center 20%;
+  }
+
+  /* 每页渐变蒙版:垫在壁纸(z:-1)之上、内容列之下(WelcomeWallpaperLayer DOM 顺序保证) */
+  .mobile-page-scrim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: block;
+  }
+  /* 欢迎页档:问候语(白字)落在 30%-55% 高度带,原 0.10 太透 —— 实测浅色壁纸段白字不可读,
+     把中段抬到 0.30 并把压白提前到 52%,同时保住顶部壁纸的鲜亮度 */
+  .mobile-page-scrim.mps-home {
+    background: linear-gradient(180deg,
+      rgb(var(--background) / 0.40) 0%,
+      rgb(var(--background) / 0.22) 28%,
+      rgb(var(--background) / 0.46) 52%,
+      rgb(var(--background) / 0.80) 74%,
+      rgb(var(--background) / 0.95) 100%);
+  }
+  .mobile-page-scrim.mps-chat {
+    background: linear-gradient(180deg,
+      rgb(var(--background) / 0.58) 0%,
+      rgb(var(--background) / 0.74) 40%,
+      rgb(var(--background) / 0.92) 100%);
+  }
+  .mobile-page-scrim.mps-work {
+    background: linear-gradient(180deg,
+      rgb(var(--background) / 0.68) 0%,
+      rgb(var(--background) / 0.80) 40%,
+      rgb(var(--background) / 0.94) 100%);
+  }
+
+  /* 壁纸在场上时:欢迎页 hero 与功能页页头改白字 + 轻投影(原型定稿);
+     壁纸关(纯色底)时不命中 :has,保持主题字色 —— 与内容列透明同一判据 */
+  .app-shell:has(> .welcome-wallpaper) .m-hero-title {
+    color: #fff;
+    text-shadow: 0 1px 16px rgb(0 0 0 / 0.35);
+  }
+  .app-shell:has(> .welcome-wallpaper) .m-hero-sub {
+    color: rgb(255 255 255 / 0.85);
+    text-shadow: 0 1px 8px rgb(0 0 0 / 0.35);
+  }
+  .app-shell:has(> .welcome-wallpaper) .m-work-title {
+    color: #fff;
+    text-shadow: 0 1px 10px rgb(0 0 0 / 0.3);
+  }
+  .app-shell:has(> .welcome-wallpaper) .m-work-sub {
+    color: rgb(255 255 255 / 0.8);
+    text-shadow: 0 1px 8px rgb(0 0 0 / 0.3);
+  }
+
+  /* 方案 C 玻璃卡(功能页卡片/横滑最近对话卡共用):近实白玻璃+白描边+18px 圆角+柔投影 */
+  .m-glass-card {
+    background: rgb(var(--surface) / 0.80);
+    border: 1px solid rgb(255 255 255 / 0.55);
+    border-radius: 18px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.10);
+  }
+
+  /* 欢迎页「最近对话」横滑卡(WelcomeCarousel 用 .vc-card):
+     原型定稿材质 —— 262px 定宽、18px 圆角、74% 白玻璃 + 白描边 + 深柔投影。
+     此前只有 JSX 挂类名而没有这条规则,卡片塌成一行 41px 高、文字被右缘裁掉 */
+  .vc-card {
+    border-radius: 18px;
+    padding: 13px 15px 12px;
+    background: rgb(var(--surface) / 0.74);
+    border: 1px solid rgb(255 255 255 / 0.5);
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.12);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+}
+
+/* 全屏抽屉级联入场(.mdrawer-open 由 MobileDrawer 在 open 时挂上;退场瞬间复位零过渡) */
+.mdrawer .mdr-st {
+  opacity: 0;
+  transform: translateX(-16px);
+}
+.mdrawer-open .mdr-st {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 0.32s ease var(--d, 0s),
+    transform 0.32s cubic-bezier(0.32, 0.72, 0.28, 1) var(--d, 0s);
+}
+.mdrawer:not(.mdrawer-open) .mdr-st {
+  transition: none;
+}
+
+/* 通道① 轻提示:手机端 toast 玻璃胶囊居中(重排 iziToast 宿主;桌面 topRight 不受影响) */
+@media (max-width: 767px) {
+  .iziToast-wrapper-topRight {
+    left: 0;
+    right: 0;
+    top: 104px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+  }
+  .iziToast-wrapper-topRight .iziToast {
+    width: max-content;
+    max-width: 320px;
+    pointer-events: auto;
+  }
+  .iziToast-wrapper-bottomCenter .iziToast {
+    width: max-content;
+    max-width: 320px;
+  }
 }
