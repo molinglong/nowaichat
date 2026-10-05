@@ -24,6 +24,41 @@ type Tick = {
   level: number
 }
 
+/** extractHeadings 的逐条结果(不含 msgIndex —— 下标随新消息漂移,每次组装) */
+type OutlineLabel = Omit<Tick, 'msgIndex'>
+
+/**
+ * 逐条消息的大纲标签缓存: messageId → { fp, label }。
+ * ticks 的依赖是 messages 引用,流式期 useChat 每 50ms 节流就换一个引用 ——
+ * 无缓存时每次都要对全部历史 assistant 文本重跑 extractHeadings(长对话 O(n) 热点,
+ * "对话一长、生成期间掉帧"的主因)。命中条件用 id+文本长度指纹:
+ * 已完成消息引用恒定长度恒定,唯一直变的是生成中那条,每轮只重算它一条。
+ */
+const labelCache = new Map<string, { fp: number; label: OutlineLabel }>()
+const LABEL_CACHE_MAX = 1200
+
+function outlineLabelOf(m: UIMessage): OutlineLabel {
+  let text = ''
+  for (const p of m.parts) {
+    if (p.type === 'text') text += p.text
+  }
+  const fp = text.length
+  const hit = labelCache.get(m.id)
+  if (hit && hit.fp === fp) return hit.label
+  const headings = extractHeadings(text)
+  const label: OutlineLabel =
+    headings.length > 0
+      ? { domId: `${m.id}-${headings[0].id}`, messageId: m.id, label: headings[0].text, level: headings[0].level }
+      : (() => {
+          const firstLine = text.trim().split(/\r?\n/).find((s) => s.trim().length > 0) ?? ''
+          const cleaned = firstLine.replace(/^#+\s*/, '').trim()
+          return { domId: null, messageId: m.id, label: cleaned.length > 0 ? cleaned : '新消息', level: 2 }
+        })()
+  if (labelCache.size > LABEL_CACHE_MAX) labelCache.clear()
+  labelCache.set(m.id, { fp, label })
+  return label
+}
+
 /**
  * 右侧"对话节点"面板 —— 与左侧 Sidebar 镜像,但只在对话页出现。
  *
@@ -44,26 +79,7 @@ export function OutlineSidebar({
     const list: Tick[] = []
     messages.forEach((m, msgIndex) => {
       if (m.role !== 'assistant') return
-      const text = m.parts
-        .filter((p) => p.type === 'text')
-        .map((p) => p.text)
-        .join('')
-      const headings = extractHeadings(text)
-      if (headings.length > 0) {
-        const h = headings[0]
-        list.push({
-          domId: `${m.id}-${h.id}`,
-          messageId: m.id,
-          msgIndex,
-          label: h.text,
-          level: h.level,
-        })
-      } else {
-        const firstLine = text.trim().split(/\r?\n/).find((s) => s.trim().length > 0) ?? ''
-        const cleaned = firstLine.replace(/^#+\s*/, '').trim()
-        const label = cleaned.length > 0 ? cleaned : '新消息'
-        list.push({ domId: null, messageId: m.id, msgIndex, label, level: 2 })
-      }
+      list.push({ ...outlineLabelOf(m), msgIndex })
     })
     return list
   }, [messages])

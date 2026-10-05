@@ -1254,7 +1254,9 @@ export function ChatPanel({
   }, [messagesScrollEl])
 
   // 生成期间贴底跟随:scrollTop 直接赋值(瞬时)而非 smooth 动画,
-  // 避免动画与用户滚动形成拉锯;仅在跟随状态下执行
+  // 避免动画与用户滚动形成拉锯;仅在跟随状态下执行。
+  // ResizeObserver 驱动:内容把滚动容器撑高即顺势贴底,替代旧的 150ms 轮询
+  // (轮询既会在内容静止时空转,又最快滞后 150ms)。
   useEffect(() => {
     if (!isLoading) return
     shouldAutoScrollRef.current = true
@@ -1262,10 +1264,23 @@ export function ChatPanel({
     const el = messagesScrollEl
     if (!el) return
     el.scrollTop = el.scrollHeight
-    const timer = setInterval(() => {
-      if (shouldAutoScrollRef.current) el.scrollTop = el.scrollHeight
-    }, 150)
-    return () => clearInterval(timer)
+    let raf = 0
+    const ro = new ResizeObserver(() => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        if (shouldAutoScrollRef.current) el.scrollTop = el.scrollHeight
+      })
+    })
+    // 观察滚动容器本身:overflow-y-auto 的内容增高会改变其 scrollHeight,
+    // 但 clientHeight 不变 —— 需观察子树撑高,改观察列表外层包裹
+    const contentWrap = el.firstElementChild
+    ro.observe(el, { box: 'border-box' })
+    if (contentWrap instanceof HTMLElement) ro.observe(contentWrap, { box: 'border-box' })
+    return () => {
+      ro.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
   }, [isLoading, messagesScrollEl])
 
   // 进入历史会话定位到最新一条:滚动容器挂载时 scrollTop 恒为 0,而消息是 createdAt
