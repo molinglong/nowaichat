@@ -1,5 +1,6 @@
 'use client'
 
+import { useReportRenderError } from '@/lib/client-diagnostics'
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react'
 
 export default function GlobalError({
@@ -9,6 +10,8 @@ export default function GlobalError({
   error: Error & { digest?: string }
   reset: () => void
 }) {
+  useReportRenderError(error, 'global')
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface px-4">
       <div className="max-w-md w-full text-center space-y-6">

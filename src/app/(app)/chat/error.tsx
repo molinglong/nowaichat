@@ -1,6 +1,7 @@
 'use client'
 
 import { AlertTriangle, RefreshCw, MessageSquare } from 'lucide-react'
+import { useReportRenderError } from '@/lib/client-diagnostics'
 
 export default function ChatError({
   error,
@@ -9,6 +10,8 @@ export default function ChatError({
   error: Error & { digest?: string }
   reset: () => void
 }) {
+  useReportRenderError(error, 'chat')
+
   return (
     <div className="flex items-center justify-center h-full bg-surface px-4">
       <div className="max-w-sm w-full text-center space-y-5">

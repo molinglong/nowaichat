@@ -26,6 +26,8 @@ const EPHEMERAL_METHOD_GUARDED: Array<[string, string[]]> = [
   ["/api/masks", ["POST", "PATCH", "PUT", "DELETE"]], // 面具库写操作；GET 放行(选择器要用)
   ["/api/custom-models", ["POST", "PATCH", "PUT", "DELETE"]], // 自定义模型写操作；GET 放行(模型选择器要用，返回不含密钥明文)
   ["/api/images", ["DELETE", "PATCH", "PUT"]], // 图库删除；GET/POST(生图)放行
+  // 取证上报:POST 必须放行(访客崩了同样要留证据),但清库只允许账户主人在正式登录态做
+  ["/api/client-diagnostics", ["DELETE"]],
 ]
 
 function isDeniedForEphemeral(pathname: string, method: string): boolean {
@@ -119,7 +121,8 @@ export async function middleware(req: NextRequest) {
     const pageDenied =
       pathname === "/images" || pathname.startsWith("/images/") ||
       pathname === "/explore" || pathname.startsWith("/explore/") ||
-      pathname === "/study" || pathname.startsWith("/study/")
+      pathname === "/study" || pathname.startsWith("/study/") ||
+      pathname === "/diagnostics" || pathname.startsWith("/diagnostics/")
     if (pageDenied) {
       return NextResponse.redirect(new URL("/chat", req.url))
     }

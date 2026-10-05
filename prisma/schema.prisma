@@ -117,6 +117,9 @@ model Conversation {
   compareModels String?  // JSON 数组,如 ["gpt-4o","claude-sonnet"]
   styleOffset   Int      @default(50)
   stylePreset   String?  // 新版风格预设:id 来自 STYLE_PRESETS(balanced/practical/dev/editor/mentor/scholar). 为 null 时视为 balanced
+  /// 回复长度档:id 来自 REPLY_LENGTH_LEVELS(minimal/short/standard/detailed).
+  /// 为 null 时视为 standard(不注入长度段,与新增该字段前的行为一致)
+  replyLength   String?
   maskId        String?  // 面具 id:内置面具 id 来自 BUILTIN_MASKS(如 translator);将来用户自定义面具用 user:<cuid> 前缀. 为 null 时不启用面具
   /// 临时聊天标记:临时模式(访客密码登录)下创建的对话进入隔离区,
   /// 正常模式列表不可见,设置→账号信息 的临时聊天专区可找回/转正/删除。
@@ -700,4 +703,24 @@ model ApiToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, revokedAt])
+}
+
+/// 浏览器端错误取证(React #185 循环更新/未捕获异常/流式断流)。
+/// 按 hash 合并同类命中,context 里带渲染计数器与面包屑 —— 生产包堆栈被 minify 后
+/// 只剩 react-dom 内部帧,定位元凶靠的是"崩前谁在疯狂刷帧"这份遥测。
+model ClientDiagEvent {
+  id        String   @id @default(cuid())
+  hash      String   @unique
+  kind      String // react-loop | error | promise | console | stream
+  message   String   @db.Text
+  stack     String?  @db.Text
+  page      String?
+  userAgent String?
+  userIds   Json     @default("[]") // 命中过的用户,判断影响面(自己 or 访客)
+  context   Json // 面包屑 + 渲染计数 + 采样环境
+  hits      Int      @default(1)
+  firstAt   DateTime @default(now())
+  lastAt    DateTime @default(now())
+
+  @@index([lastAt])
 }
