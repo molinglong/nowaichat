@@ -694,7 +694,7 @@ function MSwitchRow({
     >
       <span className="min-w-0">
         <span className="block truncate text-[15.5px] text-content-primary md:text-xs md:text-content-secondary">{label}</span>
-        {help && <span className="mt-0.5 block text-[12.5px] leading-snug text-content-muted md:text-[11px]">{help}</span>}
+        {help && <span className="mt-0.5 block text-[12.5px] leading-snug text-content-muted md:text-[11px] max-md:hidden">{help}</span>}
       </span>
       <MSwitch on={checked} />
     </button>
@@ -814,7 +814,7 @@ function MobilePickerPage({ spec, back, shown, onClose }: { spec: PickerSpec; ba
         <h3 className="min-w-0 truncate text-[17px] font-semibold text-content-primary">{spec.title}</h3>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
-        {spec.help && <p className="pt-3 text-[12.5px] leading-relaxed text-content-muted">{spec.help}</p>}
+        {/* 手机端统一去「介绍」:选择页顶部说明不再渲染(2026-10-06 用户定案);help 数据仍保留,便于回调复用 */}
         <div className="mt-2 divide-y divide-line/50 overflow-hidden rounded-xl border border-line/60 bg-surface">
           {spec.options.map((o) => {
             const on = o.value === spec.value
@@ -5502,7 +5502,7 @@ export function SettingsModal({
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
                     <div className="text-left">
                       <p className="text-xs text-content-secondary">AI 风格</p>
-                      <p className="text-[11px] text-content-muted">选择 AI 回答的语气与详略风格</p>
+                      <p className="text-[11px] text-content-muted max-md:hidden">选择 AI 回答的语气与详略风格</p>
                     </div>
                     <StylePicker
                       value={conversationStylePreset}
@@ -5534,7 +5534,7 @@ export function SettingsModal({
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
                     <div className="text-left">
                       <p className="text-xs text-content-secondary">AI 篇幅</p>
-                      <p className="text-[11px] text-content-muted">只规定篇幅，不改变语气与内容准确性</p>
+                      <p className="text-[11px] text-content-muted max-md:hidden">只规定篇幅，不改变语气与内容准确性</p>
                     </div>
                     <ReplyLengthSlider
                       value={conversationReplyLength}
@@ -5570,7 +5570,7 @@ export function SettingsModal({
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
                     <div className="text-left">
                       <p className="text-xs text-content-secondary">外观</p>
-                      <p className="text-[11px] text-content-muted">
+                      <p className="text-[11px] text-content-muted max-md:hidden">
                         {themeChoice === 'grid'
                           ? '格子四个光态：日出 / 白天(正午) / 暮色(日落) / 晚上(深夜)'
                           : '月白·桂花金仅深色可用'}
@@ -5693,7 +5693,7 @@ export function SettingsModal({
                           />
                           <div className="min-w-0">
                             <p className="text-xs text-content-secondary">背景</p>
-                            <p className="text-[11px] text-content-muted">
+                            <p className="text-[11px] text-content-muted max-md:hidden">
                               {backdropMode === 'image'
                                 ? '新对话欢迎页显示内置壁纸'
                                 : '纯色界面;壁纸仅新对话欢迎页生效'}
@@ -5806,7 +5806,7 @@ export function SettingsModal({
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 flex items-center justify-between gap-3">
                       <div className="text-left min-w-0">
                         <p className="text-xs text-content-secondary">结束临时会话</p>
-                        <p className="text-[11px] text-content-muted">退出登录并返回临时聊天登录页</p>
+                        <p className="text-[11px] text-content-muted max-md:hidden">退出登录并返回临时聊天登录页</p>
                       </div>
                       <button
                         type="button"
@@ -5977,7 +5977,7 @@ function PresetModelsManager({
         <p className="text-[11px] text-red-500 px-0.5">⚠️ {error}</p>
       )}
 
-      <p className="text-[11px] text-content-muted leading-relaxed">
+      <p className="text-[11px] text-content-muted leading-relaxed max-md:hidden">
         在每个内置厂商下，可以隐藏不需要的预置模型，或添加自定义的模型 ID（自动复用该厂商的 API Key）。
       </p>
 
@@ -6305,7 +6305,7 @@ function ApiTokensSection() {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs text-content-secondary">API 令牌</p>
-            <p className="text-[11px] text-content-muted">供新标签页等本地静态页以 Bearer Token 调用待办/快问 API,无需浏览器登录态</p>
+            <p className="text-[11px] text-content-muted max-md:hidden">供新标签页等本地静态页以 Bearer Token 调用待办/快问 API,无需浏览器登录态</p>
           </div>
           <button
             type="button"
