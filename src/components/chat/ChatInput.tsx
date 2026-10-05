@@ -1197,10 +1197,12 @@ export function ChatInput({
           // 方案 C 手机端:与欢迎页同款单行胶囊(圆角拉满 + 白玻璃 + 柔投影)
           // base 是 flex-col,手机端必须显式改回 row,否则 flex-wrap 会横向开新列
           'max-md:flex max-md:flex-row max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
-          'max-md:rounded-full max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+          // 手机端贴边后底角圆弧与屏幕缘脱相:底部两角切直角(dock 入底边),顶部保留胶囊弧
+          'max-md:rounded-full max-md:rounded-b-none max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
           'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
           // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
-          mobileCard && 'max-md:rounded-3xl'
+          // (只收上两角——写 rounded-3xl 会被 cn 的 tailwind-merge 判为覆盖 rounded-b-none,底角又圆回去)
+          mobileCard && 'max-md:rounded-t-3xl'
         )}
       >
           {mobileFileUploadHost}
