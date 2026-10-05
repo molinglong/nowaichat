@@ -4,9 +4,11 @@ import { Sidebar } from '@/components/sidebar/Sidebar'
 import { TopBar } from '@/components/TopBar'
 import { TopFade } from '@/components/TopFade'
 import { SettingsModal } from '@/components/SettingsModal'
-import { BottomDock } from '@/components/BottomDock'
 import { ContextMenuHost } from '@/components/ui/ContextMenu'
+import { ConfirmDialogHost } from '@/components/ui/ConfirmDialog'
 import { WelcomeWallpaperLayer } from '@/components/WelcomeWallpaperLayer'
+import { MobileFloatButtons } from '@/components/mobile/MobileFloatButtons'
+import { MobileDrawer } from '@/components/mobile/MobileDrawer'
 
 /**
  * 四个主 tab(chat/images/explore/study)共享的 shell layout。
@@ -46,16 +48,20 @@ export default async function AppLayout({
           {/* 上沿渐隐:内容滚上去时不再被硬切,而是渐隐着「冲出去」(浮簇本身无底板)。
               仅滚动后显形,静置/短会话不出现,故不吃留白 —— 见 TopFade.tsx */}
           <TopFade />
+          {/* 方案 C 手机端(≤md):悬浮圆钮(返回/抽屉/设置)+ 全屏大字导航抽屉。
+              BottomDock 已随方案 C 撤下,导航统一走抽屉(组件保留可随时回挂) */}
+          <MobileFloatButtons />
           <main className="flex-1 overflow-hidden">
             {children}
           </main>
-          {/* 移动端底部 Dock(页面导航下沉,md 以下渲染;桌面端 null) */}
-          <BottomDock />
         </div>
+        <MobileDrawer />
       </div>
       <SettingsModal />
       {/* 全局右键菜单宿主(单例):消息气泡 / 代码块 / 会话列表等场景通过 contextMenuStore 弹出 */}
       <ContextMenuHost />
+      {/* 通道③ 确认框宿主(单例):confirmDialog() 的 Promise 在此落地,须与 SettingsModal 同级 */}
+      <ConfirmDialogHost />
     </div>
   )
 }

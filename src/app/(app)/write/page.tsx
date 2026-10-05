@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { WriteDocList } from '@/components/write/WriteDocList'
 import { WriteEditor } from '@/components/write/WriteEditor'
 import { WriteWorkPanel } from '@/components/write/WriteWorkPanel'
+import { MobileWorkHead } from '@/components/mobile/MobileWorkHead'
 import type { WriteDocSummary } from '@/components/write/types'
 
 /**
@@ -140,7 +141,9 @@ export default function WritePage() {
         {activeId ? (
           <WriteEditor key={activeId} docId={activeId} onOpenList={() => setListOpen(true)} />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center max-md:justify-start max-md:px-5">
+            <MobileWorkHead icon={PenLine} title="写作画布" subtitle="长篇创作 · AI 加持,人物卡/大纲续写不跑偏" />
+            <div className="flex flex-col items-center justify-center gap-3 max-md:my-auto max-md:w-full max-md:rounded-[18px] max-md:border max-md:border-white/55 max-md:bg-surface/80 max-md:p-6 max-md:shadow-[0_8px_24px_rgb(0_0_0_/_0.10)]">
             <div className="w-12 h-12 rounded-2xl bg-surface-subtle flex items-center justify-center">
               <PenLine className="w-5 h-5 text-content-muted" />
             </div>
@@ -160,6 +163,7 @@ export default function WritePage() {
               {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
               新建文档
             </button>
+            </div>
           </div>
         )}
       </section>

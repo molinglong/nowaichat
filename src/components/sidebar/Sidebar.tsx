@@ -462,19 +462,15 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Mobile overlay backdrop — not needed on tablets and above */}
-      {sidebarEffectiveOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+      {/* 方案 C:移动端(<md)旧抽屉遮罩已随全屏 V2 抽屉(MobileDrawer)下线 ——
+          aside 本体在 <md 由 max-md:hidden 整体隐藏,桌面端(≥md)侧栏行为不变 */}
 
       {/* Sidebar */}
       <aside
         className={cn(
           // app-shell-sidebar: shell 层壁纸激活时由 globals.css :has 规则改半透明(毛玻璃透壁纸)
-          'app-shell-sidebar fixed top-1.5 bottom-1.5 left-1.5 z-50 w-56 flex flex-col',
+          // max-md:hidden: 方案 C 手机端侧栏改走全屏 V2 抽屉(MobileDrawer),旧 w-56 浮层整体下线
+          'app-shell-sidebar fixed top-1.5 bottom-1.5 left-1.5 z-50 w-56 flex flex-col max-md:hidden',
           // pb-[var(--sab)]: PWA 全屏模式下列表底部让出 Home Indicator 安全区(浏览器内为 0)
           'pb-[var(--sab)]',
           // 侧栏材质 = 「次级面」: 底色走 --surface-muted(比内容区的 --surface 暗一档,

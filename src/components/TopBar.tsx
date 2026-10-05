@@ -104,6 +104,7 @@ export function TopBar() {
    * 后端: POST /api/conversations/branch
    */
   const [isBranching, setIsBranching] = useState(false)
+
   const handleBranchConversation = useCallback(async () => {
     if (isBranching || !currentConversationId) return
     setIsBranching(true)
@@ -183,12 +184,15 @@ export function TopBar() {
         />
       )}
 
-      {/* ── <md 移动端顶栏带(原样保留):汉堡 + 页面标题 + 设置 ──
-             data-app-topbar: 向上弹出的浮动菜单据此避让此带,
-             不让菜单顶被这根 fixed 带盖住(见 useMaskMenuMaxHeight) ── */}
+      {/* ── <md 移动端顶栏带(方案 C 起停用):汉堡+标题+设置已由悬浮圆钮
+             (MobileFloatButtons)+ 全屏抽屉(MobileDrawer)接管。保留 JSX 便于回退,
+             仅以 hidden 整体下线;data-app-topbar 消费方(useMaskMenuMaxHeight)
+             对元素缺失有优雅兜底 ── */}
       <header
         data-app-topbar=""
-        className="md:hidden relative z-40 flex items-center h-11 px-1.5 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass glass-blur"
+        className={cn(
+          'hidden relative z-40 items-center h-11 px-1.5 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass glass-blur'
+        )}
         {...dragProps}
         {...(inTauri
           ? {

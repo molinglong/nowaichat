@@ -35,8 +35,9 @@ interface ConversationsPage {
 const PAGE_SIZE = 20
 const MAX_ITEMS = 3
 
-/** 相对时间: 刚刚/N 分钟前/N 小时前/昨天/N 天前/M月D日(跨年沿用月日,极简即可) */
-function relativeTime(iso: string): string {
+/** 相对时间: 刚刚/N 分钟前/N 小时前/昨天/N 天前/M月D日(跨年沿用月日,极简即可)
+ *  导出共享:方案 C 手机端的全屏抽屉(MobileDrawer)历史行也用它 */
+export function relativeTime(iso: string): string {
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return ''
   const min = Math.floor((Date.now() - t) / 60000)
@@ -90,21 +91,24 @@ export function RecentChats() {
 
   return (
     <div className="md:hidden mt-3">
-      <p className="px-2 mb-1 text-[11px] tracking-wide text-content-muted">最近对话</p>
-      <div>
+      <p className="px-2 mb-1.5 text-[11px] tracking-wide text-content-secondary/90 [text-shadow:0_1px_2px_rgb(var(--background)/0.8)]">
+        最近对话
+      </p>
+      <div className="flex flex-col gap-1.5">
         {items.map((c) => (
           <button
             key={c.id}
             onClick={() => router.push(`/chat/c/${c.id}`)}
             aria-label={`打开对话：${c.title || '未命名对话'}`}
-            className="flex h-11 w-full items-center gap-2 rounded-lg px-2 text-left
+            className="flex h-11 w-full items-center gap-2 rounded-lg px-2.5 text-left
+              bg-surface-muted/75 border border-line/40 backdrop-blur-sm
               active:bg-surface-subtle active:scale-[0.99] transition-all touch-manipulation"
             style={{ WebkitTapHighlightColor: 'transparent' }}
           >
-            <span className="min-w-0 flex-1 truncate text-[13px] text-content-secondary">
+            <span className="min-w-0 flex-1 truncate text-[13px] text-content-primary">
               {c.title || '未命名对话'}
             </span>
-            <span className="shrink-0 text-[10px] text-content-muted" suppressHydrationWarning>
+            <span className="shrink-0 text-[10px] text-content-secondary" suppressHydrationWarning>
               {relativeTime(c.updatedAt)}
             </span>
           </button>

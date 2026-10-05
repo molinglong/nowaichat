@@ -23,10 +23,13 @@ import {
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { AuthErrorBoundary } from '@/components/AuthErrorBoundary'
+import { MobileWorkHead } from '@/components/mobile/MobileWorkHead'
 import { ClientOnly } from '@/components/ClientOnly'
 import { queryKeys, STALE, IMAGES_PAGE_SIZE as PAGE_SIZE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import { deleteUploadedFile } from '@/components/chat/FileUpload'
+import { confirmDialog } from '@/components/ui/ConfirmDialog'
+import { toast } from '@/lib/toast'
 
 interface GeneratedImage {
   id: string
@@ -433,7 +436,7 @@ function ImagesContent() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确定删除这张图片吗?')) return
+    if (!(await confirmDialog({ title: '删除图片', message: '确定删除这张图片吗？', danger: true, okText: '删除' }))) return
     try {
       const res = await fetch(`/api/images/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('删除失败')
@@ -442,7 +445,7 @@ function ImagesContent() {
       setLatestGeneratedId((prev) => (prev === id ? null : prev))
       setViewMode((prev) => (prev === 'preview' && latestGeneratedId === id ? 'gallery' : prev))
     } catch (err) {
-      alert(err instanceof Error ? err.message : '删除失败')
+      toast.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 
@@ -501,15 +504,18 @@ function ImagesContent() {
 
   return (
     <div className="h-full flex flex-col">
+      {/* 方案 C 手机端页头(徽章+标题+副标题,让开悬浮圆钮) */}
+      <MobileWorkHead icon={Sparkles} title="生图工作台" subtitle={imageSettings.model ? `${imageSettings.model} · 每张图需数秒生成` : '通义万相 · 每张图需数秒生成'} />
       {/* data-tauri-drag-region="deep":客户端下内容区顶部此栏即页面「标题栏」,
           deep = 子树任意处按下都能拖窗(标题文字/图标也算),视觉与手感整块一致;
-          按钮等可点元素由 Tauri 脚本自动排除(模型下拉照旧可点),双击转最大化 */}
+          按钮等可点元素由 Tauri 脚本自动排除(模型下拉照旧可点),双击转最大化
+          方案 C 手机端:本条桌面标题栏下线(md:hidden → hidden md:flex),移动端由 MobileWorkHead 承担 */}
       <div
         data-tauri-drag-region="deep"
-        className="px-4 py-3 border-b border-line/50 flex items-center gap-2 shrink-0 relative"
+        className="flex px-4 md:py-3 max-md:pt-2 max-md:pb-1 max-md:px-6 max-md:justify-end border-b md:border-line/50 max-md:border-transparent items-center gap-2 shrink-0 relative"
       >
-        <Sparkles className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-semibold">生图工作台</h2>
+        <Sparkles className="hidden md:block w-4 h-4 text-accent" />
+        <h2 className="hidden md:block text-sm font-semibold">生图工作台</h2>
         <div className="ml-auto relative" ref={modelDropRef}>
           <button
             onClick={() => setModelDropdownOpen((o) => !o)}
@@ -616,7 +622,8 @@ function ImagesContent() {
       </div>
 
       <div className="flex-1 flex flex-col md:grid md:grid-cols-[40%_1fr] min-h-0 overflow-hidden">
-        <aside className="w-full shrink-0 border-b md:border-b-0 md:border-r border-line/50 p-4 flex flex-col gap-3 overflow-y-auto">
+        <aside className="w-full shrink-0 border-b md:border-b-0 md:border-r border-line/50 max-md:border-transparent p-4 flex flex-col gap-3 overflow-y-auto
+          max-md:[&>div]:rounded-[18px] max-md:[&>div]:border max-md:[&>div]:border-white/55 max-md:[&>div]:bg-surface/80 max-md:[&>div]:p-4 max-md:[&>div]:shadow-[0_8px_24px_rgb(0_0_0_/_0.10)]">
           <div>
             <label className="text-xs text-content-secondary font-medium">提示词</label>
             <textarea
@@ -628,14 +635,15 @@ function ImagesContent() {
               maxLength={500}
               className={cn(
                 'mt-1.5 w-full min-h-28 max-h-60 px-3 py-2 rounded-lg resize-none',
-                'bg-surface-subtle border border-line/60 text-sm leading-relaxed',
+                'bg-surface-subtle border border-line/60 text-base sm:text-sm leading-relaxed',
                 'placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-accent/40',
                 'transition-shadow'
               )}
             />
             <div className="flex items-center justify-between mt-1 text-[11px] text-content-muted">
               <span>{prompt.length}/500</span>
-              <span>Cmd/Ctrl + Enter 生成</span>
+              {/* 桌面快捷键提示;触屏无键盘意义,仅 sm+ 显示 */}
+              <span className="hidden sm:inline">Cmd/Ctrl + Enter 生成</span>
             </div>
           </div>
 
