@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -109,5 +109,138 @@ export function ConfirmDialog({
       </div>
     </div>,
     document.body
+  )
+}
+
+/* ── 命令式确认框(方案 C 手机端「弹窗三通道」之③)─────────────────
+   与上方声明式 ConfirmDialog 并存:Sidebar 等老调用仍走 props 版,
+   新增移动端浮层走 Promise 版 —— confirmDialog(opts) => Promise<boolean>,
+   由 <ConfirmDialogHost /> 在 (app)/layout.tsx 单点挂载。 */
+export interface ConfirmOptions {
+  /** 标题;省略时用默认「确认操作」 */
+  title?: string
+  message: string
+  /** 次级说明,灰色小字 */
+  detail?: string
+  okText?: string
+  cancelText?: string
+  /** 不可恢复操作:主按钮转红并默认聚焦取消,防误按回车 */
+  danger?: boolean
+}
+
+interface Item extends ConfirmOptions {
+  resolve: (v: boolean) => void
+}
+
+let submit: ((item: Item) => void) | null = null
+/** host 挂载前的调用先进队,挂载后立即补弹,避免点击静默失效 */
+const pending: Item[] = []
+
+export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const item = { ...opts, resolve }
+    if (submit) submit(item)
+    else pending.push(item)
+  })
+}
+
+const CLOSE_MS = 160
+
+export function ConfirmDialogHost() {
+  const [stack, setStack] = useState<Item[]>([])
+  const [leaving, setLeaving] = useState(false)
+  const okRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  const push = useCallback((item: Item) => setStack((s) => [...s, item]), [])
+
+  useEffect(() => {
+    submit = push
+    pending.splice(0).forEach(push)
+    return () => {
+      if (submit === push) submit = null
+    }
+  }, [push])
+
+  const current = stack[stack.length - 1]
+
+  const settle = useCallback(
+    (v: boolean) => {
+      if (!current || leaving) return
+      setLeaving(true)
+      window.setTimeout(() => {
+        setStack((s) => s.slice(0, -1))
+        setLeaving(false)
+        current.resolve(v)
+      }, CLOSE_MS)
+    },
+    [current, leaving]
+  )
+
+  useEffect(() => {
+    if (!current) return
+    setLeaving(false)
+    // danger 时焦点给「取消」: 回车不该直接落进不可恢复的操作
+    ;(current.danger ? cancelRef : okRef).current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        settle(false)
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [current, settle])
+
+  if (!current) return null
+  const danger = !!current.danger
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
+      <div
+        onClick={() => settle(false)}
+        className={`absolute inset-0 bg-black/45 transition-opacity duration-150 ${
+          leaving ? 'opacity-0' : 'opacity-100'
+        }`}
+      />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={current.title ?? '确认操作'}
+        className={`relative w-[300px] max-w-full rounded-3xl bg-surface px-5 pt-5 pb-4 shadow-[0_24px_70px_rgba(0,0,0,0.28)] transition-all duration-150 ease-pop ${
+          leaving ? 'scale-[0.97] opacity-0' : 'scale-100 opacity-100'
+        }`}
+      >
+        <p className="text-center text-[15px] font-semibold leading-6 text-content-primary">
+          {current.title ?? '确认操作'}
+        </p>
+        <p className="mt-1.5 text-center text-[13px] leading-relaxed text-content-secondary">
+          {current.message}
+        </p>
+        {current.detail && (
+          <p className="mt-1 text-center text-[11px] leading-relaxed text-content-muted">
+            {current.detail}
+          </p>
+        )}
+        <div className="mt-4 flex gap-2">
+          <button
+            ref={cancelRef}
+            onClick={() => settle(false)}
+            className="flex-1 rounded-xl bg-surface-subtle py-2.5 text-[13px] font-medium text-content-secondary transition-colors hover:bg-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong"
+          >
+            {current.cancelText ?? '取消'}
+          </button>
+          <button
+            ref={okRef}
+            onClick={() => settle(true)}
+            className={`flex-1 rounded-xl py-2.5 text-[13px] font-medium text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong ${
+              danger ? 'bg-danger hover:bg-danger/85' : 'bg-accent hover:bg-accent-hover'
+            }`}
+          >
+            {current.okText ?? '确认'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
