@@ -878,14 +878,15 @@ export function ChatInput({
 
   // ============= STANDARD VARIANT =============
   return (
-    // 底部 padding = 0.5rem 基础间距 + max(软键盘高度, 底部安全区)。
+    // 底部 padding = 间距 + max(软键盘高度, 底部安全区)。
     // useVisualViewport hook 会把键盘高度写入 --keyboard-height(桌面上始终 0px);
     // --sab 是 Home Indicator 安全区(浏览器内为 0,PWA 全屏/无键盘时非 0),
     // 取较大者避免键盘弹出时叠加出多余空白。
+    // 间距走 --m-input-pad:桌面回落 0.5rem(内联默认值),手机端由 globals 覆写成 0(贴边)
     <div
-      className={cn('relative z-20 px-3 pt-1', className)}
+      className={cn('relative z-20 px-0 pt-1 md:px-3', className)}
       style={{
-        paddingBottom: 'calc(0.5rem + max(var(--keyboard-height, 0px), var(--sab, 0px)))',
+        paddingBottom: 'calc(var(--m-input-pad, 0.5rem) + max(var(--keyboard-height, 0px), var(--sab, 0px)))',
       }}
     >
       <div className="max-w-2xl mx-auto">

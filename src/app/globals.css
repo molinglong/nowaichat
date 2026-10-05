@@ -2081,9 +2081,11 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
    欢迎页最透(壁纸是主角)/ 会话页居中 / 功能页最重(保卡片可读)。
    桌面端(≥768px)不受本段任何规则影响。 ═══════════════ */
 @media (max-width: 767px) {
-  /* 输入胶囊底距(ChatInput 两变体经 --m-input-pad 消费;桌面默认值写在组件内联) */
+  /* 输入胶囊底距(ChatInput 经 --m-input-pad 消费;桌面默认 0.5rem 写在组件内联)。
+     2026-10-06 用户现场改定:手机端左/下/右一律贴边(0),顶部 pt-1 不动 ——
+     底距只保留 max(软键盘高度, Home Indicator 安全区),键盘/刘海仍让得开。 */
   :root {
-    --m-input-pad: 1.25rem;
+    --m-input-pad: 0px;
     /* 胶囊内 textarea 的行高下限:桌面 44px 触控高度在单行胶囊里过高,手机端收到 36px */
     --m-ta-min: 36px;
   }
