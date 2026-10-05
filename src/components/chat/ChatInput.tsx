@@ -975,6 +975,8 @@ export function ChatInput({
               'transition-[border-color,box-shadow] duration-200',
               'max-md:flex max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
               'max-md:rounded-full max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+              // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .pill 定稿改主题线色
+              'dark:max-md:border-line/90',
               'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
               // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
               mobileCard && 'max-md:rounded-3xl'
@@ -1199,6 +1201,8 @@ export function ChatInput({
           'max-md:flex max-md:flex-row max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
           // 手机端贴边后底角圆弧与屏幕缘脱相:底部两角切直角(dock 入底边),顶部保留胶囊弧
           'max-md:rounded-full max-md:rounded-b-none max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+          // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .pill 定稿改主题线色
+          'dark:max-md:border-line/90',
           'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
           // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
           // (只收上两角——写 rounded-3xl 会被 cn 的 tailwind-merge 判为覆盖 rounded-b-none,底角又圆回去)

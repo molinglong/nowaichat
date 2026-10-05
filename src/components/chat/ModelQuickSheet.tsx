@@ -89,6 +89,8 @@ export function ModelQuickSheet({ open, onClose, models, selectedModel, onModelC
         aria-label="切换模型"
         className={cn(
           'fixed inset-x-0 bottom-0 z-[58] overflow-hidden rounded-t-[28px] border-t border-white/55',
+          // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .sheet 定稿改主题线色
+          'dark:border-line/90',
           'bg-surface/95 shadow-[0_18px_50px_rgba(0,0,0,0.28)]',
           'transition-transform duration-[340ms] ease-[cubic-bezier(.32,.72,.28,1)]',
           shown ? 'translate-y-0' : 'translate-y-full'
