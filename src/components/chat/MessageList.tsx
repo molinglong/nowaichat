@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
+import { useRenderProbe } from '@/lib/client-diagnostics'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Bot } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -71,6 +72,7 @@ export function MessageList({
   virtualized,
   scrollElement,
 }: MessageListProps) {
+  useRenderProbe('MessageList')
   // 键盘导航:收集每个消息的 ref,按 id 索引
   const messageRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const focusedMessageId = useChatStore((s) => s.focusedMessageId)
@@ -376,8 +378,8 @@ export function MessageList({
 
   const pendingPlaceholder =
     isPending && messages.length > 0 && messages[messages.length - 1].role === 'user' ? (
-      <div className="flex gap-2.5 px-4 py-2" aria-hidden>
-        <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5">
+      <div className="flex gap-2.5 px-4 max-md:px-2 py-2" aria-hidden>
+        <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5 max-md:hidden">
           <Bot className="w-3 h-3" />
         </div>
         <div className="flex items-center gap-1.5 py-1">

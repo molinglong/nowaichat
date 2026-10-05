@@ -10,6 +10,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "其他",
   general: "其他",
   manual: "手动添加",
+  learning_gap: "薄弱考点",
 }
 
 export function getCategoryLabel(category: string): string {

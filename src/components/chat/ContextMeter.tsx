@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRenderProbe } from '@/lib/client-diagnostics'
 import { Gauge, Layers, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
@@ -33,6 +34,7 @@ interface ContextMeterProps {
  * 占用比例与自动压缩阈值(60%)同口径估算,>60% 琥珀、>80% 红色警示。
  */
 export function ContextMeter({ conversationId, contextWindow, refreshSignal }: ContextMeterProps) {
+  useRenderProbe('ContextMeter')
   const [info, setInfo] = useState<ContextInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [compacting, setCompacting] = useState(false)

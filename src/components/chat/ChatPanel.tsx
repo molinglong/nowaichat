@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useRenderProbe, recordStreamStatus, addCrumb } from '@/lib/client-diagnostics'
 import { useChat } from '@ai-sdk/react'
 import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
@@ -16,6 +17,7 @@ import { CodePanel } from '@/components/code/CodePanel'
 import { ChatPreviewPanel } from './ChatPreviewPanel'
 import { WorkSidePane } from '@/components/workspace/WorkSidePane'
 import { OutlineSidebar } from './OutlineSidebar'
+import { pinScrollToBottom } from './chat-list-bridge'
 import { InfoAsidePanel, INFO_PANEL_WIDTH, INFO_TAB_WIDTH } from './InfoAsidePanel'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { ContextMeter } from './ContextMeter'
@@ -158,6 +160,8 @@ interface ChatPanelProps {
   laneInitialMessages?: UIMessage[][]
   /** 当前会话已保存的回复风格 preset id,默认 balanced */
   initialStylePreset?: string | null
+  /** 当前会话已保存的回复长度档 id,默认 standard */
+  initialReplyLength?: string | null
   /** 当前会话已保存的面具 id(内置面具);null 表示无面具 */
   initialMaskId?: string | null
   /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
@@ -180,11 +184,13 @@ export function ChatPanel({
   compareModels: compareModelsProp,
   laneInitialMessages,
   initialStylePreset,
+  initialReplyLength,
   initialMaskId,
   initialCompareVote,
   autoSendText,
   studyMode,
 }: ChatPanelProps) {
+  useRenderProbe('ChatPanel')
   const [currentModel, setCurrentModel] = useState(initialModel)
   // 写作画布/预览面板/文件编辑器打开时桌面端压缩聊天区让位(与面板同宽并排,豆包式)
   const writePanelOpen = useChatStore((s) => s.writePanelDocId !== null)
@@ -223,6 +229,8 @@ export function ChatPanel({
   const setConversationStylePreset = useChatStore(state => state.setConversationStylePreset)
   const conversationMaskId = useChatStore(state => state.conversationMaskId)
   const setConversationMaskId = useChatStore(state => state.setConversationMaskId)
+  const conversationReplyLength = useChatStore(state => state.conversationReplyLength)
+  const setConversationReplyLength = useChatStore(state => state.setConversationReplyLength)
 
   // 移动端软键盘:把键盘高度写入 --keyboard-height,让 ChatInput 用
   // padding-bottom: var(--keyboard-height,0px) 顶住键盘。
@@ -236,6 +244,16 @@ export function ChatPanel({
     const stored = localStorage.getItem('chat:stylePreset')
     setConversationStylePreset(stored || 'balanced')
   }, [initialConversationId, initialStylePreset, setConversationStylePreset])
+
+  // 长度档恢复:已有会话用会话 DB 值;新对话沿用上次选择(localStorage),默认 standard
+  useEffect(() => {
+    if (initialConversationId) {
+      setConversationReplyLength(initialReplyLength ?? 'standard')
+      return
+    }
+    const stored = localStorage.getItem('chat:replyLength')
+    setConversationReplyLength(stored || 'standard')
+  }, [initialConversationId, initialReplyLength, setConversationReplyLength])
 
   // 面具恢复:已有会话用 DB 值;新对话不再"记忆"上次的面具(总忘记关),
   // 默认回到无面具;仅侧边栏「选面具开新对话」的一次性信号才带入
@@ -560,6 +578,7 @@ export function ChatPanel({
   const mcpEnabledRef = useRef(mcpEnabled)
   const conversationStylePresetRef = useRef(conversationStylePreset)
   const conversationMaskIdRef = useRef(conversationMaskId)
+  const conversationReplyLengthRef = useRef(conversationReplyLength)
   useEffect(() => {
     currentModelRef.current = currentModel
     deepThinkRef.current = deepThink
@@ -568,7 +587,8 @@ export function ChatPanel({
     mcpEnabledRef.current = mcpEnabled
     conversationStylePresetRef.current = conversationStylePreset
     conversationMaskIdRef.current = conversationMaskId
-  }, [currentModel, deepThink, webSearch, searchEngine, mcpEnabled, conversationStylePreset, conversationMaskId])
+    conversationReplyLengthRef.current = conversationReplyLength
+  }, [currentModel, deepThink, webSearch, searchEngine, mcpEnabled, conversationStylePreset, conversationMaskId, conversationReplyLength])
 
   // Create transport with current model, conversationId, deepThink, and webSearch.
   // 用 useMemo 收敛创建;所有可变值都通过 getter 读 ref,保证请求时拿到最新值。
@@ -584,6 +604,7 @@ export function ChatPanel({
           get searchEngine() { return searchEngineRef.current },
           get mcpEnabled() { return mcpEnabledRef.current },
           get stylePreset() { return conversationStylePresetRef.current },
+          get replyLength() { return conversationReplyLengthRef.current },
           get maskId() { return conversationMaskIdRef.current },
           // 学习模式:页面级常量(prop),服务端据此强挂教学工具+能力段
           ...(studyMode ? { studyMode: true } : {}),
@@ -1014,7 +1035,13 @@ export function ChatPanel({
     // 仅当 local_file 结果刚回填、模型尚未据此续答时,自动再发一次请求收尾(判据见 helper,杜绝死循环)
     sendAutomaticallyWhen: ({ messages }) => shouldContinueAfterLocalFile(messages),
     onFinish: async ({ message, isError, isAbort }) => {
-      if (isError || isAbort) return
+      if (isError) return
+      if (isAbort) {
+        // 中止:服务端不推进 conversation.updatedAt,但会话行早已存在;
+        // bump 让侧栏立刻捕获该会话,不再等下一轮无关刷新才"回来"
+        bumpConversationVersion()
+        return
+      }
       const convId = conversationIdRef.current
       if (!convId) return
       // 客户端工具轮(local_file / code_edit / preview_check):tool part 生命周期由前端管理
@@ -1032,6 +1059,8 @@ export function ChatPanel({
           )
         })
       ) {
+        // 服务端成功路径已推进 updatedAt;客户端工具轮跳过内容同步,但列表仍需刷新
+        bumpConversationVersion()
         return
       }
       // 系统通知:回复完成且窗口失焦时弹通知(仅桌面端;开关在设置-聊天行为,默认开)。
@@ -1090,6 +1119,15 @@ export function ChatPanel({
 
   // setMessages 引用稳定(来自 useChat),挂到 ref 上供 onFinish 内的最终内容同步使用
   setMessagesRef.current = setMessages
+
+  // 取证面包屑:#185 这类崩溃的生产堆栈只剩 react-dom 帧,能定元凶的是"崩前那一刻
+  // 流式状态怎么跳、每秒渲染了多少次"。状态变化与上游报错都进环形缓冲随证据一起上报。
+  useEffect(() => {
+    recordStreamStatus(status, `消息 ${messages.length} 条`)
+  }, [status, messages.length])
+  useEffect(() => {
+    if (error) addCrumb('stream-error', error.message || String(error))
+  }, [error])
 
   // 收工验收门(verify-gate):agent 本回合成功改过工作区文件(local_file create/edit)、
   // 之后没有任何一次 project_check 跑绿、且模型以文本收尾时,自动注入一条打回消息,
@@ -1230,6 +1268,21 @@ export function ChatPanel({
     return () => clearInterval(timer)
   }, [isLoading, messagesScrollEl])
 
+  // 进入历史会话定位到最新一条:滚动容器挂载时 scrollTop 恒为 0,而消息是 createdAt
+  // 升序渲染,顶部即最早的消息 —— 不主动置底就会停在第一条。
+  // 只做一次(按 conversationId 重挂载,切会话自然重来);生成中交给上面的贴底跟随,
+  // 避免两条路径抢滚动。校正循环在 bridge 里逐帧跟随,用户一旦上滑立即让路。
+  const initialScrollDoneRef = useRef(false)
+  useEffect(() => {
+    if (initialScrollDoneRef.current) return
+    const el = messagesScrollEl
+    if (!el || isLoading || messages.length === 0) return
+    initialScrollDoneRef.current = true
+    // 循环自持,不交给 effect cleanup 取消:内联 ref 回调会让 messagesScrollEl 在
+    // 重渲染中 null→el 翻转并触发本 effect 重跑,若跟着取消就永远校不完。
+    pinScrollToBottom(el, () => shouldAutoScrollRef.current)
+  }, [messagesScrollEl, isLoading, messages.length])
+
   // 回到底部按钮:恢复跟随并瞬时滚到最新内容
   const handleScrollToBottom = useCallback(() => {
     const el = messagesScrollEl
@@ -1323,12 +1376,24 @@ export function ChatPanel({
       // 不阻塞发送;本次 getter 读到的可能是上一次快照,注入段已向模型声明"可能滞后")
       if (inTauri) void ensureWorkspaceSnapshot()
       sendMessage({ text })
+      // 新会话可见性兜底:服务端把会话行建在流开始前,但 X-Conversation-Id 头要等
+      // 上游首字节才 flush(上游慢时 20s+ 甚至挂起),期间侧栏看不到新会话。
+      // 会话行在请求后 ~1s 落库,1.2s/3.5s 两次补 bump 让列表尽快捕获;
+      // 头部已到(conversationIdRef 已设)则跳过,避免无谓 refetch。
+      if (!conversationIdRef.current) {
+        setTimeout(() => {
+          if (!conversationIdRef.current) bumpConversationVersion()
+        }, 1200)
+        setTimeout(() => {
+          if (!conversationIdRef.current) bumpConversationVersion()
+        }, 3500)
+      }
       // 注意: 此处不能清空 attachmentsRef —— AI SDK sendMessages 首行 await resolve2(body)
       // 会先让出微任务,若本处同步清空,getter 求值时附件已丢失(实测所有附件类型均发送为 undefined)。
       // 保留本次值: 下一次发送由上方赋值覆盖(无附件时为 undefined);
       // regenerate 时 getter 仍返回本次附件,服务端注入到最后一条 user 消息,行为正确。
     },
-    [sendMessage, inTauri]
+    [sendMessage, inTauri, bumpConversationVersion]
   )
 
   // local_file 决策:卡片上用户点「批准」→ 按动作执行(delete=移入回收站;
@@ -1957,20 +2022,21 @@ export function ChatPanel({
     [error]
   )
 
-  // 错误出现时同步弹一个 toast 通知用户
-  // (红色横幅是持久 UI,toast 是瞬时提醒 —— 两者互补)
-  const lastErrorRef = useRef<unknown>(null)
-  useEffect(() => {
-    if (error && error !== lastErrorRef.current) {
-      lastErrorRef.current = error
-      toast.error(errorInfo?.summary ?? '请求失败,请重试', {
-        title: errorInfo?.title ?? '请求失败',
-        timeout: 6000,
-      })
-    } else if (!error) {
-      lastErrorRef.current = null
-    }
-  }, [error, errorInfo])
+  // 错误提示节点。floating 用于会话态：绝对定位浮在消息区下缘、与 672 内容框同轴，
+  // 玻璃底压住底下的正文，不再像列顶横幅那样把整条消息流推下去。
+  const errorBanner = (floating?: boolean) =>
+    error && errorInfo ? (
+      <ChatErrorBanner
+        info={errorInfo}
+        onRetry={handleRetry}
+        onClose={() => clearError()}
+        provider={mergedModels.find((m) => m.id === currentModel)?.provider}
+        modelId={currentModel}
+        className={floating
+          ? 'mx-0 mt-0 md:mt-0 bg-red-50/95 shadow-lg backdrop-blur-md dark:bg-red-950/85'
+          : undefined}
+      />
+    ) : null
 
   // 对比模式: 渲染并排泳道视图(key 确保模型列表变化时重建泳道)
   if (compareMode) {
@@ -2005,16 +2071,9 @@ export function ChatPanel({
     <div className="flex h-full min-h-0">
       <div className="flex flex-col h-full min-w-0 flex-1 relative overflow-hidden">
 
-      {/* Error banner(桌面端下移让位浮动工具簇: 横幅全宽,右缘正落在无底板浮簇底下) */}
-      {error && errorInfo && (
-        <ChatErrorBanner
-          info={errorInfo}
-          onRetry={handleRetry}
-          onClose={() => clearError()}
-          provider={mergedModels.find((m) => m.id === currentModel)?.provider}
-          modelId={currentModel}
-        />
-      )}
+      {/* Error banner —— 仅欢迎态按列顶常规排布(此时没有消息流可推挤);
+          会话态改浮在消息区下缘，见下方 relative wrapper */}
+      {messages.length === 0 && errorBanner()}
 
       {/* Mask bar - 当前生效的面具 chip(仅对话态;欢迎态由输入框下方胶囊行承担入口),点击弹出切换面板 */}
       {activeMask && messages.length > 0 && (
@@ -2129,7 +2188,9 @@ export function ChatPanel({
               data-tauri-drag-region=""
               className="h-full overflow-y-auto overflow-x-hidden scroll-contain md:pt-12"
             >
-              <div className="flex min-h-full">
+              {/* error 时给内容尾部留出一张卡片的高度：浮层会压住正文下缘，
+                  滚到底时最后一条(往往是断掉的回复)仍能完整露出 */}
+              <div className={`flex min-h-full${error ? ' pb-28' : ''}`}>
                 <MessageList
                   messages={messages}
                   isStreaming={isLoading}
@@ -2169,6 +2230,18 @@ export function ChatPanel({
               >
                 <ChevronDown className="h-4 w-4" />
               </button>
+            )}
+
+            {/* 错误条落位 B：贴在消息区下缘(输入框正上方)、收成 max-w-2xl 与内容框同轴。
+                绝对定位 → 不再把整条消息流往下推；玻璃底压住身后的正文。
+                wrapper 用 pointer-events-none 让两侧留白不吞掉正文点击，卡片自身恢复可点。 */}
+            {errorBanner(true) && (
+              <div className="pointer-events-none absolute inset-0 z-40 flex items-end justify-center px-3 pb-2">
+                {/* max-h 锚在消息区高度上：极矮窗口里卡片自身滚动，顶部不再被列的 overflow-hidden 裁掉 */}
+                <div className="pointer-events-auto max-h-[calc(100%-8px)] w-full max-w-2xl overflow-y-auto overscroll-contain">
+                  {errorBanner(true)}
+                </div>
+              </div>
             )}
           </div>
 

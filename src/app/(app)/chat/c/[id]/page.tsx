@@ -45,6 +45,7 @@ interface ApiConversation {
   mode: 'single' | 'compare'
   styleOffset: number
   stylePreset: string | null
+  replyLength?: string | null
   maskId: string | null
   compareModels: string[]
   /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
@@ -309,6 +310,7 @@ function ConversationClientContent() {
       }
       laneInitialMessages={initialState.laneInitialMessages}
       initialStylePreset={conversation.stylePreset ?? undefined}
+      initialReplyLength={conversation.replyLength ?? undefined}
       initialMaskId={conversation.maskId ?? undefined}
       initialCompareVote={conversation.latestVote ?? null}
     />

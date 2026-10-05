@@ -41,6 +41,12 @@ interface StoreEntry {
   fullText: string
   /** 当前已揭示长度 */
   revealedLength: number
+  /** 揭示位置的小数累加器: 低速帧位移不足 1 字符时不丢量, 否则慢速档会被 floor 吃停 */
+  revealedPos: number
+  /** 平滑后的瞬时速度(字符/秒) */
+  rate: number
+  /** 上一帧时间戳(ms), 用于把推进量换算成时间基 */
+  lastTs: number
   /** 监听器列表 (useSyncExternalStore 的 subscribe 回调) */
   listeners: Set<() => void>
   /** 当前 RAF id */
@@ -51,12 +57,32 @@ interface StoreEntry {
 
 const stores = new WeakMap<object, StoreEntry>()
 
+/* ── 时间基推进参数 ─────────────────────────────────────────────────────
+ * 旧实现是帧基: step = max(1, min(24, gap/12)) —— 速度是「剩余差距」的阶跃函数,
+ * 而差距由上游 chunk 到达节奏决定, 于是屏上速度在 60 与 1440 字符/秒之间硬切,
+ * 观感就是"爬一段、爆一下、再爬"。
+ * 新实现: 目标速度仍是差距的函数但连续, 实际速度用指数平滑跟踪, 位移对时间积分
+ * —— 上游再怎么抖, 屏上推进速度都是条平滑曲线, 且与屏幕刷新率无关。 */
+const RATE_MIN = 60 // 字符/秒下限(旧版 1 字符/帧@60Hz 的量级, 保证不更慢)
+const RATE_MAX = 1500 // 字符/秒上限(旧版 24 字符/帧@60Hz≈1440, 同档兜住远程轮询整段补进)
+const RATE_GAIN = 3.2 // 差距→目标速度的斜率
+const TAU_MS = 240 // 平滑时间常数: 越小越跟手, 越大越顺滑
+// 后台标签页里 RAF 被节流到 ~1 帧/秒, dt 不钳一次就跳几百字符
+const MAX_DT_MS = 48
+
+function targetRate(gap: number): number {
+  return Math.min(RATE_MAX, RATE_MIN + gap * RATE_GAIN)
+}
+
 function getStore(token: object): StoreEntry {
   let s = stores.get(token)
   if (s) return s
   s = {
     fullText: '',
     revealedLength: 0,
+    revealedPos: 0,
+    rate: RATE_MIN,
+    lastTs: 0,
     listeners: new Set(),
     rafId: null,
     alive: false,
@@ -69,48 +95,49 @@ let tokenCounter = 0
 
 /* ── 核心 RAF tick ────────────────────────────────────────────────────── */
 
-function tick(entry: StoreEntry) {
+function tick(entry: StoreEntry, now: number) {
   entry.rafId = null
 
   const target = entry.fullText.length
-  const current = entry.revealedLength
 
   // 已追平:退出链
-  if (current >= target) {
+  if (entry.revealedPos >= target) {
     entry.alive = false
     return
   }
 
-  // 推进一帧: 步长随差距按比例缩放(比例追近)。旧版 `gap > 30 ? 8 : 1` 让速度在
-  // 60 与 480 字符/秒之间硬切跳变,观感"一顿一顿";比例追近在差距大时快追、
-  // 接近时自然减速,速度连续。上限 24 字符/帧 ≈ 1440 字符/秒,兜住远程轮询
-  // 每 1.2s 整段补进的追赶场景
-  const gap = target - current
-  const step = Math.max(1, Math.min(24, Math.round(gap / 12)))
-  entry.revealedLength = Math.min(current + step, target)
+  const dtMs = entry.lastTs ? Math.min(MAX_DT_MS, Math.max(1, now - entry.lastTs)) : 16.7
+  entry.lastTs = now
 
-  // 通知 React (通过 useSyncExternalStore listener)
+  const gap = target - entry.revealedPos
+  entry.rate += (targetRate(gap) - entry.rate) * (1 - Math.exp(-dtMs / TAU_MS))
+
+  entry.revealedPos = Math.min(target, entry.revealedPos + (entry.rate * dtMs) / 1000)
+  entry.revealedLength = Math.floor(entry.revealedPos)
+
+  // 通知 React (通过 useSyncExternalStore)
   // 注意: 这必须在 RAF 中调用,不在 render 中。
   entry.listeners.forEach((l) => l())
 
   // 追平则不调度下一帧
-  if (entry.revealedLength >= target) {
+  if (entry.revealedPos >= target) {
     entry.alive = false
     return
   }
 
   // 调度下一帧
-  entry.rafId = requestAnimationFrame(() => tick(entry))
+  entry.rafId = requestAnimationFrame((t) => tick(entry, t))
 }
 
 function kick(entry: StoreEntry) {
   if (entry.alive) return
   if (entry.revealedLength >= entry.fullText.length) return
   entry.alive = true
+  entry.lastTs = 0
   if (entry.rafId !== null) {
     cancelAnimationFrame(entry.rafId)
   }
-  entry.rafId = requestAnimationFrame(() => tick(entry))
+  entry.rafId = requestAnimationFrame((t) => tick(entry, t))
 }
 
 function stop(entry: StoreEntry) {
@@ -119,6 +146,15 @@ function stop(entry: StoreEntry) {
     cancelAnimationFrame(entry.rafId)
     entry.rafId = null
   }
+}
+
+/** 一次性揭示到全文(关闭逐字符 / 重置时用), 同步三个派生字段 */
+function revealAll(entry: StoreEntry) {
+  entry.revealedPos = entry.fullText.length
+  entry.revealedLength = entry.fullText.length
+  entry.rate = RATE_MIN
+  stop(entry)
+  entry.listeners.forEach((l) => l())
 }
 
 /* ── useSyncExternalStore 接口 ─────────────────────────────────────────── */
@@ -140,7 +176,7 @@ function getServerSnapshot(): string {
   return ''
 }
 
-/* ── Hook ──────────────────────────────────────────────────────────────── */
+/* ── Hook ─────────────────────────────────────────────────────────────── */
 
 export function useTypewriter(fullText: string, enabled: boolean): {
   displayText: string
@@ -162,17 +198,17 @@ export function useTypewriter(fullText: string, enabled: boolean): {
     if (fullText.length < prevLen) {
       // fullText 缩短: 新消息 / 重置, 从头开始
       entry.fullText = fullText
+      entry.revealedPos = 0
       entry.revealedLength = 0
+      entry.rate = RATE_MIN
       // 通知 React
       entry.listeners.forEach((l) => l())
 
-      if (enabled) {
-        kick(entry)
-      } else {
+      if (!enabled) {
         // enabled = false: 一次性显示
-        entry.revealedLength = fullText.length
-        stop(entry)
-        entry.listeners.forEach((l) => l())
+        revealAll(entry)
+      } else {
+        kick(entry)
       }
     } else if (fullText.length > prevLen) {
       // fullText 增长
@@ -180,9 +216,7 @@ export function useTypewriter(fullText: string, enabled: boolean): {
 
       if (!enabled) {
         // enabled = false: 一次性显示完整
-        entry.revealedLength = fullText.length
-        stop(entry)
-        entry.listeners.forEach((l) => l())
+        revealAll(entry)
       } else {
         // enabled = true:
         //   - 若 tick 链还活着, 自然推进 (tick 会读最新 fullText)
@@ -205,10 +239,7 @@ export function useTypewriter(fullText: string, enabled: boolean): {
     if (!enabled) {
       // 关闭逐字符: 一次性显示
       if (entry.revealedLength !== entry.fullText.length || entry.alive) {
-        entry.revealedLength = entry.fullText.length
-        stop(entry)
-        // 通知 React 让 displayText 跳到完整
-        entry.listeners.forEach((l) => l())
+        revealAll(entry)
       }
     } else {
       // 启用逐字符: 若 tick 链死了, kick
@@ -237,8 +268,7 @@ export function useTypewriter(fullText: string, enabled: boolean): {
   // isTyping 用 useSyncExternalStore 的 getServerSnapshot 思路,
   // 但 enabled + revealedLength 比较是渲染时计算 —— 不会触发 setState
   // 注意: 这里读 entry 是读 module-level 单例, 不在 effect 中, 所以安全。
-  // 但 React 在 SSR 阶段访问 module-level 单例可能有问题 ——
-  // SSR 时 entry 不存在, getStore 会创建。但 enabled 通常是 false 在 SSR,
+  // 但 SSR 时 entry 不存在, getStore 会创建。但 enabled 通常是 false 在 SSR,
   // 且 isTyping 只是 UI 提示, SSR 渲染时不会显示, 安全。
   const entry = getStore(token)
   const isTyping = enabled && entry.revealedLength < entry.fullText.length

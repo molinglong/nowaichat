@@ -39,6 +39,51 @@ test("发送消息收到流式回复", async ({ page }) => {
   await expect(page.getByRole("button", { name: "复制" })).toHaveCount(2, { timeout: 90_000 })
 })
 
+test("流式回复逐帧增长(防一次性上屏回归)", async ({ page }) => {
+  // 回归护栏: 网络在流、DOM 不动的形态(AI SDK pushMessage 不快照 → memo 按文本长度
+  // 判等恒 bail out)只靠"第二条气泡出现"是测不出来的, 必须数正文长度的递增步数。
+  await page.goto("/chat")
+  const input = page.locator("textarea").first()
+  await expect(input).toBeVisible({ timeout: 30_000 })
+  test.setTimeout(180_000)
+  const selectorBtn = page
+    .locator('xpath=//button[@aria-label="发送"]/preceding-sibling::*[1]//button')
+    .first()
+  const searchBox = page.getByPlaceholder("搜索模型...")
+  await expect(async () => {
+    if (await searchBox.isVisible().catch(() => false)) await page.keyboard.press("Escape")
+    await selectorBtn.click()
+    await searchBox.fill("DeepSeek")
+    await page.keyboard.press("Enter")
+    await expect(selectorBtn).toContainText("DeepSeek", { timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
+
+  await page.getByRole("button", { name: "新对话" }).first().click()
+  await input.fill("直接在本页回答，不要生成文档或卡片：介绍 B+ 树为什么适合做数据库索引，分点写，约 800 字")
+  await page.getByRole("button", { name: "发送", exact: true }).first().click()
+
+  // 100ms 轮询「全列表最长气泡」字符数, 记录去重后的长度序列。
+  // 取最大值而非末条: 发送瞬间末条还是 user 气泡, assistant 进列表后才轮到它,
+  // 用末条会把 40→29 这种"换气泡"的回落算进序列。
+  // 阈值 500 字: 打字机在 300~1500 字符/秒区间, 500 字内足够攒出递增步数
+  const lens: number[] = []
+  for (let i = 0; i < 700; i++) {
+    const n = await page.evaluate(() => {
+      let max = 0
+      document.querySelectorAll("[data-message-id]").forEach((el) => {
+        const c = (el.textContent || "").replace(/\s/g, "").length
+        if (c > max) max = c
+      })
+      return max
+    })
+    if (!lens.length || n !== lens[lens.length - 1]) lens.push(n)
+    if (n >= 500) break
+    await page.waitForTimeout(100)
+  }
+  const increases = lens.filter((v, i) => i > 0 && v > lens[i - 1]).length
+  expect(increases, `增长步数过少, 正文疑似一次性上屏: ${lens.join(" ")}`).toBeGreaterThanOrEqual(5)
+})
+
 test("设置各板块打开不白屏", async ({ page }) => {
   await page.goto("/chat")
   await page.getByRole("button", { name: "设置", exact: true }).first().click()

@@ -104,3 +104,35 @@ export function registerListScrollFacade(facade: ListScrollFacade | null): void 
 export function getListScrollFacade(): ListScrollFacade | null {
   return facadeRef.current
 }
+
+/* ── 进入会话贴底:ChatPanel(单聊)与 CompareLane(对比泳道)共用 ──────────── */
+
+/**
+ * 把滚动容器一次性贴到最新一条消息,并逐帧校正首帧不可信的高度
+ * (虚拟化用估算高度;非虚拟化有图片/公式/字体异步撑高)。
+ * 连续 stableFrames 帧 scrollHeight 不变才收手,maxFrames 封顶防长尾。
+ * 让路条件:容器被卸载/隐藏(display:none 时 clientHeight=0)、上一帧的赋值被用户
+ * 向上滚走、或 isFollowing 返回 false —— 首帧不判 isFollowing,此时容器还停在顶部。
+ */
+export function pinScrollToBottom(
+  el: HTMLElement,
+  isFollowing: () => boolean = () => true,
+  { stableFrames = 8, maxFrames = 120 }: { stableFrames?: number; maxFrames?: number } = {}
+): void {
+  let frames = 0
+  let stable = 0
+  let lastHeight = -1
+  let assigned = -1
+  const step = () => {
+    if (!el.isConnected || el.clientHeight === 0) return
+    if (assigned >= 0 && el.scrollTop < assigned - 2) return
+    if (frames > 0 && !isFollowing()) return
+    el.scrollTop = el.scrollHeight
+    assigned = el.scrollTop
+    stable = el.scrollHeight === lastHeight ? stable + 1 : 0
+    lastHeight = el.scrollHeight
+    if (stable >= stableFrames || ++frames >= maxFrames) return
+    requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}

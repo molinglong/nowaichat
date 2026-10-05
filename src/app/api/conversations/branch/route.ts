@@ -216,6 +216,7 @@ export async function POST(req: NextRequest) {
           model: source.model,
           styleOffset: source.styleOffset,
           stylePreset: source.stylePreset,
+          replyLength: source.replyLength,
           messages: {
             create: [
               {
@@ -282,6 +283,7 @@ export async function POST(req: NextRequest) {
         model: source.model,
         styleOffset: source.styleOffset,
         stylePreset: source.stylePreset,
+        replyLength: source.replyLength,
         messages: {
           create: clonedMessages.map((m) => ({
             role: m.role,

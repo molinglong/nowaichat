@@ -1,6 +1,7 @@
 'use client'
 
 import React, { memo, useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
+import { useRenderProbe } from '@/lib/client-diagnostics'
 import { usePathname } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -57,6 +58,11 @@ interface MarkdownRendererProps {
    * summary 卡片与「复制为 HTML」镜像始终传 true
    */
   rich?: boolean
+  /**
+   * 流式轻量渲染开关: rich=false 且 live=true 时走 live 档(块级排版 + 行内加粗/行内码,
+   * 不跑 KaTeX/highlight/试卷块)。生成中不再裸语法符号, 定格时块几何已就位。
+   */
+  live?: boolean
 }
 
 // ── 试卷块（材料/设问/作答）与关键词双色标注 ────────────────────────
@@ -321,7 +327,10 @@ const mdComponents: Components = {
     </li>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="my-3 rounded-[10px] border border-line border-l-[3px] border-l-content-muted bg-surface px-3.5 py-2.5 text-content-secondary">{children}</blockquote>
+    // 手机端去壳:只留左侧竖线做引用标记,圆角/背景/上下边框全去掉(窄屏一张卡横竖放不下)
+    <blockquote className="my-3 rounded-[10px] border border-line border-l-[3px] border-l-content-muted bg-surface px-3.5 py-2.5 text-content-secondary max-md:rounded-none max-md:border-y-0 max-md:border-r-0 max-md:bg-transparent max-md:px-3 max-md:py-0.5">
+      {children}
+    </blockquote>
   ),
   hr: () => <hr className="my-4 border-line" />,
   a: ({ href, children }) => (
@@ -335,15 +344,16 @@ const mdComponents: Components = {
     </a>
   ),
   table: ({ children }) => (
-    <div className="my-4 overflow-x-auto rounded-xl border border-line bg-surface">
+    // 手机端去壳:表格自身 border-collapse 的行列线足够分区,卡片外框只是吃宽度
+    <div className="my-4 overflow-x-auto rounded-xl border border-line bg-surface max-md:my-3 max-md:rounded-none max-md:border-0 max-md:bg-transparent">
       <table className="w-full border-collapse text-sm">{children}</table>
     </div>
   ),
   thead: ({ children }) => <thead className="bg-surface-muted">{children}</thead>,
   th: ({ children }) => (
-    <th className="border-b border-line px-3.5 py-2 text-left text-[13px] font-semibold text-content-secondary">{withInlineMarks(children)}</th>
+    <th className="border-b border-line px-3.5 py-2 text-left text-[13px] font-semibold text-content-secondary max-md:px-2">{withInlineMarks(children)}</th>
   ),
-  td: ({ children }) => <td className="border-b border-line px-3.5 py-2.5 align-top">{withInlineMarks(children)}</td>,
+  td: ({ children }) => <td className="border-b border-line px-3.5 py-2.5 align-top max-md:px-2">{withInlineMarks(children)}</td>,
   // ```mindmap 围栏 → 导图卡片;```chart 围栏 → 图表卡片;其余语言照旧走 CodeBlock
   pre: (props) => {
     const { language, code } = extractCodeInfo(props.children)
@@ -361,6 +371,161 @@ const mdComponents: Components = {
   strong: ({ children }) => <strong>{withInlineMarks(children)}</strong>,
   em: ({ children }) => <em>{withInlineMarks(children)}</em>,
 }
+
+/* ── live 档：流式期间的轻量渲染 ──────────────────────────────────────
+ * 动机(实测): 现状流式全程裸语法符号, 且定格瞬间块结构凭空出现, 长回复整体
+ * 重排 264px —— 这是"看着难受"的最大单点。live 档让生成过程即所见即所得。
+ * 与 rich 档的分工: 这里只做行级块切分 + 行内加粗/斜体/行内码, 不跑
+ * remark/rehype 全管线(KaTeX、highlight、试卷块), 每帧成本是纯字符串扫描;
+ * 元素一律调 mdComponents 里同一批渲染函数, 样式单一来源, 不与定格后漂移。 */
+type LiveBlock =
+  | { type: 'h'; level: number; text: string }
+  | { type: 'p'; text: string }
+  | { type: 'quote'; text: string }
+  | { type: 'ul'; items: string[] }
+  | { type: 'ol'; items: string[] }
+  | { type: 'code'; lang: string; text: string }
+  | { type: 'table'; rows: string[][] }
+
+type MdElProps = { children?: React.ReactNode; href?: string }
+type MdElName = 'h1' | 'h2' | 'h3' | 'h4' | 'p' | 'ul' | 'ol' | 'li' | 'blockquote' | 'table' | 'thead' | 'th' | 'td' | 'pre'
+
+/** 借 mdComponents 的同一渲染函数产出元素(不复制 className) */
+function mdEl(name: MdElName, props: MdElProps, key: number | string) {
+  const fn = mdComponents[name] as unknown as ((p: MdElProps) => React.ReactElement) | undefined
+  if (!fn) return null
+  return <React.Fragment key={key}>{fn(props)}</React.Fragment>
+}
+
+const LIVE_INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/
+
+/** 行内三件套: 加粗 / 行内码 / 斜体; 未闭合定界符原样留着, 定格富渲染接管 */
+function liveInline(text: string, keyBase: string): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  text.split(LIVE_INLINE_RE).forEach((part, i) => {
+    if (!part) return
+    const key = `${keyBase}-${i}`
+    if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+      out.push(<strong key={key}>{part.slice(2, -2)}</strong>)
+    } else if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+      out.push(<CodeInline key={key}>{part.slice(1, -1)}</CodeInline>)
+    } else if (part.length > 2 && part.startsWith('*') && part.endsWith('*')) {
+      out.push(<em key={key}>{part.slice(1, -1)}</em>)
+    } else {
+      out.push(<React.Fragment key={key}>{part}</React.Fragment>)
+    }
+  })
+  return out
+}
+
+const LIVE_PARA_BREAK_RE = /^(#{1,4}\s|>\s?|\||```|[-*+]\s|\d+[.)]\s|:::)/
+
+/** 行级块切分: 只认 markdown 的「块」层, 未闭合结构按已有内容渲染(不吞后续正文) */
+function parseLiveBlocks(md: string): LiveBlock[] {
+  const lines = md.split('\n')
+  const blocks: LiveBlock[] = []
+  let i = 0
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+    if (!trimmed) { i++; continue }
+    // 试卷块标记(:::material 等)流式期直接隐去, 内部内容照常按普通块渲染
+    if (/^:::+/.test(trimmed)) { i++; continue }
+    const fence = trimmed.match(/^```+([a-zA-Z0-9+#._-]*)/)
+    if (fence) {
+      const lang = fence[1] || ''
+      const body: string[] = []
+      i++
+      while (i < lines.length && !/^\s*```+\s*$/.test(lines[i])) { body.push(lines[i]); i++ }
+      if (i < lines.length) i++
+      blocks.push({ type: 'code', lang, text: body.join('\n') })
+      continue
+    }
+    const head = trimmed.match(/^(#{1,4})\s+(.*)$/)
+    if (head) { blocks.push({ type: 'h', level: head[1].length, text: head[2] }); i++; continue }
+    if (/^>\s?/.test(trimmed)) { blocks.push({ type: 'quote', text: trimmed.replace(/^>\s?/, '') }); i++; continue }
+    if (trimmed.startsWith('|')) {
+      const rows: string[][] = []
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        const cells = lines[i].trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+        // 分隔行(| --- | --- |)不进气泡
+        if (!cells.every((c) => /^:?-{2,}:?$/.test(c))) rows.push(cells)
+        i++
+      }
+      blocks.push({ type: 'table', rows })
+      continue
+    }
+    const ulItem = /^[-*+]\s+(.*)$/
+    if (ulItem.test(trimmed)) {
+      const items: string[] = []
+      while (i < lines.length) {
+        const m = lines[i].trim().match(ulItem)
+        if (!m) break
+        items.push(m[1]); i++
+      }
+      blocks.push({ type: 'ul', items })
+      continue
+    }
+    const olItem = /^\d+[.)]\s+(.*)$/
+    if (olItem.test(trimmed)) {
+      const items: string[] = []
+      while (i < lines.length) {
+        const m = lines[i].trim().match(olItem)
+        if (!m) break
+        items.push(m[1]); i++
+      }
+      blocks.push({ type: 'ol', items })
+      continue
+    }
+    const para = [lines[i]]
+    i++
+    while (i < lines.length && lines[i].trim() && !LIVE_PARA_BREAK_RE.test(lines[i].trim())) { para.push(lines[i]); i++ }
+    blocks.push({ type: 'p', text: para.join(' ').trim() })
+  }
+  return blocks
+}
+
+function renderLiveBlock(b: LiveBlock, k: number): React.ReactNode {
+  if (b.type === 'h') {
+    const level = Math.min(4, Math.max(1, b.level)) as 1 | 2 | 3 | 4
+    return mdEl(`h${level}` as MdElName, { children: liveInline(b.text, `h${k}`) }, k)
+  }
+  if (b.type === 'p') return mdEl('p', { children: liveInline(b.text, `p${k}`) }, k)
+  if (b.type === 'quote') return mdEl('blockquote', { children: liveInline(b.text, `q${k}`) }, k)
+  if (b.type === 'ul' || b.type === 'ol') {
+    return mdEl(
+      b.type,
+      { children: b.items.map((t, i) => mdEl('li', { children: liveInline(t, `l${k}-${i}`), }, `${k}-${i}`)) },
+      k,
+    )
+  }
+  if (b.type === 'code') {
+    return mdEl('pre', { children: <code className={`language-${b.lang}`}>{b.text}</code> }, k)
+  }
+  const head = b.rows[0]
+  const body = b.rows.slice(1)
+  return mdEl(
+    'table',
+    {
+      children: (
+        <>
+          {mdEl('thead', { children: head.map((c, i) => mdEl('th', { children: liveInline(c, `th${k}-${i}`) }, `h${i}`)) }, k)}
+          <tbody>
+            {body.map((r, ri) => (
+              <tr key={ri}>{r.map((c, ci) => mdEl('td', { children: liveInline(c, `td${k}-${ri}-${ci}`) }, `c${ci}`))}</tr>
+            ))}
+          </tbody>
+        </>
+      ),
+    },
+    k,
+  )
+}
+
+const LiveMarkdown = memo(function LiveMarkdown({ content }: { content: string }) {
+  // 每帧一次行扫描(几十行量级), 比走 react-markdown 全管线低一个数量级
+  const blocks = useMemo(() => parseLiveBlocks(content), [content])
+  return <div className="rich-md">{blocks.map((b, k) => renderLiveBlock(b, k))}</div>
+})
 
 /**
  * 把「独占一行」的行内公式($..$)提升为块级($$..$$):
@@ -922,7 +1087,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className,
   rich,
+  live,
 }: MarkdownRendererProps) {
+  useRenderProbe('MarkdownRenderer')
   // 两段式翻转淡入: 纯文本→富渲染的瞬间挂 md-enter(180ms 渐显),把排版硬切软化
   // 成渐显。只在「本次挂载内发生过翻转」时触发 —— 历史消息与虚拟化重挂载首帧就是
   // rich=true,不加动画,避免滚动回看/空闲预热挂载时跟着闪
@@ -939,6 +1106,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     prevRichRef.current = rich
   }, [rich])
 
+  // live 模式: 流式期间的轻量排版(熔断开关优先, RICH_RENDER_ENABLED=false 时一律回纯文本)
+  if (RICH_RENDER_ENABLED && live && !rich) {
+    return (
+      <div className={cn('text-[15px] text-content-primary leading-[1.85] break-words', className)}>
+        <LiveMarkdown content={content} />
+      </div>
+    )
+  }
   // 纯文本模式: 流式期间/熔断时走这里,与旧版行为完全一致(whitespace-pre-wrap 保留换行)
   if (!RICH_RENDER_ENABLED || !rich) {
     return (

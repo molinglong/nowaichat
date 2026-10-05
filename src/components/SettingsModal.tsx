@@ -23,6 +23,8 @@ import { useWindowDrag } from '@/hooks/useWindowDrag'
 import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
 import { detectModelCapabilities } from '@/lib/ai/model-capabilities'
+import { ReplyLengthSlider } from '@/components/chat/ReplyLengthSlider'
+import { getReplyLengthLabel } from '@/lib/ai/reply-length'
 import { useChatStore, type BackdropMode } from '@/store/chat-store'
 import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel } from '@/lib/ai/style'
@@ -36,6 +38,7 @@ import MasksSettings from '@/components/settings/MasksSettings'
 import McpSettings from '@/components/settings/McpSettings'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
+const REPLY_LENGTH_STORAGE_KEY = 'chat:replyLength'
 
 /** 背景 设置的选项 */
 const BACKDROP_CHOICES: { value: BackdropMode; label: string }[] = [
@@ -607,6 +610,8 @@ export function SettingsModal({
   const currentConversationId = useChatStore((s) => s.currentConversationId)
   const conversationStylePreset = useChatStore((s) => s.conversationStylePreset)
   const setConversationStylePreset = useChatStore((s) => s.setConversationStylePreset)
+  const conversationReplyLength = useChatStore((s) => s.conversationReplyLength)
+  const setConversationReplyLength = useChatStore((s) => s.setConversationReplyLength)
   const bumpConversationVersion = useChatStore((s) => s.bumpConversationVersion)
   // 聊天行为:思考完毕自动折叠思考框(纯本地偏好,localStorage 持久化,不入 AI 可控注册表)
   const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
@@ -871,7 +876,8 @@ export function SettingsModal({
       .then((list) => {
         if (!alive) return
         const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : []
-        setEphCount(items.length)
+        // 列表接口单页上限 100,数量取服务端 total 而不是本页条数(否则封顶 20)
+        setEphCount(typeof list?.total === 'number' ? list.total : items.length)
       })
       .catch(() => { if (alive) setEphCount(0) })
     return () => { alive = false }
@@ -881,20 +887,43 @@ export function SettingsModal({
     if (clearing) return
     setClearing(true)
     try {
-      const list = await fetch('/api/conversations?scope=ephemeral')
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
-      const items = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : []
-      const results = await Promise.allSettled(
-        items.map((c: { id: string }) => fetch(`/api/conversations/${c.id}`, { method: 'DELETE' }))
-      )
-      const failed = results.filter((r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)).length
-      if (failed > 0) {
-        toast.error(`${items.length - failed} 条已删除，${failed} 条删除失败，请重试`, { title: '清空临时对话' })
-      } else {
-        toast.success(`已清空 ${items.length} 条临时对话`, { title: '清空临时对话' })
+      // 分页收齐隔离区对话 id(列表接口单页上限 100,原先只取默认 20 条 = 只能清前 20 条)
+      const ids: string[] = []
+      for (let page = 0; page < 10; page++) {
+        const list = await fetch(`/api/conversations?scope=ephemeral&limit=100&offset=${ids.length}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+        const items = Array.isArray(list?.items) ? list.items : []
+        ids.push(...items.map((c: { id: string }) => c.id))
+        if (items.length < 100) break
       }
-      setEphCount(0)
+      // 批量端点单次上限 200 条;原先这里逐条 DELETE /api/conversations/[id],
+      // 而该端点按 ephemeralScope 校验归属(正常模式 isEphemeral:false),
+      // 隔离区对话必然 404 —— 清空功能一直是空的,改走 scope=ephemeral 的批量口径。
+      let deleted = 0
+      let failed = 0
+      for (let i = 0; i < ids.length; i += 200) {
+        const chunk = ids.slice(i, i + 200)
+        const res = await fetch('/api/conversations/batch-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ids: chunk, scope: 'ephemeral' }),
+        }).catch(() => null)
+        if (res?.ok) {
+          const data = await res.json().catch(() => ({}))
+          deleted += typeof data?.deleted === 'number' ? data.deleted : chunk.length
+          failed += typeof data?.skipped === 'number' ? data.skipped : 0
+        } else {
+          failed += chunk.length
+        }
+      }
+      if (failed > 0) {
+        toast.error(`${deleted} 条已删除，${failed} 条删除失败，请重试`, { title: '清空临时对话' })
+      } else {
+        toast.success(`已清空 ${deleted} 条临时对话`, { title: '清空临时对话' })
+      }
+      setEphCount(failed > 0 ? Math.max(0, (ephCount ?? 0) - deleted) : 0)
       setConfirmClear(false)
       bumpConversationVersion()
     } finally {
@@ -5050,6 +5079,41 @@ export function SettingsModal({
                       label="对话风格"
                       className="mt-2.5"
                     />
+                    </div>
+
+                    {/* 回复长度:篇幅独立于语气可调,长度段在服务端覆盖风格段的详略描述 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                      <div className="text-left">
+                        <p className="text-xs text-content-secondary">AI 篇幅</p>
+                        <p className="text-[11px] text-content-muted">只规定篇幅，不改变语气与内容准确性</p>
+                      </div>
+                      <ReplyLengthSlider
+                        value={conversationReplyLength}
+                        onChange={(level) => {
+                          // 立即更新 store + localStorage(轻量、即时)
+                          setConversationReplyLength(level)
+                          localStorage.setItem(REPLY_LENGTH_STORAGE_KEY, level)
+                        }}
+                        onCommit={(level) => {
+                          // 切换后(250ms 静止):与对话风格同款,有会话才落库
+                          if (currentConversationId) {
+                            fetch(`/api/conversations/${currentConversationId}/style`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ replyLength: level }),
+                            }).then((res) => {
+                              if (!res.ok) throw new Error('Failed to persist reply length')
+                              toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
+                            }).catch((err) => {
+                              console.error('Failed to persist reply length:', err)
+                              toast.error('回复长度保存失败，请重试')
+                            })
+                          } else {
+                            toast.success(`回复长度已设为${getReplyLengthLabel(level)}`)
+                          }
+                        }}
+                        className="mt-2.5"
+                      />
                     </div>
 
                     {/* 外观是一维的: 上面那排「主题」四选一(浅色/深色/跟随系统/格子),

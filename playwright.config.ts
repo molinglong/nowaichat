@@ -57,6 +57,27 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json" },
     },
+    {
+      // 回复长度档用例:复用 admin 会话
+      name: "length-smoke",
+      testMatch: /reply-length\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
+    {
+      // 批量删除会话用例:复用 admin 会话
+      name: "delete-smoke",
+      testMatch: /batch-delete\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
+    {
+      // 取证上报链路用例:复用 admin 会话
+      name: "diag-smoke",
+      testMatch: /diagnostics\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json" },
+    },
   ],
   webServer: {
     command: "npm run dev",

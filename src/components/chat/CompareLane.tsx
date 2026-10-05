@@ -8,9 +8,11 @@ import { MessageSquarePlus, RotateCw, ThumbsUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ChatErrorBanner } from './ChatErrorBanner'
 import { MessageList } from './MessageList'
+import { pinScrollToBottom } from './chat-list-bridge'
 import { PROVIDER_DOT } from './ModelSelector'
 import { getErrorMessage } from '@/lib/chat-errors'
 import type { ModelDefinition } from '@/lib/ai/types'
+import { useChatStore } from '@/store/chat-store'
 import type { Attachment } from './FileUpload'
 
 export interface LaneApi {
@@ -94,6 +96,11 @@ export function CompareLane({
           },
           get stylePreset() {
             return stylePresetRef.current
+          },
+          // 长度档直接读 store(请求时取值,同 ChatPanel 的 settingsSnapshot 写法),
+          // 避免为它再铺一层 prop + ref
+          get replyLength() {
+            return useChatStore.getState().conversationReplyLength
           },
           get maskId() {
             return maskIdRef.current
@@ -196,6 +203,19 @@ export function CompareLane({
   }, [messages, setMessages])
 
   const isLoading = status === 'submitted' || status === 'streaming'
+
+  // 进入历史会话定位到最新一条(与 ChatPanel 同款):泳道滚动容器挂载时停在顶部,
+  // 而顶部是最早的用户提问。移动端未激活泳道是 display:none(clientHeight=0),
+  // 贴底对它无意义,跳过即可。
+  const laneScrollRef = useRef<HTMLDivElement | null>(null)
+  const lanePinnedRef = useRef(false)
+  useEffect(() => {
+    if (lanePinnedRef.current) return
+    const el = laneScrollRef.current
+    if (!el || !el.clientHeight || isLoading || messages.length === 0) return
+    lanePinnedRef.current = true
+    pinScrollToBottom(el)
+  }, [isLoading, messages.length])
 
   // 向父级注册/注销本泳道 API;卸载时重置加载状态避免父级卡在 loading
   useEffect(() => {
@@ -302,7 +322,7 @@ export function CompareLane({
       {/* Lane messages (对比模式内禁用编辑用户消息) */}
       {/* md:pt-12: 桌面端浮动工具簇无底板悬在右上,泳道首条消息须让位;
           padding 放滚动容器内,滚动时随内容移出 —— 裁切线保持 y=0,TopFade 渐隐行为不变 */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 md:pt-12">
+      <div ref={laneScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 md:pt-12">
         <MessageList
           messages={messages}
           isStreaming={isLoading}

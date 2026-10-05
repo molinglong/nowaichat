@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { STYLE_PRESETS } from '@/lib/ai/style-presets'
+import { REPLY_LENGTH_LEVELS, DEFAULT_REPLY_LENGTH } from '@/lib/ai/reply-length'
 import { getMaskById } from '@/lib/ai/mask-resolve'
 import { isEphemeralSession } from '@/lib/ephemeral'
 
@@ -116,6 +117,7 @@ export async function POST(req: Request) {
         styleOffset: source.styleOffset,
         stylePreset: source.stylePreset, // 克隆时一并继承 preset(可能为 null,表示走 balanced)
         maskId: source.maskId, // 克隆时一并继承面具(可能为 null)
+        replyLength: source.replyLength, // 克隆时一并继承长度档(null = standard)
         messages: {
           create: cloneMessages.map((m) => ({
             role: m.role,
@@ -136,6 +138,9 @@ export async function POST(req: Request) {
   const validPreset = STYLE_PRESETS.find((p) => p.id === body.stylePreset)?.id ?? null
   // 校验 maskId(必须为合法内置面具 id,否则置 null;前端可显式传 null 表示无面具)
   const validMaskId = body.maskId == null ? null : ((await getMaskById(body.maskId, session.user.id))?.ref ?? null)
+  // 校验 replyLength(合法档 id;standard 与未知值一律落 null,即不额外限制篇幅)
+  const validReplyLength =
+    REPLY_LENGTH_LEVELS.find((l) => l.id === body.replyLength && l.id !== DEFAULT_REPLY_LENGTH)?.id ?? null
   // styleOffset 仍接受但仅作为 preset 推导的兜底
   const legacyOffset =
     typeof body.styleOffset === 'number' && Number.isFinite(body.styleOffset)
@@ -151,6 +156,7 @@ export async function POST(req: Request) {
       styleOffset: legacyOffset,
       stylePreset: validPreset, // 新版 preset(优先);null 时应用层回退到 balanced
       maskId: validMaskId, // 面具;null 时不启用
+      replyLength: validReplyLength, // 长度档;null = standard(不注入长度段)
       ...(body.mode === 'compare' ? { mode: 'compare' } : {}),
       ...(body.compareModels ? { compareModels: JSON.stringify(body.compareModels) } : {}),
     },

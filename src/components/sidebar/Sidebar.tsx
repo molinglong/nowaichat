@@ -1,9 +1,10 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react'
+import { useRenderProbe } from '@/lib/client-diagnostics'
 import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses } from 'lucide-react'
+import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses, ListChecks, Trash2, Check, X } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
 import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
@@ -22,6 +23,8 @@ import { SearchDialog } from './SearchDialog'
 import { SidebarNav } from './SidebarNav'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson, HttpError } from '@/lib/query/fetcher'
+import { toast } from '@/lib/toast'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface ConversationData {
   id: string
@@ -77,6 +80,7 @@ async function fetchConversationsPage(ctx: {
 }
 
 export function Sidebar() {
+  useRenderProbe('Sidebar')
   const inTauri = useIsTauri()
 
   const sidebarOpen = useChatStore((s) => s.sidebarOpen)
@@ -164,6 +168,13 @@ export function Sidebar() {
   const [maskMenuOpen, setMaskMenuOpen] = useState(false)
   // 用户菜单(底部头像/用户行点击弹出:账号设置入口 + 退出登录)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  // ── 批量删除:管理模式开关、勾选集合、确认弹窗目标 ──
+  const [manageMode, setManageMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  /** 待确认的单条删除会话 id:非空即打开确认弹窗(替代原生 window.confirm) */
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const router = useRouter()
 
   const loading = isLoading || isPending
@@ -277,37 +288,134 @@ export function Sidebar() {
     }
   }, [userMenuOpen])
 
-  const handleDeleteConversation = useCallback(
-    async (id: string) => {
-      // 二次确认:防止误点垃圾桶图标直接删除不可恢复的对话
-      if (!confirm('确定要删除这个对话吗？删除后不可恢复。')) return
-      try {
-        await fetchJson(`/api/conversations/${id}`, { method: 'DELETE' })
-        // Directly remove from cache, avoiding an extra refetch
-        queryClient.setQueryData<InfiniteData<ConversationsPage, number> | undefined>(
-          queryKeys.conversations.list(PAGE_SIZE, 0),
-          (prev) => {
-            if (!prev) return prev
-            return {
-              ...prev,
-              pages: prev.pages.map((p) => ({
-                ...p,
-                items: p.items.filter((c) => c.id !== id),
-                total: Math.max(0, p.total - 1),
-              })),
-            }
-          }
-        )
-        removeConversationRead(id)
-        if (currentConversationId === id) {
-          router.push('/chat')
+  /** 从无限查询缓存里剔除指定会话(逐页 total 按真实命中数扣减),避免整表 refetch */
+  const dropConversationsFromCache = useCallback((ids: Set<string>) => {
+    queryClient.setQueryData<InfiniteData<ConversationsPage, number> | undefined>(
+      queryKeys.conversations.list(PAGE_SIZE, 0),
+      (prev) => {
+        if (!prev) return prev
+        const present = new Set<string>()
+        for (const page of prev.pages) {
+          for (const c of page.items) if (ids.has(c.id)) present.add(c.id)
         }
-      } catch (err) {
-        console.error('Failed to delete conversation:', err)
+        return {
+          ...prev,
+          pages: prev.pages.map((p) => ({
+            ...p,
+            items: p.items.filter((c) => !ids.has(c.id)),
+            total: Math.max(0, p.total - present.size),
+          })),
+        }
       }
-    },
-    [queryClient, removeConversationRead, currentConversationId, router]
-  )
+    )
+  }, [queryClient])
+
+  // 单条删除只负责打开确认弹窗,真正的删除在 confirmSingleDelete 里执行
+  const handleDeleteConversation = useCallback((id: string) => {
+    setPendingDeleteId(id)
+  }, [])
+
+  const confirmSingleDelete = useCallback(async () => {
+    const id = pendingDeleteId
+    if (!id) return
+    setDeleting(true)
+    try {
+      await fetchJson(`/api/conversations/${id}`, { method: 'DELETE' })
+      dropConversationsFromCache(new Set([id]))
+      removeConversationRead(id)
+      if (currentConversationId === id) {
+        router.push('/chat')
+      }
+      setPendingDeleteId(null)
+    } catch (err) {
+      console.error('Failed to delete conversation:', err)
+      toast.error(err instanceof Error ? err.message : '删除失败，请重试', { title: '删除对话' })
+    } finally {
+      setDeleting(false)
+    }
+  }, [
+    pendingDeleteId,
+    dropConversationsFromCache,
+    removeConversationRead,
+    currentConversationId,
+    router,
+  ])
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const exitManageMode = useCallback(() => {
+    setManageMode(false)
+    setSelectedIds(new Set())
+    setBatchConfirmOpen(false)
+  }, [])
+
+  const allSelected = conversations.length > 0 && conversations.every((c) => selectedIds.has(c.id))
+
+  /** 全选/取消全选的作用域是「已加载的会话」——未加载的分页要靠列表滚动继续加载 */
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const loaded = conversations.map((c) => c.id)
+      return prev.size >= loaded.length && loaded.every((id) => prev.has(id))
+        ? new Set<string>()
+        : new Set(loaded)
+    })
+  }, [conversations])
+
+  const confirmBatchDelete = useCallback(async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setDeleting(true)
+    try {
+      const res = await fetchJson<{ deleted?: number; skipped?: number }>(
+        '/api/conversations/batch-delete',
+        { method: 'POST', json: { ids } }
+      )
+      dropConversationsFromCache(new Set(ids))
+      selectedIds.forEach((id) => removeConversationRead(id))
+      if (currentConversationId && selectedIds.has(currentConversationId)) {
+        startNewChat()
+      }
+      const skipped = res?.skipped ?? 0
+      if (skipped > 0) {
+        toast.error(`已删除 ${res?.deleted ?? 0} 个，${skipped} 个已不存在或无权删除`, {
+          title: '批量删除',
+        })
+      } else {
+        toast.success(`已删除 ${res?.deleted ?? ids.length} 个对话`, { title: '批量删除' })
+      }
+      exitManageMode()
+    } catch (err) {
+      // 失败保留勾选集合,用户可直接重试同一批
+      console.error('Failed to batch delete conversations:', err)
+      toast.error(err instanceof Error ? err.message : '批量删除失败，请重试', { title: '批量删除' })
+    } finally {
+      setDeleting(false)
+    }
+  }, [
+    selectedIds,
+    dropConversationsFromCache,
+    removeConversationRead,
+    currentConversationId,
+    startNewChat,
+    exitManageMode,
+  ])
+
+  // 批量管理模式 Esc 退出;确认弹窗开着时让弹窗自己吃掉这次按键,避免一次退两层
+  useEffect(() => {
+    if (!manageMode || batchConfirmOpen) return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') exitManageMode()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [manageMode, batchConfirmOpen, exitManageMode])
 
   const handleRenameConversation = useCallback(
     async (id: string, newTitle: string) => {
@@ -620,14 +728,28 @@ export function Sidebar() {
         {sidebarEffectiveOpen && (
           <div className="px-3.5 pt-2 pb-1 flex items-center justify-between">
             <h2 className="text-[11px] font-medium text-content-muted/80">
-              {isEphemeral ? '临时对话' : '历史记录'}
+              {manageMode
+                ? `已选 ${selectedIds.size} 条`
+                : isEphemeral ? '临时对话' : '历史记录'}
             </h2>
             <div className="flex items-center gap-1.5">
-              {total > 0 && (
+              {total > 0 && !manageMode && (
                 <span className="text-[11px] text-content-muted/60 tabular-nums">
                   {conversations.length}
                   {hasMore ? ` / ${total}` : ''}
                 </span>
+              )}
+              {/* 批量管理:进入多选模式后逐条删除换成勾选集合 + 底部一次性删除 */}
+              {total > 0 && !manageMode && (
+                <button
+                  onClick={() => setManageMode(true)}
+                  className="p-0.5 rounded-md text-content-muted/70 hover:text-content-primary hover:bg-surface-subtle transition-all active:scale-95 touch-manipulation"
+                  aria-label="批量管理对话"
+                  title="批量管理"
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                </button>
               )}
               <button
                 onClick={() => setSearchOpen(true)}
@@ -666,6 +788,9 @@ export function Sidebar() {
                         maskName={badge?.name}
                         index={index}
                         lastMessageAt={new Date(conv.updatedAt).getTime()}
+                        selectable={manageMode}
+                        selected={selectedIds.has(conv.id)}
+                        onToggleSelect={toggleSelect}
                         onDelete={handleDeleteConversation}
                         onRename={handleRenameConversation}
                       />
@@ -677,6 +802,44 @@ export function Sidebar() {
                 </>
               )}
             </nav>
+          </div>
+        )}
+
+        {/* 批量管理操作条:全选作用域为已加载会话,列表可继续滚动加载 */}
+        {sidebarEffectiveOpen && manageMode && (
+          <div className="px-2 pt-2 pb-2 mt-0.5 border-t border-line/40 flex items-center gap-1.5">
+            <button
+              onClick={toggleSelectAll}
+              className="flex h-7 items-center gap-1 px-2 rounded-lg text-[11px] font-medium
+                border border-line/40 bg-surface-muted/60 text-content-secondary
+                hover:bg-surface-subtle hover:text-content-primary transition-colors active:scale-[0.98] touch-manipulation"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <Check className="w-3 h-3" aria-hidden />
+              {allSelected ? '取消全选' : '全选'}
+            </button>
+            <button
+              onClick={() => setBatchConfirmOpen(true)}
+              disabled={selectedIds.size === 0 || deleting}
+              className="flex-1 flex h-7 items-center justify-center gap-1 rounded-lg text-[11px] font-medium
+                bg-red-500 text-white hover:bg-red-600 dark:bg-red-500/90 dark:hover:bg-red-500
+                transition-colors active:scale-[0.98] touch-manipulation
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+              aria-label={`删除 ${selectedIds.size} 个对话`}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <Trash2 className="w-3 h-3" aria-hidden />
+              删除{selectedIds.size > 0 ? ` ${selectedIds.size}` : ''}
+            </button>
+            <button
+              onClick={exitManageMode}
+              className="h-7 px-2 rounded-lg text-[11px] text-content-muted hover:text-content-primary
+                hover:bg-surface-subtle transition-colors touch-manipulation"
+              aria-label="退出批量管理"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              取消
+            </button>
           </div>
         )}
 
@@ -825,6 +988,27 @@ export function Sidebar() {
           setSidebarOpen(false)
           router.push(`/chat/c/${id}`)
         }}
+      />
+      {/* 删除确认:单条与批量共用一个弹窗组件,替代原生 window.confirm */}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="删除这个对话？"
+        description="对话内的消息与上传的附件将一并清除，删除后不可恢复。"
+        confirmLabel="删除"
+        danger
+        busy={deleting}
+        onConfirm={confirmSingleDelete}
+        onCancel={() => setPendingDeleteId(null)}
+      />
+      <ConfirmDialog
+        open={batchConfirmOpen}
+        title={`删除 ${selectedIds.size} 个对话？`}
+        description="对话内的消息与上传的附件将一并清除，删除后不可恢复。"
+        confirmLabel="删除"
+        danger
+        busy={deleting}
+        onConfirm={confirmBatchDelete}
+        onCancel={() => setBatchConfirmOpen(false)}
       />
     </>
   )

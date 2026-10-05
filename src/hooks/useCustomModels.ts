@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query/keys'
 import { toast } from '@/lib/toast'
 
 // ---------------------------------------------------------------------------
@@ -186,6 +188,7 @@ export interface UseCustomModelsReturn {
 
 export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomModelsReturn {
   const { onMessage } = opts
+  const queryClient = useQueryClient()
 
   const [customModels, setCustomModels] = useState<SavedCustomModel[]>([])
   const [userPresets, setUserPresets] = useState<CustomModelPreset[]>([])
@@ -295,12 +298,15 @@ export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomMod
       )
       resetForm()
       notify('success', '自定义模型已保存')
+      // 本 hook 只持有设置弹窗的本地 state;模型选择框读的是 TanStack 缓存,
+      // 必须失效才会让聊天页/写作页/探索页的选择框实时出现新模型
+      await queryClient.invalidateQueries({ queryKey: queryKeys.customModels() })
     } catch (err) {
       notify('error', err instanceof Error ? err.message : '保存失败')
     } finally {
       setCmSaving(false)
     }
-  }, [cmForm, notify, resetForm])
+  }, [cmForm, notify, resetForm, queryClient])
 
   const deleteModel = useCallback(
     async (dbId: string) => {
@@ -310,6 +316,8 @@ export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomMod
         await fetch(`/api/custom-models/${dbId}`, { method: 'DELETE' })
         setCustomModels((prev) => prev.filter((m) => m.dbId !== dbId))
         notify('success', '模型已删除')
+        // 同 saveModel:让各页面的模型选择框实时移除该模型
+        await queryClient.invalidateQueries({ queryKey: queryKeys.customModels() })
       } catch {
         notify('error', '删除失败')
       } finally {
@@ -320,7 +328,7 @@ export function useCustomModels(opts: UseCustomModelsOptions = {}): UseCustomMod
         }
       }
     },
-    [cmForm.id, notify, resetForm]
+    [cmForm.id, notify, resetForm, queryClient]
   )
 
   const testModel = useCallback(

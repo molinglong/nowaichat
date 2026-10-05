@@ -12,6 +12,7 @@
 
 import { BUILTIN_MASKS } from '@/lib/ai/builtin-masks'
 import { STYLE_PRESETS } from '@/lib/ai/style-presets'
+import { REPLY_LENGTH_LEVELS } from '@/lib/ai/reply-length'
 import { BUILTIN_IMAGE_MODELS } from '@/lib/ai/image-models.config'
 
 export const SETTING_KEYS = [
@@ -19,6 +20,7 @@ export const SETTING_KEYS = [
   'sidebar',
   'search_engine',
   'style_preset',
+  'reply_length',
   'mask',
   'open_settings',
   // P2: DB 存储项（PATCH /api/settings/clarify、/api/memories/settings、/api/image-settings）
@@ -64,6 +66,11 @@ export const SETTINGS_REGISTRY: readonly SettingDef[] = [
     key: 'style_preset',
     label: '对话风格',
     allowedValues: ['balanced', 'practical', 'dev', 'editor', 'mentor', 'scholar', 'concise', 'humorous', 'creative'],
+  },
+  {
+    key: 'reply_length',
+    label: '回复长度',
+    allowedValues: REPLY_LENGTH_LEVELS.map((l) => l.id),
   },
   {
     key: 'mask',
@@ -120,6 +127,7 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   sidebar: { open: '展开', close: '收起' },
   search_engine: { qianfan: '百度千帆', tavily: 'Tavily' },
   style_preset: Object.fromEntries(STYLE_PRESETS.map((p) => [p.id, p.label])),
+  reply_length: Object.fromEntries(REPLY_LENGTH_LEVELS.map((l) => [l.id, l.label])),
   mask: { off: '关闭' },
   clarify: { on: '开启', off: '关闭' },
   memory: { on: '开启', off: '关闭' },

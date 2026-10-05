@@ -20,6 +20,7 @@ import { buildMemorySystemPrompt, getRelevantMemories, extractAndSaveMemories } 
 import { generateImage, extractImagePrompts, IMG_MARKER_REGEX } from "@/lib/ai/image"
 import { generateConversationTitle } from "@/lib/ai/title-generator"
 import { getStylePromptFromPreset, STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style"
+import { getReplyLengthPrompt, REPLY_LENGTH_LEVELS, DEFAULT_REPLY_LENGTH } from "@/lib/ai/reply-length"
 import { getMaskById } from '@/lib/ai/mask-resolve'
 import { MASK_ESCAPE_HATCH } from '@/lib/ai/mask-types'
 import { buildMatchedSettingsBlock } from "@/lib/write/work-settings"
@@ -136,6 +137,7 @@ interface ChatRequestBody {
   attachments?: Attachment[]
   styleOffset?: number // 旧版 0-100, default 50 if not provided(向后兼容)
   stylePreset?: string // 新版 preset id(见 src/lib/ai/style-presets.ts 的 STYLE_PRESETS)
+  replyLength?: string // 回复长度档 id(见 src/lib/ai/reply-length.ts);不传时走 standard(不注入)
   maskId?: string // 面具 id(内置面具见 @/lib/ai/builtin-masks);不传时从会话读取
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
@@ -369,6 +371,16 @@ export async function POST(req: NextRequest) {
 
     console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}, mcpEnabled: ${mcpEnabled}`)
 
+    // 边界护栏:body.model 缺失(客户端模型水合竞态等)会让下游 modelId.startsWith
+    // 直接 TypeError 500,错误细节只有服务端控制台可见。这里 400 早退并给出可读文案。
+    if (typeof modelId !== "string" || !modelId.trim()) {
+      console.error(`[chat] Missing/invalid model in request body for user ${userId}: ${String(modelId)}`)
+      return new Response(JSON.stringify({ error: "请求缺少模型参数,请刷新页面后重试;若反复出现请清浏览器缓存" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
     // 新版 preset 优先:body 显式传 stylePreset 时用之,否则查 DB 的 preset;
     // preset 缺失/null 时回退到旧的 styleOffset(老会话);offset 也无则默认 balanced。
     const requestedStylePreset = STYLE_PRESETS.find((p) => p.id === body.stylePreset)?.id
@@ -387,6 +399,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     let conversationStylePreset: string | null = null
     let conversationStyleOffset = 50
     let conversationMaskId: string | null = null
+    let conversationReplyLength: string | null = null
     // 归属标记:conversationId 确实属于当前用户且区隔匹配(临时↔正式)才允许复用,读取其数据。
     // 否则一律按"无会话"处理并新建,杜绝向他人会话写入(跨用户越权与跨区写入)。
     let conversationOwned = false
@@ -394,12 +407,13 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       try {
         const conv = await prisma.conversation.findFirst({
           where: { id: conversationId, userId, isEphemeral },
-          select: { styleOffset: true, stylePreset: true, maskId: true },
+          select: { styleOffset: true, stylePreset: true, maskId: true, replyLength: true },
         })
         conversationOwned = !!conv
         conversationStylePreset = conv?.stylePreset ?? null
         conversationStyleOffset = conv?.styleOffset ?? 50
         conversationMaskId = conv?.maskId ?? null
+        conversationReplyLength = conv?.replyLength ?? null
       } catch (err) {
         console.error("[chat] Failed to fetch conversation:", err)
       }
@@ -872,6 +886,16 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
   // Style prompt - 按 preset 渲染(新版)
   systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
+
+  // 回复长度档:插在风格段之后,让「篇幅」独立于「语气」可调(风格段管详略的旧语义
+  // 由 LENGTH_LAYER_PREAMBLE 显式覆盖)。优先级 body > 会话 DB > standard。
+  // standard 档 prompt 为空串 → 不注入,存量会话行为不变。
+  const effectiveReplyLength: string =
+    REPLY_LENGTH_LEVELS.find((l) => l.id === body.replyLength)?.id ??
+    REPLY_LENGTH_LEVELS.find((l) => l.id === conversationReplyLength)?.id ??
+    DEFAULT_REPLY_LENGTH
+  const replyLengthPrompt = getReplyLengthPrompt(effectiveReplyLength)
+  if (replyLengthPrompt) systemParts.push(replyLengthPrompt)
 
   // 公式书写规范: 全局生效——模型(尤其中文系)常用 Unicode 拼凑数学式(a^m·a^n、√2、≠),
   // KaTeX 只认 LaTeX 定界符,这些写法被原样当字符显示,用户侧表现就是"公式全是乱码"。

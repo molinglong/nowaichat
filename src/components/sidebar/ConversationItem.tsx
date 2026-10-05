@@ -23,6 +23,11 @@ interface ConversationItemProps {
   index?: number
   /** 该会话最后一条消息时间(ms 数字).来自会话的 updatedAt. */
   lastMessageAt?: number
+  /** 批量管理模式:行不再是导航链接,整行点击切换勾选 */
+  selectable?: boolean
+  /** 批量管理模式下是否已勾选 */
+  selected?: boolean
+  onToggleSelect?: (id: string) => void
   onDelete?: (id: string) => void
   onRename?: (id: string, newTitle: string) => void
 }
@@ -31,7 +36,7 @@ interface ConversationItemProps {
 const STAGGER_STEP_MS = 20
 const STAGGER_MAX_INDEX = 15
 
-function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 0, lastMessageAt, onDelete, onRename }: ConversationItemProps) {
+function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 0, lastMessageAt, selectable, selected, onToggleSelect, onDelete, onRename }: ConversationItemProps) {
   const staggerDelay = Math.min(index, STAGGER_MAX_INDEX) * STAGGER_STEP_MS
   const pathname = usePathname()
   const router = useRouter()
@@ -181,6 +186,8 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
 
   // ── 右键菜单:会话级操作集合(hover 按钮之外补充的桌面端入口) ──
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    // 批量管理模式下不弹单条操作菜单(此处的动作对象是勾选集合)
+    if (selectable) return
     e.preventDefault()
     const { openContextMenu } = useContextMenuStore.getState()
     const items: ContextMenuItem[] = []
@@ -231,7 +238,7 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
       })
     }
     openContextMenu({ x: e.clientX, y: e.clientY }, items)
-  }, [onRename, beginEdit, branching, handleBranch, exporting, handleExport, onDelete, id, title])
+  }, [selectable, onRename, beginEdit, branching, handleBranch, exporting, handleExport, onDelete, id, title])
 
   function cancelEditing() {
     setEditValue(title)
@@ -287,6 +294,41 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
           <X className="w-3 h-3" />
         </button>
       </div>
+    )
+  }
+
+  // 批量管理模式:整行即勾选开关,导航/重命名/删除按钮都让位给底部操作条
+  if (selectable) {
+    return (
+      <button
+        type="button"
+        onClick={() => onToggleSelect?.(id)}
+        aria-pressed={selected}
+        style={{ animationDelay: `${staggerDelay}ms`, WebkitTapHighlightColor: 'transparent' }}
+        className={cn(
+          'sidebar-item-enter flex w-full items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm transition-colors touch-manipulation',
+          selected
+            ? 'bg-accent-soft text-content-primary'
+            : 'text-content-secondary hover:bg-surface-subtle/60 hover:text-content-primary'
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
+            selected ? 'border-accent bg-accent text-white' : 'border-line/70 bg-surface'
+          )}
+        >
+          {selected && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+        {maskAvatar && <span className="shrink-0 text-xs leading-none" aria-hidden>{maskAvatar}</span>}
+        {mode === 'compare' && (
+          <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-accent-soft text-content-secondary font-medium">
+            对比
+          </span>
+        )}
+      </button>
     )
   }
 
@@ -368,6 +410,9 @@ function areConversationItemPropsEqual(
   if (prev.maskName !== next.maskName) return false
   if (prev.index !== next.index) return false
   if (prev.lastMessageAt !== next.lastMessageAt) return false
+  if (prev.selectable !== next.selectable) return false
+  if (prev.selected !== next.selected) return false
+  if (prev.onToggleSelect !== next.onToggleSelect) return false
   if (prev.onDelete !== next.onDelete) return false
   if (prev.onRename !== next.onRename) return false
   return true

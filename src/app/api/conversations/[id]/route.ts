@@ -131,6 +131,7 @@ export async function GET(
     mode: conversation.mode ?? 'single',
     styleOffset: conversation.styleOffset ?? 0,
     stylePreset: conversation.stylePreset ?? null, // 新版 preset(null = balanced)
+    replyLength: conversation.replyLength ?? null, // 长度档(null = standard,不额外限制篇幅)
     maskId: conversation.maskId ?? null, // 面具(null = 无面具)
     compareModels,
     latestVote: latestVote ?? null,

@@ -106,7 +106,7 @@ export function ChatErrorBanner({
         {/* 主文案：发生了什么 + 该做什么 */}
         <p
           className={cn(
-            'break-words font-medium text-red-600 dark:text-red-400',
+            'break-words font-medium text-red-700 dark:text-red-300',
             compact ? 'text-xs' : 'text-sm'
           )}
         >
@@ -118,8 +118,8 @@ export function ChatErrorBanner({
             <button
               onClick={onRetry}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg bg-red-500 font-medium text-white',
-                'transition-colors hover:bg-red-600',
+                'inline-flex items-center gap-1.5 rounded-lg bg-red-600 font-medium text-white',
+                'transition-colors hover:bg-red-700',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong',
                 compact ? 'px-2 py-1 text-[11px]' : 'px-3 py-1.5 text-xs'
               )}
@@ -151,7 +151,11 @@ export function ChatErrorBanner({
               onClick={() => setRawOpen((v) => !v)}
               aria-expanded={rawOpen}
               className={cn(
-                'inline-flex items-center gap-1 text-red-500/80 transition-colors hover:text-red-600 dark:text-red-400/70 dark:hover:text-red-300',
+                // 文字级按钮：色值须过 AA(旧 red-500/80 在红底上只有 2.78:1)，
+                // 并用 px/py 把命中区从 17px 抬到 28px
+                'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-red-700',
+                'transition-colors hover:bg-red-100/70 hover:text-red-800',
+                'dark:text-red-300 dark:hover:bg-red-900/40 dark:hover:text-red-200',
                 compact ? 'text-[11px]' : 'text-xs'
               )}
             >
@@ -166,8 +170,9 @@ export function ChatErrorBanner({
               onClick={handleDiagnose}
               disabled={diagnosing}
               className={cn(
-                'inline-flex items-center gap-1 text-red-500/80 transition-colors hover:text-red-600 disabled:opacity-50',
-                'dark:text-red-400/70 dark:hover:text-red-300',
+                'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-red-700',
+                'transition-colors hover:bg-red-100/70 hover:text-red-800',
+                'disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-900/40 dark:hover:text-red-200',
                 compact ? 'text-[11px]' : 'text-xs'
               )}
             >
@@ -199,13 +204,13 @@ export function ChatErrorBanner({
         {info.raw && rawOpen && (
           <div className="mt-2 rounded-lg bg-surface/70 px-2.5 py-2">
             <div className="flex items-start justify-between gap-2">
-              <p className="min-w-0 flex-1 break-all font-mono text-[11px] leading-relaxed text-content-muted">
+              <p className="min-w-0 flex-1 break-all font-mono text-[11px] leading-relaxed text-content-secondary">
                 {info.raw}
               </p>
               <button
                 type="button"
                 onClick={handleCopy}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-content-muted transition-colors hover:bg-surface-subtle hover:text-content-secondary"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-content-secondary transition-colors hover:bg-surface-subtle hover:text-content-primary"
                 aria-label="复制错误信息"
               >
                 <Copy className="w-3 h-3" />
@@ -219,7 +224,7 @@ export function ChatErrorBanner({
       {onClose && (
         <button
           onClick={onClose}
-          className="shrink-0 rounded-md p-1 text-red-400 transition-colors hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-300"
+          className="shrink-0 rounded-md p-1 text-red-600 transition-colors hover:bg-red-100 hover:text-red-700 dark:text-red-300 dark:hover:bg-red-900/30 dark:hover:text-red-200"
           aria-label="关闭错误提示"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">

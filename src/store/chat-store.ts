@@ -102,6 +102,9 @@ interface ChatState {
   /** 当前对话的风格预设 id(balanced/practical/dev/editor/mentor/scholar). 默认 balanced. */
   conversationStylePreset: string
   setConversationStylePreset: (preset: string) => void
+  /** 当前对话的回复长度档 id(minimal/short/standard/detailed). 默认 standard(不额外限制篇幅). */
+  conversationReplyLength: string
+  setConversationReplyLength: (level: string) => void
   /** 当前对话的面具 id(内置面具见 @/lib/ai/builtin-masks). null 表示未启用面具. */
   conversationMaskId: string | null
   setConversationMaskId: (maskId: string | null) => void
@@ -321,6 +324,8 @@ const storeInitializer: StateCreator<ChatState> = (set) => ({
     set((state) => ({ newChatNonce: state.newChatNonce + 1 })),
   conversationStylePreset: 'balanced',
   setConversationStylePreset: (preset) => set({ conversationStylePreset: preset }),
+  conversationReplyLength: 'standard',
+  setConversationReplyLength: (level) => set({ conversationReplyLength: level }),
   conversationMaskId: null,
   setConversationMaskId: (maskId) => set({ conversationMaskId: maskId }),
   searchEngine: typeof window !== 'undefined' ? getInitialSearchEngine() : 'qianfan',

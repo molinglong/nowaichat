@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect, useMemo, KeyboardEvent, memo, type CSSProperties } from 'react'
+import { useRenderProbe } from '@/lib/client-diagnostics'
 import { useRouter } from 'next/navigation'
 import {
   Bot,
@@ -345,6 +346,7 @@ function MessageBubbleInner({
   clarifyAnswered,
   contentVisibilityOff,
 }: MessageBubbleProps) {
+  useRenderProbe('MessageBubble')
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const isSystem = message.role === 'system'
@@ -897,7 +899,7 @@ function MessageBubbleInner({
         style={wrapperStyle}
         data-message-id={message.id}
         className={cn(
-          'flex justify-start px-4 py-2 transition-colors group relative',
+          'flex justify-start px-4 max-md:px-2 py-2 transition-colors group relative',
           isFocused && 'bg-accent/5 border-l-2 border-l-accent'
         )}
       >
@@ -911,7 +913,7 @@ function MessageBubbleInner({
   // Edit mode: inline textarea for user messages
   if (isUser && isEditing) {
     return (
-      <div className="flex justify-end px-4 py-2">
+      <div className="flex justify-end px-4 max-md:px-2 py-2">
         <div className="max-w-[80%] w-full">
           <div className="rounded-lg bg-accent overflow-hidden">
             <textarea
@@ -993,14 +995,14 @@ function MessageBubbleInner({
       data-message-id={message.id}
       onContextMenu={handleMessageContextMenu}
       className={cn(
-        'flex gap-2.5 px-4 py-2 transition-colors group relative',
+        'flex gap-2.5 px-4 max-md:px-2 py-2 transition-colors group relative',
         isUser ? 'justify-end' : 'justify-start',
         isFocused && 'bg-accent/5 border-l-2 border-l-accent'
       )}
     >
-      {/* Avatar - only for AI */}
+      {/* Avatar - only for AI; 手机端让位给正文(头像+间距白吃 34px 屏宽) */}
       {!isUser && (
-        <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5">
+        <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5 max-md:hidden">
           <Bot className="w-3 h-3" />
         </div>
       )}
@@ -1088,6 +1090,7 @@ function MessageBubbleInner({
                   content={displayText}
                   messageId={message.id}
                   rich={isAssistant && !isTyping && (!isStreaming || !isLastMessage)}
+                  live={isAssistant}
                 />
                 {showCursor && (
                   <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-content-secondary animate-pulse align-middle" />
@@ -1402,6 +1405,12 @@ function areMessageBubblePropsEqual(
 ): boolean {
   if (prev.message.id !== next.message.id) return false
   if (prev.message.role !== next.message.role) return false
+  // 正在生成的这条不参与判等。根因: AI SDK 首次插入流式消息走 pushMessage(不快照),
+  // React 手里的 prev.message 就是被 text-delta 原地累加的那个活对象, 它与 next 的
+  // 克隆快照内容永远同步等长 → 下面的 parts 指纹恒判相等 → 整轮不重渲
+  // (实测: 网络 338 块到达, DOM 正文只变 2 次, 9.4s→17.5s 气泡零渲染)。
+  // 代价只落在这一条气泡上, 且频率由 useChat 的 throttle(50ms) 兜住。
+  if (next.isStreaming && next.isLastMessage && next.message.role === 'assistant') return false
   if (prev.isStreaming !== next.isStreaming) return false
   if (prev.isLastAssistant !== next.isLastAssistant) return false
   if (prev.isLastMessage !== next.isLastMessage) return false

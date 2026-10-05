@@ -29,6 +29,7 @@ export function buildSettingsSnapshot(): Partial<Record<SettingKey, string>> {
     sidebar: s.sidebarOpen ? 'open' : 'close',
     search_engine: s.searchEngine,
     style_preset: s.conversationStylePreset,
+    reply_length: s.conversationReplyLength,
     mask: s.conversationMaskId ?? 'off',
   }
 }
@@ -60,6 +61,11 @@ const APPLY: Partial<Record<SettingKey, (value: string) => void | Promise<void>>
     useChatStore.getState().setConversationStylePreset(value)
     // 与 SettingsModal 手动切换同款:store 即时生效,会话归属的持久化仍以界面操作为准
     localStorage.setItem('chat:stylePreset', value)
+  },
+  reply_length: (value) => {
+    useChatStore.getState().setConversationReplyLength(value)
+    // 与 style_preset 同款:store 即时生效(下一轮请求 body 带上),会话落库以界面操作为准
+    localStorage.setItem('chat:replyLength', value)
   },
   mask: (value) => {
     useChatStore.getState().setConversationMaskId(value === 'off' ? null : value)

@@ -144,6 +144,7 @@ export function ComparePanel({
               title: text.slice(0, 40) || '新对话',
               model: compareModelsRef.current[0],
               stylePreset,
+              replyLength: useChatStore.getState().conversationReplyLength,
               maskId,
               mode: 'compare',
               compareModels: compareModelsRef.current,

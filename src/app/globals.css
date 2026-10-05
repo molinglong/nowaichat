@@ -1427,6 +1427,20 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   overflow-y: hidden;
 }
 
+/* 手机端(<768px)公式去壳平铺:窄屏里 1.25rem 内边距 + 圆角边框先吃掉正文宽度,
+   独立公式改随文本流左对齐;代码块保留底色(与正文的区分不能丢) */
+@media (max-width: 767px) {
+  .rich-md .katex-display,
+  .rich-md .math-card {
+    margin: 0.75em 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    text-align: left;
+  }
+}
+
 /* 选择题选项/诗行内的独立公式不套公式卡片——正文里独立公式成卡片是美化,
    选项里每个选项一张大卡是灾难(历史坑:数学选择题被渲染成四张巨型卡片) */
 .rich-md .exam-option .math-card,
