@@ -213,6 +213,8 @@ export function ChatInput({
   // 输入框右键 → 轮盘(粘贴/复制/全选/清空),替换浏览器原生菜单。
   // 长按右键同样生效:Host 会向本元素合成 contextmenu,复用此装配逻辑
   function handleInputContextMenu(e: React.MouseEvent<HTMLTextAreaElement>) {
+    // 触屏设备(手机)不拦截:长按回退浏览器原生粘贴/复制菜单(改版前基线行为)
+    if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches) return
     const ta = e.currentTarget
     const selected = ta.value.slice(ta.selectionStart, ta.selectionEnd)
     const items: ContextMenuItem[] = [

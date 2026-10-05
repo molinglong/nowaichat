@@ -23,6 +23,14 @@ const VIEWPORT_MARGIN = 8
 const OPEN_GRACE_MS = 50
 
 /**
+ * 触屏设备(手机/纯平板,pointer:coarse 为主指针)判定:
+ * 禁用轮盘与长按右键合成,右键/长按回退默认列表菜单。
+ */
+function isTouchPrimary() {
+  return typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+}
+
+/**
  * 全局右键菜单宿主 —— 单例挂载在 (app) layout,任何场景通过
  * contextMenuStore.openContextMenu() 弹出菜单,本组件统一负责:
  * - Portal 到 body + position:fixed(规避父容器 overflow/z-index 层叠坑)
@@ -92,6 +100,8 @@ export function ContextMenuHost() {
     let holdTimer: number | null = null
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 2) return
+      // 触屏设备不进入长按轮盘(移动端已在 wheelEligible 回退列表,这里连合成也不做)
+      if (isTouchPrimary()) return
       const { clientX: ax, clientY: ay } = e
       holdTimer = window.setTimeout(() => {
         holdTimer = null
@@ -258,9 +268,11 @@ export function ContextMenuHost() {
 
   const visibleItems = items.filter((it) => !it.hidden)
 
-  // 转盘模式:3~8 项且无二级子菜单时以轮盘渲染,其余场景(代码块子菜单等)回退列表
+  // 转盘模式:3~8 项且无二级子菜单时以轮盘渲染,其余场景(代码块子菜单等)回退列表。
+  // 触屏设备(手机)整体禁用轮盘,一律回退默认列表菜单
   const wheelEligible =
     WHEEL_MODE &&
+    !isTouchPrimary() &&
     !items.some((it) => it.submenu) &&
     visibleItems.length >= 3 &&
     visibleItems.length <= 8
