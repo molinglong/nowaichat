@@ -2594,7 +2594,9 @@ export function SettingsModal({
         {/* Header with macOS red dot —— 移动端(≤md)整块是"页头",✕ 必须与顶部 chrome
             同一基线(设置钮原位),否则 设置钮→面板内关闭 又跳一次;桌面端不用这行。
             进详情不新建第二条页头带(那会私藏一份 padding 破坏 --m-chrome-top 基线),
-            而是就地换成「‹ + 分区名」,✕ 恒在最右原位 */}
+            而是就地换成「‹ + 分区名」;✕ 只在一级列表呈现——二级页 ‹ 已承担返回,✕ 再占最右
+            是重复入口(用户定案:二级页关闭钮隐藏)。页头带底色三级恒为 surface(chrome),
+            不随画布走(预览页 .m-head/.n-backbar 同律) */}
         <div className="relative flex items-center justify-between gap-3 pl-5 pr-[var(--m-chrome-inset)] pt-[var(--m-chrome-top)] pb-2 border-b border-line/60 shrink-0 bg-surface md:hidden">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             {mobileInDetail ? (
@@ -2615,16 +2617,18 @@ export function SettingsModal({
               <h2 className="text-[20px] font-semibold tracking-[0.01em] text-content-primary">设置</h2>
             )}
           </div>
-          <button
-            onClick={requestClose}
-            className="shrink-0 flex h-10 w-10 items-center justify-center rounded-lg text-content-secondary active:scale-90 active:bg-surface-subtle/70 transition-transform touch-manipulation"
-            aria-label="关闭"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" strokeLinecap="round">
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
+          {!mobileInDetail && (
+            <button
+              onClick={requestClose}
+              className="shrink-0 flex h-10 w-10 items-center justify-center rounded-lg text-content-secondary active:scale-90 active:bg-surface-subtle/70 transition-transform touch-manipulation"
+              aria-label="关闭"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Body: 移动端 nav 在上(横向滚动 Tabs)+ 内容在下;桌面端左侧 nav + 右侧 内容 */}
@@ -2813,12 +2817,14 @@ export function SettingsModal({
 
           {/* 右列:内容滚动区 + 底部 ESC 提示(桌面端与侧栏并列;移动端是盖在分组列上的「右推层」)。
               移动端不能用 hidden 切进切出 —— display:none 参与不了 transition,推入/弹回就成了瞬切;
-              改成绝对定位 + translate-x,off-screen 时被卡片的 overflow-hidden 裁掉,并标 aria-hidden 让探针和读屏都忽略它 */}
+              改成绝对定位 + translate-x,off-screen 时被卡片的 overflow-hidden 裁掉,并标 aria-hidden 让探针和读屏都忽略它。
+              底色调平:移动端画布取 background(与一级列表列/三级单选页同黑),bg-surface 卡片才浮得出来;
+              桌面端维持 surface 不变(max-md: 挡死) */}
           <div
             data-m-detail
             aria-hidden={isDesktop || mobileInDetail ? undefined : true}
             className={cn(
-              'flex flex-1 min-h-0 min-w-0 flex-col bg-surface',
+              'flex flex-1 min-h-0 min-w-0 flex-col bg-surface max-md:bg-background',
               'absolute inset-0 z-30 pointer-events-none translate-x-full transition-transform duration-300 ease-out',
               mobileInDetail && 'translate-x-0 pointer-events-auto',
               'md:static md:z-auto md:pointer-events-auto md:translate-x-0'
