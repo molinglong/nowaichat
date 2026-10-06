@@ -87,10 +87,12 @@ test("流式回复逐帧增长(防一次性上屏回归)", async ({ page }) => {
 test("设置各板块打开不白屏", async ({ page }) => {
   await page.goto("/chat")
   await page.getByRole("button", { name: "设置", exact: true }).first().click()
-  const closeBtn = page.getByRole("button", { name: "关闭" }).first()
+  // exact 必给:遮罩背后的聊天页也有 aria-label="关闭提示"(ProfileProbe/ChatInput 的提示条),
+  // 子串匹配会先命中它 —— 点了它弹窗当然关不掉,表现为随机失败
+  const closeBtn = page.getByRole("button", { name: "关闭", exact: true }).first()
   await expect(closeBtn).toBeVisible()
   // 覆盖数据加载最重与纯静态的代表性板块;板块崩溃会导致弹窗消失而失败
-  for (const section of ["总览", "记忆", "面具管理", "账号信息", "通用"]) {
+  for (const section of ["总览", "记忆", "面具管理", "用户中心", "通用"]) {
     await page.getByRole("button", { name: section, exact: true }).first().click()
     await expect(closeBtn).toBeVisible()
   }

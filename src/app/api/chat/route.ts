@@ -119,7 +119,7 @@ import {
   closeMcpClients,
   type McpLoadResult,
 } from "@/lib/ai/mcp/mcp-client.server"
-import { loadCompressionState, maybeCompressContext } from "@/lib/context-compression"
+import { loadCompressionState, maybeCompressContext, shouldCompress } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
 import { sanitizeUploadName, readUploadAsDataUrl, sweepOrphanUploadsThrottled } from "@/lib/uploads"
@@ -744,7 +744,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   const localFilesEnabledDb = memorySettings?.localFilesEnabled ?? false
 
   // 临时模式默认不注入长期记忆(防借号场景:"你还记得我什么"套出隐私),
-  // 用户可在正常模式 设置→账号信息 中打开"临时模式允许读取我的记忆"
+  // 用户可在正常模式 设置→用户中心 中打开"临时模式允许读取我的记忆"
   const injectMemory =
     memoryEnabled &&
     (!isEphemeral || (memorySettings?.ephemeralMemoryInjection ?? false))
@@ -1318,6 +1318,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   let lastSnapAt = 0
   let snapStopped = false
   let snapChain: Promise<void> = Promise.resolve()
+  // 流是否走到过正常收尾(onFinish / onError)。没走到就被 abort,说明流在半路断了:
+  // 那种情况下 onStepFinish/onFinish 一个都不触发,服务端原本一行日志都不打。
+  let streamSettled = false
   const scheduleDraftSnapshot = (): void => {
     if (!draftMessageId || snapStopped) return
     snapChain = snapChain
@@ -1335,6 +1338,23 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       })
       .catch(() => {})
   }
+  // 长上下文压缩:后台补一次摘要,只对下一次请求的注入生效,绝不干扰本次流式。
+  // 阈值判定放在调用方(用真实 payload 量),这里只负责"执行 + 兜住异常"。
+  const scheduleCompressionCheck = (): void => {
+    const cid = convId
+    if (!cid) return
+    maybeCompressContext({
+      conversationId: cid,
+      modelId,
+      model: provider(realModelId),
+      userText: userContent,
+      contextWindow: modelDef.contextWindow,
+      force: true,
+    }).catch(() => {
+      // 压缩是旁路,失败不影响主流程
+    })
+  }
+
   // 传入的 conversationId 不属于当前用户时拒绝复用(不向他人会话写任何数据),
   // 改为新建会话承接本次请求;归属查询抛错时同样视为无归属(fail-closed)。
   if (conversationId && !conversationOwned) {
@@ -1558,9 +1578,23 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   }))
 
   // Stream the response
+  const outboundMessages: ModelMessage[] =
+    maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages
+
+  // 长上下文压缩的判定改在这里:量"这次真要发出去的对话历史",不再按本轮字数外推。
+  // 旧估法(本轮字数 × 轮数)在短句重试时几乎恒为 0,大窗口档位按比例算出的阈值又高到
+  // 永不触发,于是超长对话永远不自愈 —— 正是线上"思考途中整条流被断"的温床。
+  // 超阈值只后台补一次摘要(让下一次请求变小),本次请求的 payload 不动;对比模式不触发。
+  if (!groupId && convId && shouldCompress(outboundMessages, modelDef.contextWindow)) {
+    console.log(
+      `[chat] history over compress threshold: conv=${convId} window=${modelDef.contextWindow}`
+    )
+    scheduleCompressionCheck()
+  }
+
   const result = streamText({
     model,
-    messages: maskFewShotMessages.length > 0 ? [...maskFewShotMessages, ...llmMessages] : llmMessages,
+    messages: outboundMessages,
     ...(finalSystem ? { system: finalSystem } : {}),
     // DeepSeek V4.1 起“思考”由请求参数控制(默认 enabled):deepThink 开 → enabled,
     // 关 → disabled,保证日常快答不被强制思考。reasoning_content 仍走原生解析,
@@ -1719,6 +1753,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       }
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {
+      streamSettled = true
       // MCP 连接收尾:提前到最前,后续任何 early return 都不会泄漏连接。
       if (mcp && mcp.clients.length > 0) {
         await closeMcpClients(mcp.clients)
@@ -1897,24 +1932,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           })
         }
 
-        // 长上下文压缩: 当累计消息接近模型 contextWindow × 60% 时,
-        // 异步把较早的消息压缩成摘要存入 ConversationSummary,
-        // 下次请求会自动注入摘要代替被压缩的原文。
-        // 不在对比模式下触发(多泳道并发写入易产生状态竞争)。
-        if (!groupId && convId) {
-          const totalMessages = await prisma.message.count({
-            where: { conversationId: convId, archived: false, role: { in: ["user", "assistant"] } },
-          })
-          maybeCompressContext({
-            conversationId: convId,
-            modelId,
-            model: provider(realModelId),
-            userText: userContent,
-            assistantText: content,
-            contextWindow: modelDef.contextWindow,
-            totalMessages,
-          })
-        }
+        // 长上下文压缩的判定已前移到请求组装处(用真实 payload 量),这里不再触发。
       } catch (error) {
         // AI SDK's notify() silently swallows errors from onFinish callbacks,
         // so we must catch and log them ourselves to avoid silent data loss.
@@ -1929,6 +1947,28 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     responseHeaders["X-Conversation-Title"] = encodeURIComponent(title)
   }
 
+  // 半路断流取证:abort 时 streamSettled 仍为 false,说明 onFinish/onError 都没走到,
+  // 流是在生成途中断的 —— 这条路径原本零日志、零收尾。打出已生成量与草稿 id,
+  // 并把草稿行定格,不再留 streaming=true 的僵尸行(那会让流式恢复轮询盯住一条不会再动的消息)。
+  req.signal.addEventListener("abort", () => {
+    if (streamSettled) return
+    const draftId = draftMessageId
+    console.warn(
+      `[chat] STREAM_DIED_MIDWAY: conv=${convId ?? "-"} draft=${draftId ?? "-"} textLen=${snapText.length} reasoningLen=${snapReasoning.length}`
+    )
+    monitor("chat_stream_aborted", {
+      stage: "midway",
+      textLen: snapText.length,
+      reasoningLen: snapReasoning.length,
+      hasDraft: Boolean(draftId),
+    })
+    if (!draftId) return
+    snapStopped = true
+    snapChain
+      .then(() => prisma.message.update({ where: { id: draftId }, data: { streaming: false } }))
+      .catch(() => {})
+  })
+
   // 手动构建 UI 消息流：过滤掉 [IMG:...] 标记再发给客户端
   const uiStream = toUIMessageStream({
     stream: result.stream,
@@ -1937,6 +1977,7 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     sendFinish: true,
     // 默认只给客户端 "An error occurred.",这里把上游真实错误转成可读消息。
     onError: (error) => {
+      streamSettled = true
       console.error('[chat] Stream error:', error)
       // instanceof 只认顶层 @ai-sdk/provider-utils 的类,而 @ai-sdk/deepseek 自带一份
       // 不同版本的同名类(5.0.30 vs 5.0.29) → DeepSeek 上游错误恒不匹配,全塌成兜底文案。

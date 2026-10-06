@@ -21,6 +21,14 @@ interface ChatErrorBannerProps {
 }
 
 /**
+ * 「让 AI 分析原因」暂时下线。
+ * 生产机上诊断候选会排除出错那家,只剩一把通义 Key,而它回的是
+ * "Free quota exhausted…关闭仅使用免费额度或充值",点了必然 all_failed,
+ * 不如不显示。补到第二把可用 Key 后改回 true 即可(API 与 error-doctor 都原样留着)。
+ */
+const AI_DIAGNOSIS_ENABLED: boolean = false
+
+/**
  * 聊天错误横幅：中文主文案 + 行动指引 + 折叠的上游原文。
  * ChatPanel / CompareLane 共用，避免两处文案与交互漂移。
  */
@@ -164,7 +172,7 @@ export function ChatErrorBanner({
             </button>
           )}
 
-          {info.raw && (
+          {AI_DIAGNOSIS_ENABLED && info.raw && (
             <button
               type="button"
               onClick={handleDiagnose}

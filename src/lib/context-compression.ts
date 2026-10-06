@@ -7,8 +7,8 @@ import { prisma } from "@/lib/db"
  * 设计要点:
  * - estimateMessagesTokens 用字符级粗估(中文×1.6 / 英文按词×1.3),
  *   误差在 ±20% 内,对"触发判断"够用,无需引入额外 tokenizer。
- * - 仅当累计长度超过 contextWindow × COMPRESS_THRESHOLD(默认 60%)时,
- *   才在 onFinish 里异步触发一次 LLM 摘要,把较早的若干轮压成 1 段文本。
+ * - 累计长度超过 min(contextWindow × COMPRESS_THRESHOLD, COMPRESS_TOKEN_CAP) 时,
+ *   在发送前判定并异步触发一次 LLM 摘要,把较早的若干轮压成 1 段文本(只让下一次请求变小)。
  * - 摘要单独存到 ConversationSummary 表,每会话按时间序保留多个分代摘要;
  *   下次请求只读"最新一条",作为首条 system 注入,代替被压缩的原文。
  * - 失败兜底: 任何异常都不影响主聊天流程,静默回退到"全量发送"。
@@ -16,6 +16,19 @@ import { prisma } from "@/lib/db"
 
 /** 触发压缩的阈值(相对 contextWindow 的比例)。越低越早压缩、保留越少原文。 */
 export const COMPRESS_THRESHOLD = 0.6
+
+/**
+ * 触发阈值的绝对上限(token)。
+ * 只按比例算的话,大窗口档位会高到永不触发:DeepSeek 1M 档需要 60 万 token 才压一次,
+ * 长对话因此无界增长,上游在思考途中断掉整条流的概率也跟着涨。
+ */
+export const COMPRESS_TOKEN_CAP = 60_000
+
+/** 压缩触发阈值:比例档与绝对上限取较小者,再给模型输出预留预算。 */
+export function compressThresholdFor(contextWindow: number): number {
+  const budget = Math.min(contextWindow * COMPRESS_THRESHOLD, COMPRESS_TOKEN_CAP)
+  return Math.max(1024, Math.floor(budget - RESERVED_OUTPUT_TOKENS))
+}
 
 /** 触发压缩后,给输出预留的最大 token 预算(避免输出挤掉窗口)。 */
 const RESERVED_OUTPUT_TOKENS = 4096
@@ -107,13 +120,7 @@ export function shouldCompress(
 ): boolean {
   if (!contextWindow || contextWindow <= 0) return false
   const used = estimateMessagesTokens(messages)
-  // 阈值 = contextWindow × COMPRESS_THRESHOLD
-  // 留出 RESERVED_OUTPUT_TOKENS 给模型输出
-  const threshold = Math.max(
-    1024,
-    Math.floor(contextWindow * COMPRESS_THRESHOLD - RESERVED_OUTPUT_TOKENS)
-  )
-  return used >= threshold
+  return used >= compressThresholdFor(contextWindow)
 }
 
 /**
@@ -328,13 +335,13 @@ export async function maybeCompressContext(options: {
   model: LanguageModel
   /** 本轮新增 user 消息 id(用于标记 rangeEnd,可选) */
   userMessageId?: string
-  /** 本轮新产生的 user/assistant 原文,参与压缩 */
+  /** 本轮新产生的 user 原文(自动判定阈值时要用) */
   userText: string
-  assistantText: string
+  /** 本轮 assistant 原文与该会话的消息数:仅自动判定需要,force 调用方可省略 */
+  assistantText?: string
   /** 模型 context window */
   contextWindow: number
-  /** 该会话最近累计的消息数(由调用方从 DB 读出,避免再读一次) */
-  totalMessages: number
+  totalMessages?: number
   /** 手动压缩:跳过极短消息与阈值检查 */
   force?: boolean
 }): Promise<boolean> {
@@ -356,12 +363,9 @@ export async function maybeCompressContext(options: {
 
     // 2) 达到触发阈值才压缩
     //    粗估:"本轮 user/assistant + 历史累计的 token"
-    const thisTurnTokens = estimateTextTokens(userText) + estimateTextTokens(assistantText) + 8
-    const estimatedTotal = thisTurnTokens * Math.max(1, Math.floor(totalMessages / 2))
-    const threshold = Math.max(
-      1024,
-      Math.floor(contextWindow * COMPRESS_THRESHOLD - RESERVED_OUTPUT_TOKENS)
-    )
+    const thisTurnTokens = estimateTextTokens(userText) + estimateTextTokens(assistantText ?? "") + 8
+    const estimatedTotal = thisTurnTokens * Math.max(1, Math.floor((totalMessages ?? 0) / 2))
+    const threshold = compressThresholdFor(contextWindow)
     if (!force && estimatedTotal < threshold) {
       console.log(
         `[compress] skip: total≈${estimatedTotal} < threshold=${threshold} (conv=${conversationId})`

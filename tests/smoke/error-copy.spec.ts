@@ -70,29 +70,45 @@ test("无 envelope 的历史英文错误：降级分类成中文，原文进折�
   await expect(page.getByText(/Incorrect API key provided/).first()).toBeVisible()
 })
 
-test("AI 诊断：点击后展示中文原因与排查步骤", async ({ page }) => {
+test("AI 诊断入口暂时下线：只剩一把额度耗尽的诊断 Key，点了必然 all_failed", async ({ page }) => {
   test.setTimeout(180_000)
-  await page.route("**/api/errors/diagnose", (route) =>
-    route.fulfill({
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: {
-          cause: "服务商账户额度不足，属于额度问题",
-          steps: ["登录服务商后台查看剩余额度", "充值或升级套餐后重试", "临时改用其他可用模型"],
-        },
-      }),
-    })
-  )
   await sendOne(
     page,
     envelope("unknown", "-", "没能识别这个错误的具体原因。展开「查看原始错误」可以看到服务商的原文。", "Error 503: upstream busy")
   )
 
-  await page.getByRole("button", { name: "让 AI 分析原因" }).click()
-  await expect(page.getByText("服务商账户额度不足，属于额度问题")).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByText("充值或升级套餐后重试")).toBeVisible()
+  await expect(page.getByText(/没能识别这个错误的具体原因/).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole("button", { name: "让 AI 分析原因" })).toHaveCount(0)
+  // ChatErrorBanner 的 AI_DIAGNOSIS_ENABLED 改回 true 后，本条要改回：
+  // mock /api/errors/diagnose → 点按钮 → 断言中文原因与「充值或升级套餐后重试」步骤可见
 })
+
+test("链路中断 network error 字面量：归类为连接中断，不再显示「没能识别」", async ({ page }) => {
+  test.setTimeout(180_000)
+  await sendOne(page, "network error")
+
+  await expect(page.getByText(/长连接在半路断了/).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(/没能识别这个错误的具体原因/)).toHaveCount(0)
+  await collapseRaw(page)
+  await page.getByRole("button", { name: "查看原始错误" }).click()
+  await expect(page.getByText(/network error/).first()).toBeVisible()
+})
+
+test("流中断会主动上传取证包（手机上看不见控制台也能判案）", async ({ page }) => {
+  test.setTimeout(180_000)
+  const uploaded: string[] = []
+  await page.route("**/api/client-diagnostics", async (route) => {
+    uploaded.push(route.request().postData() ?? "")
+    // 拦掉实发，避免冒烟测试往库里写证据
+    await route.fulfill({ status: 202, headers: { "Content-Type": "application/json" }, body: "{}" })
+  })
+  await sendOne(page, "network error")
+
+  await expect
+    .poll(() => uploaded.some((b) => b.includes('"stream"') && b.includes("聊天流中断") && b.includes("visibility=")), { timeout: 30_000 })
+    .toBe(true)
+})
+
 test("前置校验 400 也走同一套中文提示", async ({ page }) => {
   test.setTimeout(180_000)
   const detail = "这个模型所属的服务商还没有可用的 API Key。到设置里填一次就能用。"

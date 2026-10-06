@@ -101,8 +101,8 @@ const CATALOG: Record<
     action: null,
   },
   network: {
-    title: '网络连接失败',
-    detail: '本机没能连上服务商：网络中断、代理设置或地址填错。检查网络后重试。',
+    title: '连接中断',
+    detail: '长连接在半路断了：可能是设备与服务器之间的连接被中断（网络切换、系统回收连接），也可能是服务器与服务商之间断了。已生成的内容会停在断处，直接重试即可。',
     action: null,
   },
   server_error: {
@@ -198,12 +198,21 @@ const MATCHERS: Array<{ code: UpstreamErrorCode; test: (text: string, status?: n
     code: 'network',
     test: (t) =>
       t.includes('failed to fetch') ||
+      t.includes('network error') ||
       t.includes('networkerror') ||
       t.includes('network request failed') ||
+      t.includes('load failed') ||
+      t.includes('err_network') ||
+      t.includes('err_internet') ||
+      t.includes('err_connection') ||
       t.includes('econnrefused') ||
       t.includes('econnreset') ||
+      t.includes('econnaborted') ||
       t.includes('fetch failed') ||
       t.includes('socket hang up') ||
+      t.includes('other side closed') ||
+      t.includes('premature close') ||
+      t.includes('terminated') ||
       t.includes('enotfound') ||
       t.includes('代理'),
   },
