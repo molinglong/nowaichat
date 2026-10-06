@@ -84,6 +84,8 @@ export interface ChatInputProps {
   variant?: 'standard' | 'welcome'
   /** welcome 变体顶部可选问候语/引导(slot) */
   welcomeHeader?: React.ReactNode
+  /** welcome 变体贴在输入胶囊上方的提示条(slot),与错误/草稿提示同一节奏 */
+  welcomeBanner?: React.ReactNode
 }
 
 export function ChatInput({
@@ -116,6 +118,7 @@ export function ChatInput({
   onDismissContinuation,
   variant = 'standard',
   welcomeHeader,
+  welcomeBanner,
 }: ChatInputProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -965,6 +968,8 @@ export function ChatInput({
               </button>
             </div>
           )}
+
+          {welcomeBanner}
 
           {/* 输入框容器: 自适应高度 = 附件预览(可选) + textarea + 底部工具行(与 standard 同构);relative 供 ⋯ 弹层锚定
               方案 C 手机端:胶囊化(26px 圆角+白玻璃+柔投影,原型 pill-input 材质) */}

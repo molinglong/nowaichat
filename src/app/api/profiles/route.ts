@@ -8,6 +8,7 @@ import {
   profileRefreshDue,
 } from '@/lib/profile/academic'
 import { DISPLAY_NAME_MAX, sanitizeProfileText } from '@/lib/profile/sanitize'
+import { buildGeneralProfileSection } from '@/lib/profile/injection'
 import {
   GENERAL_DOMAIN,
   GENERAL_FIELDS,
@@ -69,6 +70,12 @@ export async function GET() {
     derived,
     refresh: profileRefreshDue(identity, profile.lastConfirmedAt, now),
     fields: GENERAL_FIELDS,
+    // 实际会进 system prompt 的那段文本，由服务端一处构造：
+    // 「记忆里的你」聚合视图直接展示它，界面不再复刻注入规则，两处不会漂移
+    section: buildGeneralProfileSection({
+      fields: profile.fields,
+      displayName: profile.displayName,
+    }),
   })
 }
 

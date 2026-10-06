@@ -11,6 +11,7 @@ import { ChatErrorBanner } from './ChatErrorBanner'
 import { MessageList } from './MessageList'
 import { HeroModelChip } from './HeroModelChip'
 import { ChatInput } from './ChatInput'
+import { ProfileProbe } from './ProfileProbe'
 import { ComparePanel } from './ComparePanel'
 import { WriteDocPanel } from '@/components/write/WriteDocPanel'
 import { FileEditorPanel } from './FileEditorPanel'
@@ -2054,6 +2055,23 @@ export function ChatPanel({
       />
     ) : null
 
+  // 档案采集的「打字也算回答 / 一发正题立刻让位」信号:最近一条用户消息正文。
+  // 流式期间末条 user 不变,值稳定,不会每帧惊动采集面板。
+  let lastUserText = ''
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'user') continue
+    lastUserText = messages[i].parts
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { text?: string }).text ?? '')
+      .join('')
+      .trim()
+    break
+  }
+
+  // 同一个组件实例挂进两个互斥分支(欢迎页输入胶囊上方 slot / 会话态输入区上方)。
+  // 首启横幅必须在用户还没说话时就出现,只挂会话态等于首次进入永远看不到入口。
+  const profileProbe = <ProfileProbe lastUserText={lastUserText} disabled={studyMode} />
+
   // 对比模式: 渲染并排泳道视图(key 确保模型列表变化时重建泳道)
   if (compareMode) {
     return (
@@ -2138,6 +2156,7 @@ export function ChatPanel({
       {messages.length === 0 ? (
         <ChatInput
           variant="welcome"
+          welcomeBanner={profileProbe}
           onSend={handleSend}
           onStop={handleStop}
           isLoading={isLoading}
@@ -2323,6 +2342,10 @@ export function ChatPanel({
               </button>
             </div>
           )}
+
+          {/* 通用档案采集(波2):首启横幅 / 换学年三选卡 / 一问一气泡的采集面板。
+              与输入框同宽贴在上方,气泡不落库;学习模式与对比模式不弹 */}
+          {profileProbe}
 
           {/* Input area - fixed at bottom */}
           <ChatInput

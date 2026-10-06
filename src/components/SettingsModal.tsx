@@ -674,6 +674,63 @@ function MSwitch({ on }: { on: boolean }) {
   )
 }
 
+/**
+ * 「记忆里的你」(波2)：把 AI 每轮真正看到的两段文本摊开给用户读。
+ * 档案段由服务端算好回传，界面不重算——注入规则只在一处，不会和实际注入漂移。
+ */
+function ProfileMirror({
+  section,
+  enabled,
+  derivedNote,
+  alwaysMemories,
+}: {
+  section: string
+  enabled: boolean
+  derivedNote: string
+  alwaysMemories: { id: string; content: string }[]
+}) {
+  return (
+    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2" data-profile-mirror>
+      <div>
+        <p className="text-xs font-medium text-content-secondary">记忆里的你</p>
+        <p className="text-[10px] text-content-muted/70 mt-0.5 max-md:hidden">
+          下面就是 AI 每一轮实际看到的文本，只读；要改回上面的档案或「记忆」板块。
+        </p>
+      </div>
+
+      {section ? (
+        <div className="rounded-lg border border-line/50 bg-surface-muted/50 px-2.5 py-2">
+          <p className="text-[11px] leading-relaxed text-content-secondary whitespace-pre-line break-words">
+            {section}
+          </p>
+          <p className="mt-1.5 text-[10px] text-content-muted/70">
+            档案段 {section.length} / 200 字符{enabled ? '' : ' · 开关已关，当前不注入'}
+          </p>
+        </div>
+      ) : (
+        <p className="text-[11px] text-content-muted">档案段还是空的，AI 目前只从记忆里认识你。</p>
+      )}
+
+      {derivedNote && <p className="text-[11px] leading-snug text-content-muted">{derivedNote}</p>}
+
+      <div className="space-y-1">
+        <p className="text-[10px] text-content-muted/70">
+          记忆流里每轮必带的 {alwaysMemories.length} 条
+          {alwaysMemories.length > 5 ? '（列前 5 条）' : ''}
+        </p>
+        {alwaysMemories.slice(0, 5).map((m) => (
+          <p key={m.id} className="text-[11px] leading-snug text-content-secondary break-words">
+            · {m.content}
+          </p>
+        ))}
+        {alwaysMemories.length === 0 && (
+          <p className="text-[11px] text-content-muted">还没有这类记忆。</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** 开关行。调用方把它放进既有的卡片容器里即可,两断点共用同一份 label/help */
 function MSwitchRow({
   label,
@@ -914,6 +971,8 @@ export function SettingsModal({
   const [profileDraft, setProfileDraft] = useState<GeneralFields>({})
   const [profileEnabledDraft, setProfileEnabledDraft] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
+  // 「记忆里的你」:服务端算好的注入段原文,界面不复刻注入规则
+  const [profileSection, setProfileSection] = useState('')
   // ── 临时聊天(访客模式):访客密码 + 隔离区管理 + 记忆注入开关 ──
   const [ephemeralSettings, setEphemeralSettings] = useState<{ hasGuestPassword: boolean; ephemeralMemoryInjection: boolean } | null>(null)
   const [ephemeralItems, setEphemeralItems] = useState<EphemeralConversationInfo[]>([])
@@ -1253,6 +1312,22 @@ export function SettingsModal({
     }
   }
 
+  // 档案写口(PUT/POST/DELETE)只回档案行,注入段与推算要靠 GET 回读,
+  // 保存后补一次拉取,「记忆里的你」才不会显示改之前的那段
+  const refreshProfileView = async () => {
+    try {
+      const res = await fetch('/api/profiles', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = await res.json().catch(() => null)
+      if (!data?.profile) return
+      setProfileState(data.profile)
+      setProfileDerived(data.derived ?? null)
+      setProfileSection(typeof data.section === 'string' ? data.section : '')
+    } catch {
+      // 回读失败只影响聚合视图刷新,已保存的档案本身不受影响
+    }
+  }
+
   // 用户中心:保存称呼（AI 怎么叫你）。留空即清除，回退链交给用户名
   const handleSaveNickname = async () => {
     setNicknameSaving(true)
@@ -1267,6 +1342,7 @@ export function SettingsModal({
       setProfileState(data)
       setProfile((p) => (p ? { ...p, nickname: nicknameDraft.trim() || null } : p))
       toast.success('称呼已更新')
+      await refreshProfileView()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存失败，请重试')
     } finally {
@@ -1288,6 +1364,7 @@ export function SettingsModal({
       setProfileState(data)
       setProfileDerived(null)
       toast.success('档案已保存')
+      await refreshProfileView()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存失败，请重试')
     } finally {
@@ -1310,6 +1387,7 @@ export function SettingsModal({
       setProfileDraft(data.fields ?? {})
       setProfileDerived(null)
       toast.success(stage ? `已确认：${stage}` : '已确认学段')
+      await refreshProfileView()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存失败，请重试')
     } finally {
@@ -1336,6 +1414,7 @@ export function SettingsModal({
       setProfileEnabledDraft(false)
       setProfileDerived(null)
       toast.success('档案已清空')
+      await refreshProfileView()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '清空失败，请重试')
     } finally {
@@ -1611,6 +1690,9 @@ export function SettingsModal({
           setProfileDraft(profileStateData.profile.fields ?? {})
           setProfileEnabledDraft(profileStateData.profile.enabled ?? false)
           setProfileDerived(profileStateData.derived ?? null)
+          setProfileSection(
+            typeof profileStateData.section === 'string' ? profileStateData.section : ''
+          )
         }
         setUsageStats(usageData?.chat && usageData?.image ? usageData : null)
         // Parse custom models: assume cmList is already ModelDefinition format from API
@@ -4577,7 +4659,7 @@ export function SettingsModal({
                   </div>
                 )}
 
-                {/* 账号信息 */}
+                {/* 用户中心 */}
                 {/* API 令牌(外部静态页 Bearer 调用凭证) */}
                 {activeSection === 'apitokens' && <ApiTokensSection />}
 
@@ -4773,6 +4855,20 @@ export function SettingsModal({
                         档案只记有档位的选项（身份 / 学段 / 选科 / 目标 / 讲解深度），自由长文与负债类隐私不入库。
                       </p>
                     </div>
+
+                    <ProfileMirror
+                      section={profileSection}
+                      enabled={profileEnabledDraft}
+                      derivedNote={
+                        profileDerived && profileDerived.kind !== 'keep' ? profileDerived.note : ''
+                      }
+                      alwaysMemories={memories.filter(
+                        (m) =>
+                          m.source === 'manual' ||
+                          m.category === 'user_info' ||
+                          m.category === 'preference'
+                      )}
+                    />
 
                     {/* 访客密码(临时登录入口) */}
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
