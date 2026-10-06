@@ -16,7 +16,7 @@ import {
  * 临时聊天登录入口(/login/ephemeral):
  * - 仅接受访客密码(主密码在此入口会被拒绝,防止公共电脑上误泄露)
  * - 登录成功进入临时模式:空历史、无账户设置,对话进隔离区
- * - 隔离区对话可在正常模式 设置→账号信息 中找回
+ * - 隔离区对话可在正常模式 设置→用户中心 中找回
  */
 export default function EphemeralLoginPage() {
   const [email, setEmail] = useState("")

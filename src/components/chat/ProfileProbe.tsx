@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useSession } from 'next-auth/react'
 import { Check, Loader2, RefreshCw, Sparkles, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,7 +32,8 @@ import type { GeneralFieldId, GeneralFields } from '@/lib/profile/general'
  * - 采集气泡只活在本组件里，不落库。写进会话历史会把填表问答混进搜索、统计和上下文预算，
  *   而这些话对后续对话没有价值。
  * - 在架快选由 currentId 派生，同一时刻只有一排，不存在"过期选项还能点"。
- * - 用户在输入框发正题 → 立刻让位：那句话里抽得到就顺手落档，抽不到不猜，也不追问。
+ * - 采集窗在架时主输入框被遮：想发正题先结束采集（✕ / 点遮罩 / ESC 任一）。
+ *   此时若真有正题进来（另一个标签页等），立刻让位：抽得到就顺手落档，抽不到不猜，也不追问。
  */
 
 interface ProfilePayload {
@@ -128,7 +130,9 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
 
   const push = useCallback((from: Bubble['from'], text: string, hits?: ProbeHit[]) => {
     bubbleId.current += 1
-    setBubbles((prev) => [...prev, { id: bubbleId.current, from, text, hits }])
+    // id 必须在调用时取定：写进更新函数里读 ref，同一 tick 连推两条会拿到同一个 id → React 重复 key
+    const id = bubbleId.current
+    setBubbles((prev) => [...prev, { id, from, text, hits }])
   }, [])
 
   const closeFlow = useCallback(() => {
@@ -137,6 +141,29 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
     setAsked([])
     setReask([])
   }, [])
+
+  // 弹窗出层到 body：首帧没有 document，所以要 mounted 闸门；shown 让 sheet 有位移动画
+  const [mounted, setMounted] = useState(false)
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+  useEffect(() => {
+    if (phase !== 'probing') {
+      setShown(false)
+      return
+    }
+    const raf = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(raf)
+  }, [phase])
+  useEffect(() => {
+    if (phase !== 'probing') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeFlow()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [phase, closeFlow])
 
   const commitFields = useCallback(
     async (patch: GeneralFields, enable: boolean): Promise<boolean> => {
@@ -324,7 +351,8 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
     setSnoozed(true)
   }, [userId])
 
-  // 正题让位：输入框有新消息就先停采集；能抽到的维度顺手落档，抽不到不猜
+  // 正题让位（兜底）：采集窗在架时主输入框已被遮，正常路径走不到这里；
+  // 真有消息从别处进来时先停采集，能抽到的维度顺手落档，抽不到不猜
   const seenUserText = useRef<string | null>(null)
   useEffect(() => {
     if (seenUserText.current === null) {
@@ -349,112 +377,141 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
   const current: ProbeQuestion | null =
     phase === 'probing' && currentId ? buildProbeQuestion(currentId) : null
 
-  // ---- 采集进行中 ----
-  if (phase === 'probing') {
-    return (
-      <div className="px-3 pb-1.5" data-probe-panel>
-        <div className="mx-auto w-full max-w-2xl rounded-lg border border-line/60 bg-surface-muted text-xs">
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-line/40 text-content-secondary">
-            <Sparkles className="w-3.5 h-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              让 AI 认识你 · 第 {Math.min(turns, PROBE_MAX_QUESTIONS)} / {PROBE_MAX_QUESTIONS} 问
-            </span>
-            <button
-              type="button"
-              onClick={closeFlow}
-              className="shrink-0 inline-flex items-center justify-center w-9 min-h-[36px] rounded text-content-muted/70 transition-colors hover:text-content-primary"
-              aria-label="结束采集"
-              title="先到这儿，不追了"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div
-            ref={streamRef}
-            className="max-h-[38vh] overflow-y-auto px-2.5 py-2 flex flex-col gap-2"
-          >
-            {bubbles.map((b) => (
-              <div
-                key={b.id}
-                data-probe-bubble={b.from}
-                className={cn('flex', b.from === 'me' ? 'justify-end' : 'justify-start')}
-              >
-                <div
-                  className={cn(
-                    'max-w-[85%] rounded-lg px-2.5 py-1.5 leading-relaxed',
-                    b.from === 'me'
-                      ? 'bg-accent text-white'
-                      : 'bg-surface text-content-primary border border-line/40'
-                  )}
-                >
-                  <span>{b.text}</span>
-                  {b.hits && b.hits.length > 0 && (
-                    <span className="mt-1.5 flex flex-wrap gap-1.5">
-                      {b.hits.map((h) => (
-                        <button
-                          key={h.fieldId}
-                          type="button"
-                          onClick={() => editField(h.fieldId)}
-                          className="inline-flex items-center rounded border border-line/60 px-2 min-h-[36px] text-xs text-content-muted transition-colors hover:text-content-primary"
-                        >
-                          改 · {probeFieldLabel(h.fieldId)}
-                        </button>
-                      ))}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {current && (
-            <div className="px-2.5 pb-2 flex flex-wrap gap-1.5" data-probe-chips>
-              {current.options.map((opt) => (
-                <PickButton
-                  key={opt.value}
-                  onClick={() => void answerOption(current, opt.value, opt.label)}
-                  disabled={saving}
-                >
-                  {opt.label}
-                </PickButton>
-              ))}
-              <PickButton tone="ghost" onClick={() => void skipCurrent()} disabled={saving}>
-                跳过这条
-              </PickButton>
-            </div>
+  // ---- 采集进行中：弹窗（手机端底部 sheet / 桌面居中卡）----
+  // 定案改弹窗：一问一气泡不再挤在输入框上方。聊天区祖先带 backdrop-blur，
+  // fixed 遮罩在其内部会退化，所以必须 portal 出到 body。
+  if (phase === 'probing' && mounted) {
+    return createPortal(
+      <>
+        <div
+          aria-hidden
+          data-probe-scrim
+          onClick={closeFlow}
+          className={cn(
+            'fixed inset-0 z-[57] bg-black/40 transition-opacity duration-300',
+            shown ? 'opacity-100' : 'opacity-0'
           )}
+        />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="让 AI 认识你"
+          data-probe-dialog
+          className={cn(
+            'fixed z-[58] border-line/60 bg-surface-muted text-xs',
+            'inset-x-0 bottom-0 rounded-t-[28px] border-t pb-[max(var(--sab,0px),10px)]',
+            'shadow-[0_18px_50px_rgba(0,0,0,0.28)] transition-transform duration-300 ease-out',
+            shown ? 'translate-y-0' : 'translate-y-full',
+            // 桌面端收成居中卡;translate-y 的基准从「贴底」换成「自身中点」，两档各自给值
+            'md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:-translate-x-1/2 md:w-[440px] md:rounded-2xl md:border md:pb-0',
+            shown ? 'md:translate-y-[-50%]' : 'md:translate-y-[-44%]'
+          )}
+        >
+          <div aria-hidden className="mx-auto mt-2.5 h-2 w-[46px] rounded-full bg-line-strong/40 md:hidden" />
+          <div className="pt-1.5" data-probe-panel>
+            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-line/40 text-content-secondary">
+              <Sparkles className="w-3.5 h-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                让 AI 认识你 · 第 {Math.min(turns, PROBE_MAX_QUESTIONS)} / {PROBE_MAX_QUESTIONS} 问
+              </span>
+              <button
+                type="button"
+                onClick={closeFlow}
+                className="shrink-0 inline-flex items-center justify-center w-9 min-h-[36px] rounded text-content-muted/70 transition-colors hover:text-content-primary"
+                aria-label="结束采集"
+                title="先到这儿，不追了"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
-          <div className="px-2.5 pb-2.5 flex gap-1.5">
-            <input
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  void submitTyped()
-                }
-              }}
-              maxLength={current?.freeText ? current.max : 200}
-              placeholder={
-                current?.freeText
-                  ? '打字说也行，我照着你说的记'
-                  : '不想点就打字，一句话里几个维度我一起抽'
-              }
-              className="min-w-0 flex-1 rounded-md border border-line/60 bg-surface px-2.5 py-2 text-xs text-content-primary placeholder:text-content-muted/70 focus:outline-none focus:border-accent/50"
-            />
-            <button
-              type="button"
-              onClick={() => void submitTyped()}
-              disabled={saving || !typed.trim()}
-              className="shrink-0 inline-flex items-center justify-center rounded-md px-3 min-h-[36px] bg-accent text-white disabled:opacity-40"
-              aria-label="把这句记进档案"
+            <div
+              ref={streamRef}
+              className="max-h-[38vh] overflow-y-auto px-2.5 py-2 flex flex-col gap-2"
             >
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            </button>
+              {bubbles.map((b) => (
+                <div
+                  key={b.id}
+                  data-probe-bubble={b.from}
+                  className={cn('flex', b.from === 'me' ? 'justify-end' : 'justify-start')}
+                >
+                  <div
+                    className={cn(
+                      'max-w-[85%] rounded-lg px-2.5 py-1.5 leading-relaxed',
+                      b.from === 'me'
+                        ? 'bg-accent text-white'
+                        : 'bg-surface text-content-primary border border-line/40'
+                    )}
+                  >
+                    <span>{b.text}</span>
+                    {b.hits && b.hits.length > 0 && (
+                      <span className="mt-1.5 flex flex-wrap gap-1.5">
+                        {b.hits.map((h) => (
+                          <button
+                            key={h.fieldId}
+                            type="button"
+                            onClick={() => editField(h.fieldId)}
+                            className="inline-flex items-center rounded border border-line/60 px-2 min-h-[36px] text-xs text-content-muted transition-colors hover:text-content-primary"
+                          >
+                            改 · {probeFieldLabel(h.fieldId)}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {current && (
+              <div className="px-2.5 pb-2 flex flex-wrap gap-1.5" data-probe-chips>
+                {current.options.map((opt) => (
+                  <PickButton
+                    key={opt.value}
+                    onClick={() => void answerOption(current, opt.value, opt.label)}
+                    disabled={saving}
+                  >
+                    {opt.label}
+                  </PickButton>
+                ))}
+                <PickButton tone="ghost" onClick={() => void skipCurrent()} disabled={saving}>
+                  跳过这条
+                </PickButton>
+              </div>
+            )}
+
+            <div className="px-2.5 pb-2.5 flex gap-1.5">
+              <input
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    void submitTyped()
+                  }
+                }}
+                maxLength={current?.freeText ? current.max : 200}
+                placeholder={
+                  current?.freeText
+                    ? '打字说也行，我照着你说的记'
+                    : '不想点就打字，一句话里几个维度我一起抽'
+                }
+                className="min-w-0 flex-1 rounded-md border border-line/60 bg-surface px-2.5 py-2 text-xs text-content-primary placeholder:text-content-muted/70 focus:outline-none focus:border-accent/50"
+              />
+              <button
+                type="button"
+                onClick={() => void submitTyped()}
+                disabled={saving || !typed.trim()}
+                className="shrink-0 inline-flex items-center justify-center rounded-md px-3 min-h-[36px] bg-accent text-white disabled:opacity-40"
+                aria-label="把这句记进档案"
+              >
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </>,
+      document.body
     )
   }
 
