@@ -61,6 +61,9 @@ interface ProfileProbeProps {
   lastUserText: string
   /** 学习模式等场景不弹采集 */
   disabled?: boolean
+  /** 主动打扰（首启横幅 / 换学年三选卡）只在新对话页开；进了具体会话就闭嘴。
+   *  会话内那份挂点仍要留，因为它跑着「正题进来先停采集 + 顺手抽取」的兜底逻辑。 */
+  allowPromo?: boolean
 }
 
 function hitsToFields(hits: ProbeHit[]): GeneralFields {
@@ -69,7 +72,7 @@ function hitsToFields(hits: ProbeHit[]): GeneralFields {
   return fields
 }
 
-export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
+export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: ProfileProbeProps) {
   const { data: session } = useSession()
   const userId = session?.user?.id
   const ephemeral = session?.ephemeral === true
@@ -560,6 +563,8 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
   }
 
   // ---- 横幅 ----
+  // allowPromo=false（会话内那一个挂载点）时整段静默：主动打扰只发生在欢迎页。
+  // 上面 probing / done 两个分支已经提前 return，所以采集弹窗和收口卡不受影响。
   const remaining = pendingProbeFields(fields)
   const firstRun = !payload.profile.exists || Object.keys(fields).length === 0
   // 用户在用户中心主动关掉注入 = 明确表态，不再拿首启提示打扰
@@ -568,9 +573,14 @@ export function ProfileProbe({ lastUserText, disabled }: ProfileProbeProps) {
   const stageAdvance =
     derived && (derived.kind === 'advance' || derived.kind === 'graduate') ? derived : null
   const remind = payload.refresh.due
-  const showSchoolYear = !optedOut && remind && !!stageAdvance && payload.refresh.reason === 'school-year'
+  const showSchoolYear =
+    allowPromo && !optedOut && remind && !!stageAdvance && payload.refresh.reason === 'school-year'
   const showFirstRun =
-    !showSchoolYear && !snoozed && !optedOut && ((firstRun && remaining.length > 0) || remind)
+    allowPromo &&
+    !showSchoolYear &&
+    !snoozed &&
+    !optedOut &&
+    ((firstRun && remaining.length > 0) || remind)
 
   if (showSchoolYear && stageAdvance) {
     const target = stageAdvance.stage

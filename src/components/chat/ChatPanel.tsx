@@ -2068,9 +2068,12 @@ export function ChatPanel({
     break
   }
 
-  // 同一个组件实例挂进两个互斥分支(欢迎页输入胶囊上方 slot / 会话态输入区上方)。
+  // 同一个组件挂进两个互斥分支(欢迎页输入胶囊上方 slot / 会话态输入区上方)。
   // 首启横幅必须在用户还没说话时就出现,只挂会话态等于首次进入永远看不到入口。
-  const profileProbe = <ProfileProbe lastUserText={lastUserText} disabled={studyMode} />
+  // 但主动打扰只留欢迎页那一份:进了具体会话就不再弹横幅/三选卡(用户口径「不要死缠烂打」),
+  // 会话内那一份不再主动弹任何东西,只留「正题进来先停采集 + 顺手抽取」这条兜底逻辑的挂载点。
+  const profileProbeWelcome = <ProfileProbe lastUserText={lastUserText} disabled={studyMode} />
+  const profileProbe = <ProfileProbe lastUserText={lastUserText} disabled={studyMode} allowPromo={false} />
 
   // 对比模式: 渲染并排泳道视图(key 确保模型列表变化时重建泳道)
   if (compareMode) {
@@ -2156,7 +2159,7 @@ export function ChatPanel({
       {messages.length === 0 ? (
         <ChatInput
           variant="welcome"
-          welcomeBanner={profileProbe}
+          welcomeBanner={profileProbeWelcome}
           onSend={handleSend}
           onStop={handleStop}
           isLoading={isLoading}
