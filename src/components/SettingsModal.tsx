@@ -37,6 +37,8 @@ import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type P
 import MasksSettings from '@/components/settings/MasksSettings'
 import McpSettings from '@/components/settings/McpSettings'
 import { confirmDialog } from '@/components/ui/ConfirmDialog'
+import { GENERAL_FIELDS, type GeneralFields } from '@/lib/profile/general'
+import type { DerivedStage } from '@/lib/profile/academic'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
 const REPLY_LENGTH_STORAGE_KEY = 'chat:replyLength'
@@ -71,9 +73,19 @@ interface MemoryInfo {
 
 interface UserProfileInfo {
   name: string | null
+  nickname?: string | null
   email: string | null
   image: string | null
   createdAt: string
+}
+
+/** /api/profiles GET 的返回（档案 + 学年推算 + 到期判定） */
+interface ProfileStateInfo {
+  exists: boolean
+  enabled: boolean
+  fields: GeneralFields
+  displayName: string
+  lastConfirmedAt: string | null
 }
 
 interface EphemeralConversationInfo {
@@ -504,7 +516,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: '账户',
     items: [
-      { id: 'account', label: '账号信息', icon: User },
+      { id: 'account', label: '用户中心', icon: User },
       { id: 'apitokens', label: 'API 令牌', icon: KeyRound },
       { id: 'usage', label: '用量统计', icon: BarChart3 },
     ],
@@ -890,10 +902,18 @@ export function SettingsModal({
   const [memoryEnabled, setMemoryEnabled] = useState(true)
   const [clarifyEnabled, setClarifyEnabled] = useState(true)
   const [aiControlEnabled, setAiControlEnabled] = useState(true)
-  // 账号信息页:当前用户资料 + 昵称草稿(打开设置时随大加载一起拉取)
+  // 用户中心:用户名 + 称呼 + 档案草稿(打开设置时随 /api/profiles 一起拉取)
   const [profile, setProfile] = useState<UserProfileInfo | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [nameSaving, setNameSaving] = useState(false)
+  // 用户中心:称呼 + 通用档案草稿(随 /api/profiles 一起拉取,保存走 PUT)
+  const [nicknameDraft, setNicknameDraft] = useState('')
+  const [nicknameSaving, setNicknameSaving] = useState(false)
+  const [profileState, setProfileState] = useState<ProfileStateInfo | null>(null)
+  const [profileDerived, setProfileDerived] = useState<DerivedStage | null>(null)
+  const [profileDraft, setProfileDraft] = useState<GeneralFields>({})
+  const [profileEnabledDraft, setProfileEnabledDraft] = useState(false)
+  const [profileSaving, setProfileSaving] = useState(false)
   // ── 临时聊天(访客模式):访客密码 + 隔离区管理 + 记忆注入开关 ──
   const [ephemeralSettings, setEphemeralSettings] = useState<{ hasGuestPassword: boolean; ephemeralMemoryInjection: boolean } | null>(null)
   const [ephemeralItems, setEphemeralItems] = useState<EphemeralConversationInfo[]>([])
@@ -1101,7 +1121,7 @@ export function SettingsModal({
 
   // 联网搜索：当前选中引擎（来自共享 store，滑块和 ChatPanel 共用）
   const searchEngine = useChatStore((s) => s.searchEngine)
-  // update: 修改昵称后刷新 JWT session(侧边栏等处立即生效)
+  // update: 修改用户名后刷新 JWT session(侧边栏等处立即生效)
   const { data: session, update: updateSession } = useSession()
   // 临时聊天模式:精简版设置(会话管理/通用/关于,不加载任何账户数据)
   const isEphemeral = session?.ephemeral === true
@@ -1199,15 +1219,15 @@ export function SettingsModal({
     await signOut({ callbackUrl: '/login' })
   }
 
-  // 账号信息:保存昵称,并同步刷新 session(JWT 策略下不 update 的话侧边栏仍是旧值)
+  // 用户中心:保存用户名,并同步刷新 session(JWT 策略下不 update 的话侧边栏仍是旧值)
   const handleSaveName = async () => {
     const newName = nameDraft.trim()
     if (!newName) {
-      toast.error('昵称不能为空')
+      toast.error('用户名不能为空')
       return
     }
     if (newName.length > 20) {
-      toast.error('昵称不能超过 20 个字符')
+      toast.error('用户名不能超过 20 个字符')
       return
     }
     setNameSaving(true)
@@ -1225,11 +1245,101 @@ export function SettingsModal({
       setProfile(updated)
       setNameDraft(updated.name ?? '')
       await updateSession({ name: newName })
-      toast.success('昵称已更新')
+      toast.success('用户名已更新')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存失败，请重试')
     } finally {
       setNameSaving(false)
+    }
+  }
+
+  // 用户中心:保存称呼（AI 怎么叫你）。留空即清除，回退链交给用户名
+  const handleSaveNickname = async () => {
+    setNicknameSaving(true)
+    try {
+      const res = await fetch('/api/profiles', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nicknameDraft.trim() }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || '保存失败，请重试')
+      setProfileState(data)
+      setProfile((p) => (p ? { ...p, nickname: nicknameDraft.trim() || null } : p))
+      toast.success('称呼已更新')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setNicknameSaving(false)
+    }
+  }
+
+  // 用户中心:保存档位草稿 + 注入开关（PUT 即一次表态，后端会重置确认时间戳）
+  const handleSaveProfile = async () => {
+    setProfileSaving(true)
+    try {
+      const res = await fetch('/api/profiles', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: profileDraft, enabled: profileEnabledDraft }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || '保存失败，请重试')
+      setProfileState(data)
+      setProfileDerived(null)
+      toast.success('档案已保存')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  // 换学年推算只给建议：点「升入 X」才把确认值写成 X；传空串=确认已毕业（清掉学段）
+  const handleConfirmStage = async (stage: string) => {
+    setProfileSaving(true)
+    try {
+      const res = await fetch('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm', stage }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || '保存失败，请重试')
+      setProfileState(data)
+      setProfileDraft(data.fields ?? {})
+      setProfileDerived(null)
+      toast.success(stage ? `已确认：${stage}` : '已确认学段')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  // 用户中心:清空档案行（称呼是用户自己的字段，不随之清除）
+  const handleResetProfile = async () => {
+    const ok = await confirmDialog({
+      title: '清空档案',
+      message: 'AI 将不再了解你的身份、学段与讲解偏好，称呼与用户名不受影响。',
+      danger: true,
+      okText: '清空',
+    })
+    if (!ok) return
+    setProfileSaving(true)
+    try {
+      const res = await fetch('/api/profiles', { method: 'DELETE' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || '清空失败，请重试')
+      setProfileState(data)
+      setProfileDraft({})
+      setProfileEnabledDraft(false)
+      setProfileDerived(null)
+      toast.success('档案已清空')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '清空失败，请重试')
+    } finally {
+      setProfileSaving(false)
     }
   }
 
@@ -1477,9 +1587,10 @@ export function SettingsModal({
       fetch('/api/settings/clarify').then((r) => r.json()).catch(() => null),
       fetch('/api/settings/ai-control').then((r) => r.json()).catch(() => null),
       fetch('/api/user/profile').then((r) => r.json()).catch(() => null),
+      fetch('/api/profiles').then((r) => r.json()).catch(() => null),
       fetch('/api/settings/local-files').then((r) => r.json()).catch(() => null),
     ])
-      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData, aiControlData, profileData, localFilesData]) => {
+      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData, clarifyData, aiControlData, profileData, profileStateData, localFilesData]) => {
         setProviders(provs)
         setKeys(keyList)
         setMemories(memoryData?.memories ?? [])
@@ -1488,10 +1599,18 @@ export function SettingsModal({
         setLocalFilesEnabled(localFilesData?.localFilesEnabled ?? false)
         setLocalFilesExecAutoRun(localFilesData?.localFilesExecAutoRun ?? false)
         setAiControlEnabled(aiControlData?.aiSettingsControl ?? true)
-        // 账号资料:打开设置时拉取,并同步昵称草稿
+        // 账号资料:打开设置时拉取,并同步用户名/称呼草稿
         if (profileData && typeof profileData === 'object') {
           setProfile(profileData)
           setNameDraft(profileData.name ?? '')
+          setNicknameDraft(profileData.nickname ?? '')
+        }
+        // 用户中心档案:草稿与库内值同步(保存后才回写,推算结果只读不覆盖草稿)
+        if (profileStateData?.profile) {
+          setProfileState(profileStateData.profile)
+          setProfileDraft(profileStateData.profile.fields ?? {})
+          setProfileEnabledDraft(profileStateData.profile.enabled ?? false)
+          setProfileDerived(profileStateData.derived ?? null)
         }
         setUsageStats(usageData?.chat && usageData?.image ? usageData : null)
         // Parse custom models: assume cmList is already ModelDefinition format from API
@@ -2358,7 +2477,7 @@ export function SettingsModal({
     clarify: clarifyEnabled ? '开' : '关',
     localfiles: inTauri ? (localFilesEnabled ? '开' : '关') : '仅桌面端',
     general: [themeLabel, getStylePresetLabel(conversationStylePreset)].filter(Boolean).join(' · '),
-    account: profile?.name || profile?.email || undefined,
+    account: profile?.nickname || profile?.name || profile?.email || undefined,
     session: ephCount != null ? `${ephCount} 段` : undefined,
   }
 
@@ -2727,8 +2846,8 @@ export function SettingsModal({
             )}
           >
             {/* 顶部行占掉原「总览」位:手机端不再进仪表盘(桌面侧栏的总览不受影响)。
-                正常模式 → 账号信息(头像 + 昵称 + 邮箱摘要);临时模式 → 会话管理(剩余时间)。
-                「账户」分组里那行账号信息随之移除,同一列表不留两个入口。 */}
+                正常模式 → 用户中心(头像 + 称呼/用户名 + 邮箱摘要);临时模式 → 会话管理(剩余时间)。
+                「账户」分组里那行用户中心随之移除,同一列表不留两个入口。 */}
             <div className="pt-3">
               <div className="divide-y divide-line/50 overflow-hidden rounded-xl border border-line/60 bg-surface">
                 {isEphemeral ? (
@@ -2742,7 +2861,7 @@ export function SettingsModal({
                   />
                 ) : (
                   <MobileSettingsRow
-                    item={{ id: 'account', label: profile?.name || session?.user?.name || '账号信息', icon: User }}
+                    item={{ id: 'account', label: profile?.nickname || profile?.name || session?.user?.name || '用户中心', icon: User }}
                     summary={profile?.email || session?.user?.email || undefined}
                     onClick={() => {
                       setActiveSection('account')
@@ -4481,7 +4600,7 @@ export function SettingsModal({
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-content-primary truncate">
-                            {profile?.name || '未设置昵称'}
+                            {profile?.nickname || profile?.name || '未设置用户名'}
                           </p>
                           <p className="text-[11px] text-content-muted truncate">
                             {profile?.email || session?.user?.email || '—'}
@@ -4496,17 +4615,17 @@ export function SettingsModal({
                       )}
                     </div>
 
-                    {/* 修改昵称 */}
+                    {/* 修改用户名 */}
                     <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
-                      <p className="text-xs font-medium text-content-secondary">昵称</p>
+                      <p className="text-xs font-medium text-content-secondary">用户名</p>
                       <div className="flex items-center gap-2">
                         <input
                           type="text"
                           value={nameDraft}
                           onChange={(e) => setNameDraft(e.target.value)}
                           maxLength={20}
-                          placeholder="给自己起个名字"
-                          className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          placeholder="账户显示名"
+                          className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-2 text-[15.5px] text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 md:py-1.5 md:text-xs"
                         />
                         <button
                           onClick={handleSaveName}
@@ -4522,8 +4641,136 @@ export function SettingsModal({
                           保存
                         </button>
                       </div>
-                      <p className="text-[10px] text-content-muted/70">
-                        昵称显示在侧边栏，也可用于登录。
+                      <p className="text-[10px] text-content-muted/70 max-md:hidden">
+                        用户名显示在侧边栏，也可用于登录。想让 AI 换个称呼请改下面的「称呼」。
+                      </p>
+                    </div>
+
+                    {/* 称呼（AI 怎么叫你）:可留空，留空回退用户名，不回退邮箱前缀 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                      <p className="text-xs font-medium text-content-secondary">称呼</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={nicknameDraft}
+                          onChange={(e) => setNicknameDraft(e.target.value)}
+                          maxLength={20}
+                          placeholder={profile?.name ? `默认用用户名：${profile.name}` : '留空则用用户名'}
+                          className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-2 text-[15.5px] text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 md:py-1.5 md:text-xs"
+                        />
+                        <button
+                          onClick={handleSaveNickname}
+                          disabled={nicknameSaving || nicknameDraft.trim() === (profile?.nickname ?? '')}
+                          className={cn(
+                            'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0',
+                            nicknameSaving || nicknameDraft.trim() === (profile?.nickname ?? '')
+                              ? 'bg-surface-muted text-content-muted cursor-not-allowed'
+                              : 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                          )}
+                        >
+                          {nicknameSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                          保存
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-content-muted/70 max-md:hidden">
+                        AI 讲解与问候时这样叫你。当前生效：{profileState?.displayName || '未设置'}
+                      </p>
+                    </div>
+
+                    {/* 通用档案:只收有档位/有时效的字段，姓名爱好这类事实仍留在记忆里 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                      <MSwitchRow
+                        label="让 AI 了解这份档案"
+                        help="开启后每次对话都会把下面这几项事实告知模型；关闭则完全不注入"
+                        checked={profileEnabledDraft}
+                        onChange={setProfileEnabledDraft}
+                      />
+
+                      {GENERAL_FIELDS.map((def) => {
+                        const options = (def.options ?? []).map((o) => ({ value: o.value, label: o.label }))
+                        const current = profileDraft[def.id] ?? ''
+                        if (!def.options) {
+                          return (
+                            <div
+                              key={def.id}
+                              className="flex min-h-[52px] items-center gap-3 py-2 md:min-h-0 md:gap-2 md:py-0"
+                            >
+                              <span className="shrink-0 text-[15.5px] text-content-primary md:w-16 md:text-xs md:text-content-secondary">
+                                {def.label}
+                              </span>
+                              <input
+                                type="text"
+                                value={current}
+                                onChange={(e) => setProfileDraft((d) => ({ ...d, [def.id]: e.target.value }))}
+                                maxLength={def.max ?? 16}
+                                placeholder="可留空"
+                                className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-2 text-[15.5px] text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 md:py-1.5 md:text-xs"
+                              />
+                            </div>
+                          )
+                        }
+                        return (
+                          <MSegRow
+                            key={def.id}
+                            label={def.label}
+                            options={options}
+                            value={current}
+                            onChange={(next) => setProfileDraft((d) => ({ ...d, [def.id]: next }))}
+                            className="mt-2"
+                          />
+                        )
+                      })}
+
+                      {profileDerived && profileDerived.kind !== 'keep' && (
+                        <div className="rounded-lg border border-line/50 bg-surface-muted/50 px-2.5 py-2">
+                          <p className="text-[11px] leading-snug text-content-secondary">
+                            {profileDerived.note}
+                          </p>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <button
+                              onClick={() => handleConfirmStage(profileDerived.stage ?? '')}
+                              disabled={profileSaving}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-accent text-accent-foreground hover:bg-accent-hover transition-colors disabled:opacity-50"
+                            >
+                              {profileDerived.kind === 'graduate' ? '确认已毕业' : `确认升入 ${profileDerived.stage}`}
+                            </button>
+                            <button
+                              onClick={() => handleConfirmStage(profileDraft.stage ?? '')}
+                              disabled={profileSaving}
+                              className="px-2.5 py-1 rounded-lg text-[11px] text-content-muted hover:text-content-secondary transition-colors disabled:opacity-50"
+                            >
+                              保持不变
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          onClick={handleSaveProfile}
+                          disabled={profileSaving}
+                          className={cn(
+                            'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0',
+                            profileSaving
+                              ? 'bg-surface-muted text-content-muted cursor-not-allowed'
+                              : 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                          )}
+                        >
+                          {profileSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                          保存档案
+                        </button>
+                        {profileState?.exists && (
+                          <button
+                            onClick={handleResetProfile}
+                            disabled={profileSaving}
+                            className="px-3 py-1.5 rounded-lg text-xs text-red-500/90 hover:text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50 shrink-0"
+                          >
+                            清空档案
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-content-muted/70 max-md:hidden">
+                        档案只记有档位的选项（身份 / 学段 / 选科 / 目标 / 讲解深度），自由长文与负债类隐私不入库。
                       </p>
                     </div>
 
