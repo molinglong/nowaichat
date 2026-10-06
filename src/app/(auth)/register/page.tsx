@@ -81,7 +81,7 @@ export default function RegisterPage() {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="你的名字"
+            placeholder="例如：小明"
             className={inputClass}
           />
         </div>

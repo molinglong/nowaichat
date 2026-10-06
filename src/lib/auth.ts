@@ -145,7 +145,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           token.sessionEndsAt = token.exp * 1000
         }
       }
-      // 客户端 useSession().update({ name }) 时把新昵称写入 token,
+      // 客户端 useSession().update({ name }) 时把新用户名写入 token,
       // 否则 JWT 策略下侧边栏等处会一直显示登录时固化的旧资料
       if (trigger === 'update' && session?.name) {
         token.name = session.name

@@ -6,12 +6,13 @@ const NAME_MAX_LENGTH = 20
 
 const PROFILE_SELECT = {
   name: true,
+  nickname: true,
   email: true,
   image: true,
   createdAt: true,
 } as const
 
-/** GET /api/user/profile - 当前登录用户资料（昵称/邮箱/头像/注册时间） */
+/** GET /api/user/profile - 当前登录用户资料（用户名/称呼/邮箱/头像/注册时间） */
 export async function GET() {
   const session = await auth()
   if (!session?.user?.id) {
@@ -28,7 +29,7 @@ export async function GET() {
   return NextResponse.json(user)
 }
 
-/** PATCH /api/user/profile - 修改昵称（本期不做改密码/头像上传） */
+/** PATCH /api/user/profile - 修改用户名（本期不做改密码/头像上传；称呼走 /api/profiles） */
 export async function PATCH(req: Request) {
   const session = await auth()
   if (!session?.user?.id) {
@@ -47,11 +48,11 @@ export async function PATCH(req: Request) {
       ? (body as { name: string }).name.trim()
       : ''
   if (!name) {
-    return NextResponse.json({ error: '昵称不能为空' }, { status: 400 })
+    return NextResponse.json({ error: '用户名不能为空' }, { status: 400 })
   }
   if (name.length > NAME_MAX_LENGTH) {
     return NextResponse.json(
-      { error: `昵称不能超过 ${NAME_MAX_LENGTH} 个字符` },
+      { error: `用户名不能超过 ${NAME_MAX_LENGTH} 个字符` },
       { status: 400 }
     )
   }
