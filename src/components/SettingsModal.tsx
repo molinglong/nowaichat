@@ -37,7 +37,9 @@ import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type P
 import MasksSettings from '@/components/settings/MasksSettings'
 import McpSettings from '@/components/settings/McpSettings'
 import { confirmDialog } from '@/components/ui/ConfirmDialog'
-import { GENERAL_FIELDS, type GeneralFields } from '@/lib/profile/general'
+import { generalFieldLabel, type GeneralFields } from '@/lib/profile/general'
+import { applicableProbeFields, pendingProbeFields, probeFieldLabel } from '@/lib/profile/probe'
+import { ProfileProbeDialog } from '@/components/profile/ProfileProbeDialog'
 import type { DerivedStage } from '@/lib/profile/academic'
 
 const STYLE_OFFSET_STORAGE_KEY = 'chat:stylePreset'
@@ -963,14 +965,13 @@ export function SettingsModal({
   const [profile, setProfile] = useState<UserProfileInfo | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [nameSaving, setNameSaving] = useState(false)
-  // 用户中心:称呼 + 通用档案草稿(随 /api/profiles 一起拉取,保存走 PUT)
+  // 用户中心:称呼 + 通用档案(档案卡只读,填写一律走采集弹窗)
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [nicknameSaving, setNicknameSaving] = useState(false)
   const [profileState, setProfileState] = useState<ProfileStateInfo | null>(null)
   const [profileDerived, setProfileDerived] = useState<DerivedStage | null>(null)
-  const [profileDraft, setProfileDraft] = useState<GeneralFields>({})
-  const [profileEnabledDraft, setProfileEnabledDraft] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
+  const [probeDialogOpen, setProbeDialogOpen] = useState(false)
   // 「记忆里的你」:服务端算好的注入段原文,界面不复刻注入规则
   const [profileSection, setProfileSection] = useState('')
   // ── 临时聊天(访客模式):访客密码 + 隔离区管理 + 记忆注入开关 ──
@@ -1350,22 +1351,24 @@ export function SettingsModal({
     }
   }
 
-  // 用户中心:保存档位草稿 + 注入开关（PUT 即一次表态，后端会重置确认时间戳）
-  const handleSaveProfile = async () => {
+  // 用户中心:注入开关单独成一次表态(只翻开关不改档位,所以不会重置提醒节奏)
+  const handleToggleProfileEnabled = async (next: boolean) => {
+    if (!profileState) return
+    const prev = profileState
+    setProfileState({ ...prev, enabled: next })
     setProfileSaving(true)
     try {
       const res = await fetch('/api/profiles', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: profileDraft, enabled: profileEnabledDraft }),
+        body: JSON.stringify({ enabled: next }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || '保存失败，请重试')
       setProfileState(data)
-      setProfileDerived(null)
-      toast.success('档案已保存')
       await refreshProfileView()
     } catch (err) {
+      setProfileState(prev)
       toast.error(err instanceof Error ? err.message : '保存失败，请重试')
     } finally {
       setProfileSaving(false)
@@ -1384,7 +1387,6 @@ export function SettingsModal({
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || '保存失败，请重试')
       setProfileState(data)
-      setProfileDraft(data.fields ?? {})
       setProfileDerived(null)
       toast.success(stage ? `已确认：${stage}` : '已确认学段')
       await refreshProfileView()
@@ -1410,8 +1412,6 @@ export function SettingsModal({
       const data = await res.json().catch(() => null)
       if (!res.ok) throw new Error(data?.error || '清空失败，请重试')
       setProfileState(data)
-      setProfileDraft({})
-      setProfileEnabledDraft(false)
       setProfileDerived(null)
       toast.success('档案已清空')
       await refreshProfileView()
@@ -1684,11 +1684,9 @@ export function SettingsModal({
           setNameDraft(profileData.name ?? '')
           setNicknameDraft(profileData.nickname ?? '')
         }
-        // 用户中心档案:草稿与库内值同步(保存后才回写,推算结果只读不覆盖草稿)
+        // 用户中心档案:只读卡直接读库内值,没有草稿态
         if (profileStateData?.profile) {
           setProfileState(profileStateData.profile)
-          setProfileDraft(profileStateData.profile.fields ?? {})
-          setProfileEnabledDraft(profileStateData.profile.enabled ?? false)
           setProfileDerived(profileStateData.derived ?? null)
           setProfileSection(
             typeof profileStateData.section === 'string' ? profileStateData.section : ''
@@ -4759,49 +4757,43 @@ export function SettingsModal({
                       </p>
                     </div>
 
-                    {/* 通用档案:只收有档位/有时效的字段，姓名爱好这类事实仍留在记忆里 */}
-                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                    {/* 通用档案:只读查看卡——填与改一律走采集弹窗，界面不重复实现一遍档位 */}
+                    {!isEphemeral && (
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2" data-profile-card>
                       <MSwitchRow
                         label="让 AI 了解这份档案"
-                        help="开启后每次对话都会把下面这几项事实告知模型；关闭则完全不注入"
-                        checked={profileEnabledDraft}
-                        onChange={setProfileEnabledDraft}
+                        help="开启后每次对话都会把这些事实告知模型；关闭则完全不注入"
+                        checked={profileState?.enabled ?? false}
+                        onChange={(next) => void handleToggleProfileEnabled(next)}
+                        disabled={profileSaving || !profileState}
                       />
 
-                      {GENERAL_FIELDS.map((def) => {
-                        const options = (def.options ?? []).map((o) => ({ value: o.value, label: o.label }))
-                        const current = profileDraft[def.id] ?? ''
-                        if (!def.options) {
+                      <div
+                        className="rounded-lg border border-line/50 bg-surface-muted/40 divide-y divide-line/40"
+                        data-profile-fields
+                      >
+                        {applicableProbeFields(profileState?.fields ?? {}).map((id) => {
+                          const value = profileState?.fields[id]
                           return (
                             <div
-                              key={def.id}
-                              className="flex min-h-[52px] items-center gap-3 py-2 md:min-h-0 md:gap-2 md:py-0"
+                              key={id}
+                              className="flex min-h-[44px] items-center justify-between gap-3 px-2.5 py-1.5"
                             >
-                              <span className="shrink-0 text-[15.5px] text-content-primary md:w-16 md:text-xs md:text-content-secondary">
-                                {def.label}
+                              <span className="shrink-0 text-[15.5px] text-content-primary md:text-xs md:text-content-secondary">
+                                {probeFieldLabel(id)}
                               </span>
-                              <input
-                                type="text"
-                                value={current}
-                                onChange={(e) => setProfileDraft((d) => ({ ...d, [def.id]: e.target.value }))}
-                                maxLength={def.max ?? 16}
-                                placeholder="可留空"
-                                className="w-full flex-1 min-w-0 rounded-lg border border-line/60 bg-surface px-2.5 py-2 text-[15.5px] text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 md:py-1.5 md:text-xs"
-                              />
+                              <span
+                                className={cn(
+                                  'min-w-0 truncate text-right text-[15.5px] md:text-xs',
+                                  value ? 'text-content-primary' : 'text-content-muted/60'
+                                )}
+                              >
+                                {value ? generalFieldLabel(id, value) : '空白'}
+                              </span>
                             </div>
                           )
-                        }
-                        return (
-                          <MSegRow
-                            key={def.id}
-                            label={def.label}
-                            options={options}
-                            value={current}
-                            onChange={(next) => setProfileDraft((d) => ({ ...d, [def.id]: next }))}
-                            className="mt-2"
-                          />
-                        )
-                      })}
+                        })}
+                      </div>
 
                       {profileDerived && profileDerived.kind !== 'keep' && (
                         <div className="rounded-lg border border-line/50 bg-surface-muted/50 px-2.5 py-2">
@@ -4817,7 +4809,7 @@ export function SettingsModal({
                               {profileDerived.kind === 'graduate' ? '确认已毕业' : `确认升入 ${profileDerived.stage}`}
                             </button>
                             <button
-                              onClick={() => handleConfirmStage(profileDraft.stage ?? '')}
+                              onClick={() => handleConfirmStage(profileState?.fields.stage ?? '')}
                               disabled={profileSaving}
                               className="px-2.5 py-1 rounded-lg text-[11px] text-content-muted hover:text-content-secondary transition-colors disabled:opacity-50"
                             >
@@ -4829,17 +4821,16 @@ export function SettingsModal({
 
                       <div className="flex items-center gap-2 pt-1">
                         <button
-                          onClick={handleSaveProfile}
-                          disabled={profileSaving}
+                          onClick={() => setProbeDialogOpen(true)}
                           className={cn(
                             'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0',
-                            profileSaving
-                              ? 'bg-surface-muted text-content-muted cursor-not-allowed'
-                              : 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                            'bg-accent text-accent-foreground hover:bg-accent-hover'
                           )}
                         >
-                          {profileSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                          保存档案
+                          <Sparkles className="w-3.5 h-3.5" />
+                          {pendingProbeFields(profileState?.fields ?? {}).length > 0
+                            ? `补齐 ${pendingProbeFields(profileState?.fields ?? {}).length} 条`
+                            : '改一条'}
                         </button>
                         {profileState?.exists && (
                           <button
@@ -4852,13 +4843,28 @@ export function SettingsModal({
                         )}
                       </div>
                       <p className="text-[10px] text-content-muted/70 max-md:hidden">
-                        档案只记有档位的选项（身份 / 学段 / 选科 / 目标 / 讲解深度），自由长文与负债类隐私不入库。
+                        这里只看不能改。填或改都进那个一问一答的弹窗（与聊天页同一个入口），
+                        答一条存一条；不适用的项不列（非学生不填学段，上班族不填选科）。
                       </p>
+
+                      {probeDialogOpen && profileState && (
+                        <ProfileProbeDialog
+                          initial={profileState}
+                          /* 还缺维度就顺着问下去；已填满则把已答的逐条过一遍（「改一条」的语义） */
+                          mode={pendingProbeFields(profileState.fields).length > 0 ? 'fill' : 'review'}
+                          onChange={(row) => setProfileState(row)}
+                          onClose={() => {
+                            setProbeDialogOpen(false)
+                            void refreshProfileView()
+                          }}
+                        />
+                      )}
                     </div>
+                    )}
 
                     <ProfileMirror
                       section={profileSection}
-                      enabled={profileEnabledDraft}
+                      enabled={profileState?.enabled ?? false}
                       derivedNote={
                         profileDerived && profileDerived.kind !== 'keep' ? profileDerived.note : ''
                       }
