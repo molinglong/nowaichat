@@ -17,6 +17,8 @@ import { classifyUpstreamError, encodeUpstreamError } from "@/lib/error-catalog"
 import { getEffectiveModel, createProviderInstanceForEffectiveModel } from "@/lib/ai/registry"
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import { buildMemorySystemPrompt, getRelevantMemories, extractAndSaveMemories } from "@/lib/memory"
+import { buildGeneralProfileSection } from "@/lib/profile/injection"
+import { loadGeneralProfile } from "@/lib/profile/load"
 import { generateImage, extractImagePrompts, IMG_MARKER_REGEX } from "@/lib/ai/image"
 import { generateConversationTitle } from "@/lib/ai/title-generator"
 import { getStylePromptFromPreset, STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style"
@@ -763,10 +765,29 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // 升级自旧版自助反问"纯文本反问",现在以结构化卡片呈现,用户点选回答。
   const clarifySystemPrompt = CLARIFY_TOOL_PROMPT
 
+  // 通用档案(身份/学段/选科/目标/讲解深度 + 称呼):用户中心显式开启才注入。
+  // 四道闸门与记忆同构——临时模式(借号)不读写、对比模式不重复注入、
+  // 记忆总开关关掉则整套关、档案行 enabled 默认 false。
+  const generalProfile =
+    !isEphemeral && !groupId && memoryEnabled
+      ? await loadGeneralProfile(userId)
+      : null
+  const generalProfilePrompt =
+    generalProfile?.enabled
+      ? buildGeneralProfileSection({
+          fields: generalProfile.fields,
+          displayName: generalProfile.displayName,
+        })
+      : ""
+
   // Deep thinking: for non-reasoning models, add a system prompt and extract thinking via middleware
   let model = provider(realModelId)
   const baseModel = model // 保留原始模型引用，用于标题生成等后台任务
   if (memorySystemPrompt) systemParts.push(memorySystemPrompt)
+  if (generalProfilePrompt) {
+    systemParts.push(generalProfilePrompt)
+    console.log(`[chat] profile injected (${generalProfilePrompt.length} chars, user ${userId})`)
+  }
   if (clarifyEnabled) systemParts.push(clarifySystemPrompt)
 
   // AI 设置控制:总开关开启且非对比模式时,注入快照、规则与 update_settings 工具;

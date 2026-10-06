@@ -17,12 +17,13 @@ const EPHEMERAL_DENIED_PREFIXES = [
   "/api/user/ephemeral-settings", // 访客密码/临时记忆开关
   "/api/study", // 学习功能(错题本/复习状态写入)
   "/api/todos", // 待办(长期数据,防临时模式污染)
+  "/api/profiles", // 通用档案:读=暴露本人身份/学段,写=污染账户资产,临时模式整条拦掉
   "/api/write", // 写作画布文档(长期数据资产,防临时模式污染;入口在临时模式下本就隐藏)
 ]
 
 /** 方法敏感类：GET 等读操作放行，写操作拦截 */
 const EPHEMERAL_METHOD_GUARDED: Array<[string, string[]]> = [
-  ["/api/user/profile", ["PATCH", "POST", "PUT", "DELETE"]], // 改昵称等
+  ["/api/user/profile", ["PATCH", "POST", "PUT", "DELETE"]], // 改用户名等
   ["/api/masks", ["POST", "PATCH", "PUT", "DELETE"]], // 面具库写操作；GET 放行(选择器要用)
   ["/api/custom-models", ["POST", "PATCH", "PUT", "DELETE"]], // 自定义模型写操作；GET 放行(模型选择器要用，返回不含密钥明文)
   ["/api/images", ["DELETE", "PATCH", "PUT"]], // 图库删除；GET/POST(生图)放行
