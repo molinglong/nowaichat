@@ -11,6 +11,9 @@ model User {
   id            String    @id @default(cuid())
   email         String    @unique
   name          String?
+  /// 称呼（可选）：AI 注入与问候用的名字。回退链 nickname → name → 不出现称呼，
+  /// 刻意不回退邮箱前缀——邮箱是登录凭据，不是用户希望被叫的名字
+  nickname      String?
   passwordHash  String?
   image         String?
   createdAt     DateTime  @default(now())
@@ -58,6 +61,7 @@ model User {
   codeDocs      CodeDoc[]
   amapKey       AmapKey?
   apiTokens     ApiToken[]
+  domainProfiles  UserDomainProfile[]
 }
 
 model Account {
@@ -106,6 +110,29 @@ model ApiKey {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, provider])
+}
+
+/// 用户领域档案：一个领域一行，通用身份档案用 domain='general'。
+/// 只收"有档位/有时效/有行为后果"的字段（身份、学段、选科、职业、目标、讲解深度），
+/// 姓名、籍贯、爱好这类事实留在记忆流不在此建第二份可漂移副本。
+/// fields 为档位化 JSON 对象，自由长文不进档案。
+model UserDomainProfile {
+  id      String @id @default(cuid())
+  userId  String
+  domain  String
+  fields  Json   @default("{}")
+  /// 档案注入总开关：默认关，需在 设置→用户中心 显式开启后才进 system prompt
+  enabled Boolean  @default(false)
+  /// 最近一次用户确认档案的时间。换学年提醒（学生/教师跟 9/1）与
+  /// 打工人 180 天提醒均由每次请求惰性判定，不做定时任务、不做推送
+  lastConfirmedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, domain])
+  @@index([userId])
 }
 
 model Conversation {
