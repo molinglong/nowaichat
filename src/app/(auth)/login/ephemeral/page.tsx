@@ -52,8 +52,9 @@ export default function EphemeralLoginPage() {
       return
     }
 
-    // 同主登录页:硬导航避开 router cache 里 /chat 的脏 307 跳转(临时模式只允许 /chat)
-    window.location.assign("/chat")
+    // 同主登录页:硬导航避开 router cache 里 /chat 的脏 307 跳转(临时模式只允许 /chat);
+    // replace 不留 /login 在栈里,否则「返回」会掉回访客登录页
+    window.location.replace("/chat")
   }
 
   return (

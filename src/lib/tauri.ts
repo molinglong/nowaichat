@@ -21,12 +21,25 @@ import { useEffect, useState } from 'react'
 export const isTauri = false
 
 /**
- * 运行时检测是否在 Tauri WebView 内。
+ * 运行时检测是否在 Tauri 桌面壳内(不含安卓壳)。
  * 必须在 useEffect（客户端渲染后）里调用，因为 __TAURI_INTERNALS__
  * 在模块加载时可能还没注入到 window。
+ *
+ * 安卓壳只该有「原生能力」(通知等)，不该长出桌面 chrome(窗口控制/红绿灯/
+ * 拖拽区/毛玻璃特效)，所以桌面专用逻辑一律走这里，能力检测走 getIsTauriShell。
  */
 export function getIsTauri(): boolean {
+  return getIsTauriShell() && !isAndroidShell()
+}
+
+/** 是否在任何 Tauri 壳内(桌面 + 安卓) */
+export function getIsTauriShell(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** 安卓 WebView 的 UA 必含 "Android"，桌面壳为 Windows NT */
+function isAndroidShell(): boolean {
+  return typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent)
 }
 
 /**
@@ -181,7 +194,7 @@ export const tauri = {
    * Web 端 no-op;系统通知权限未授予时静默放弃,不阻塞聊天主流程。
    */
   async notifyReplyDone(title: string, body: string) {
-    if (!getIsTauri()) return
+    if (!getIsTauriShell()) return
     if (!getNotifyOnReply()) return
     try {
       // document.hasFocus():WebView 失焦(最小化/被其他窗口遮挡/切走应用)时为 false,

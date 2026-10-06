@@ -20,6 +20,7 @@ import {
 } from '@/lib/theme'
 import { useCustomModels, type CustomModelForm, type SavedCustomModel, CUSTOM_MODEL_DOT } from '@/hooks/useCustomModels'
 import { useWindowDrag } from '@/hooks/useWindowDrag'
+import { useBackToClose } from '@/hooks/useBackToClose'
 import { useToggleMap } from '@/hooks/useToggleMap'
 import { useProviderModels, type ProviderModelOverrideForm, makeEmptyForm as makeEmptyProviderForm } from '@/hooks/useProviderModels'
 import { detectModelCapabilities } from '@/lib/ai/model-capabilities'
@@ -1777,6 +1778,11 @@ export function SettingsModal({
     if (isDesktop) setSettingsOpen(false)
     else setClosePending(true)
   }, [isDesktop, setSettingsOpen])
+
+  // 系统/浏览器「返回」先关本浮层:设置页不占路由、不产生历史条目,
+  // 而安卓壳的返回键被 wry 固定处理成 WebView goBack(实测「设置→返回」掉回 /login)。
+  // forceOpen 是桌面独立子窗口形态,整页就是设置本身,不参与历史栈。
+  useBackToClose(settingsOpen && !forceOpen, requestClose)
 
   // Close on Escape(桌面即时关,移动端走滑出动画)
   useEffect(() => {

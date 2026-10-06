@@ -36,8 +36,10 @@ export default function LoginPage() {
     }
 
     // 硬导航而非 router.push:未登录时 /chat 的 RSC 请求会被 middleware 307 回 /login,
-    // 这条脏跳转进 Next 14 router cache 后软导航会复用,表现为首点无反应、需点第二次
-    window.location.assign("/chat")
+    // 这条脏跳转进 Next 14 router cache 后软导航会复用,表现为首点无反应、需点第二次。
+    // 用 replace 不用 assign:assign 会把 /login 留在历史栈里,之后任何一次「返回」
+    // (安卓壳返回键 = WebView goBack、手机手势返回、浏览器后退)都会掉回登录页。
+    window.location.replace("/chat")
   }
 
   return (

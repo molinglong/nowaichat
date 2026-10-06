@@ -121,9 +121,12 @@ export default function RootLayout({
                   document.documentElement.setAttribute('data-pal', pal);
                 } catch (e) {}
 
-                // 2. Tauri 环境检测 + 手动注入 data-tauri 属性
+                // 2. Tauri 桌面壳检测 + 手动注入 data-tauri 属性
                 //    （Tauri 2 不会自动加这个属性到 <html>，需要我们手动写）
-                if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+                //    UA 含 Android 的是手机壳：它要移动端形态，桌面专属样式
+                //    （.tauri-only 红绿灯/拖拽区、html 圆角裁剪）一律不挂上。
+                if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+                    && !/android/i.test(navigator.userAgent)) {
                   document.documentElement.setAttribute('data-tauri', '');
                 }
               })();

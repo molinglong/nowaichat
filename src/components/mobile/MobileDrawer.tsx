@@ -13,6 +13,7 @@ import { resolveMaskBadge, type MaskDTO } from '@/lib/ai/mask-types'
 import { SearchDialog } from '@/components/sidebar/SearchDialog'
 import { relativeTime } from '@/components/chat/RecentChats'
 import { useIsMobileViewport } from '@/hooks/useIsMobileViewport'
+import { useBackToClose } from '@/hooks/useBackToClose'
 import { cn } from '@/lib/utils'
 
 /**
@@ -122,6 +123,9 @@ export function MobileDrawer() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [open, setSidebarOpen])
+
+  // 系统/浏览器「返回」先收抽屉:抽屉不占路由,而壳内返回键固定走 WebView goBack
+  useBackToClose(isMobile && open, () => setSidebarOpen(false))
 
   // 会话历史:与 Sidebar 同 queryKey 共享缓存(bump 版本联动刷新),无额外请求
   const {
