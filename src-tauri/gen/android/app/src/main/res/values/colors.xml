@@ -8,6 +8,6 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <!-- 状态栏/窗口底衬:enableEdgeToEdge 后状态栏透明,未延伸的 WebView 之上露出 windowBackground,
-         默认 Material 浅灰与 app 页面背景割裂(真机截图反馈),对齐 app 浅色 --background -->
+         默认 Material 浅灰与 app 页面背景割裂(真机截图反馈),对齐 app 浅色底色 -->
     <color name="window_bg">#FFF5F5F7</color>
 </resources>
