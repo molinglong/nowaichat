@@ -30,6 +30,7 @@ import { toast } from '@/lib/toast'
 import { useVisualViewport } from '@/hooks/useVisualViewport'
 import { useIsComputerMode } from '@/hooks/useIsComputerMode'
 import { useMaskMenuMaxHeight } from '@/hooks/useMaskMenuMaxHeight'
+import { useReplyReminder } from '@/hooks/useReplyReminder'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
@@ -1185,6 +1186,10 @@ export function ChatPanel({
   // A 流式恢复: 远端仍在生成(轮询续显中)也算生成中,输入框保持禁用/停止按钮可见,
   // 新消息按 F 方案入队,待定格后自动发出
   const isLoading = status === 'submitted' || status === 'streaming' || remoteStreamingId != null
+
+  // 安卓壳:生成开始即向系统预约一条「回来看」定时通知,结束/回到前台撤掉。
+  // 切后台会冻住 JS(WebView.onPause),完成那一刻在前端根本等不到,只能提前挂号。
+  useReplyReminder(isLoading)
 
   // 生成开始时(stop → send 或 regenerate)清掉"接着说"横幅
   const prevStatusRef = useRef(status)

@@ -29,7 +29,7 @@ import { StylePicker } from '@/components/chat/StylePicker'
 import { getStylePresetLabel, STYLE_PRESETS } from '@/lib/ai/style'
 import { ReplyLengthSlider } from '@/components/chat/ReplyLengthSlider'
 import { getReplyLengthLabel, REPLY_LENGTH_LEVELS } from '@/lib/ai/reply-length'
-import { useIsTauri, getNotifyOnReply, setNotifyOnReply } from '@/lib/tauri'
+import { useIsTauri, useIsTauriShell, getNotifyOnReply, setNotifyOnReply, getReplyReminderDelaySec, setReplyReminderDelaySec } from '@/lib/tauri'
 import { pickWorkspaceDir, getWorkspaceDir, LOCAL_FILES_SYNC_KEY } from '@/lib/tauri-files'
 import { toast } from '@/lib/toast'
 import { useQueryClient } from '@tanstack/react-query'
@@ -50,6 +50,14 @@ const REPLY_LENGTH_STORAGE_KEY = 'chat:replyLength'
 const BACKDROP_CHOICES: { value: BackdropMode; label: string }[] = [
   { value: 'off', label: '关闭' },
   { value: 'image', label: '壁纸' },
+]
+
+/** 后台回复提醒的等待档位(秒)。存 localStorage,0 = 不提醒 */
+const REMINDER_DELAY_CHOICES: { value: string; label: string }[] = [
+  { value: '30', label: '30秒' },
+  { value: '45', label: '45秒' },
+  { value: '90', label: '1分半' },
+  { value: '0', label: '关闭' },
 ]
 
 interface ProviderInfo {
@@ -1015,19 +1023,37 @@ export function SettingsModal({
   const [gridTone, setGridTone] = useState<GridTone>('day')
   const [gridToneAuto, setGridToneAuto] = useState(false)
     const inTauri = useIsTauri()
+    // 通知类开关按「在任意壳内」露出:安卓壳一样有系统通知能力,
+    // 用 inTauri(桌面专属)会把手机端这两项藏掉,设置里根本调不了。
+    const inShell = useIsTauriShell()
 
     // 回复完成系统通知开关:仅桌面端有意义(依赖系统通知能力),偏好存 localStorage(默认开)
     const [notifyOnReply, setNotifyOnReplyState] = useState(true)
     useEffect(() => {
-      if (!inTauri) return
+      if (!inShell) return
       setNotifyOnReplyState(getNotifyOnReply())
-    }, [inTauri])
+    }, [inShell])
     const handleToggleNotify = useCallback(() => {
       setNotifyOnReplyState((v) => {
         const next = !v
         setNotifyOnReply(next)
         return next
       })
+    }, [])
+
+    // 后台回复提醒(手机壳):发一条消息时向系统预约一条 N 秒后的定时通知。
+    // 做成预约式而不是「完成时通知」,是因为壳切后台会冻住 JS(WebView.onPause),
+    // 前端等不到完成那一刻;时长只能是估算值。
+    const [reminderDelay, setReminderDelayState] = useState('45')
+    useEffect(() => {
+      if (!inShell) return
+      const saved = String(getReplyReminderDelaySec())
+      // 只认档位表里的值:localStorage 被手改过或存过别的数,回落到默认档
+      setReminderDelayState(REMINDER_DELAY_CHOICES.some((c) => c.value === saved) ? saved : '45')
+    }, [inShell])
+    const handleChangeReminderDelay = useCallback((next: string) => {
+      setReminderDelayState(next)
+      setReplyReminderDelaySec(Number(next))
     }, [])
 
     // ============ AI 本地文件能力(仅桌面端) ============
@@ -6075,8 +6101,11 @@ export function SettingsModal({
                       onChange={setAutoCollapseReasoning}
                     />
 
-                    {/* 回复完成系统通知:仅桌面端;窗口失焦时 AI 回复完成弹系统通知 */}
-                    {inTauri && (
+                    {/* 通知类:桌面=失焦时完成即通知;手机壳另有一条预约式提醒。
+                        按 inShell 露出而不是 inTauri —— 安卓壳同样有通知能力,
+                        用桌面专属口径会把手机端这两项整个藏掉。 */}
+                    {inShell && (
+                    <>
                     <MSwitchRow
                       label="回复完成通知"
                       help="窗口失焦时,AI 回复完成弹系统通知提醒"
@@ -6084,6 +6113,15 @@ export function SettingsModal({
                       onChange={handleToggleNotify}
                       className="border-t border-line/60"
                     />
+                    <MSegRow
+                      label="离开后提醒我回来看"
+                      help="发消息后过这么久催一次。手机切后台会暂停生成,回来才有结果,所以是「催回来看」而不是「已完成」"
+                      options={REMINDER_DELAY_CHOICES}
+                      value={reminderDelay}
+                      onChange={handleChangeReminderDelay}
+                      className="border-t border-line/60"
+                    />
+                    </>
                     )}
 
                     {/* AI 设置控制总开关:刻意不在 AI 可控注册表内,AI 无法修改此项;临时模式不渲染(依赖被 403 的 /api/settings/ai-control) */}
