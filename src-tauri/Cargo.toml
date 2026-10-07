@@ -25,13 +25,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# 自动化相关
-enigo = "0.3"
-screenshots = "0.8"
 base64 = "0.22"
 image = "0.25"
-# 本地文件能力:删除文件走系统回收站(可还原),而非物理删除
+
+# 回收站删除仅在桌面 OS 上有实现（trash 的 platform 后端按桌面 OS 分档），
+# 安卓 target 上该 crate 直接编译失败，故按 target 门控，调用处见 lib.rs::move_to_trash
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 trash = "5"
 
 [features]

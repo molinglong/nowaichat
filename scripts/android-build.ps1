@@ -1,0 +1,83 @@
+# Android APK build for aichatt (remote-shell Tauri).
+#
+# Two environment walls this script works around, both Windows-specific:
+#  1) ld.lld cannot read non-ASCII paths and rustc canonicalizes the workspace, so a
+#     junction/short-name does not help: src-tauri is mirrored to an ASCII directory
+#     and the build actually runs there. The repo stays the single source of truth.
+#  2) The Tauri CLI *symlinks* libaichatt_lib.so into jniLibs, which Windows refuses
+#     unless the machine has Developer Mode / SeCreateSymbolicLinkPrivilege. Instead
+#     of touching system settings we copy the .so in as a plain file and drive Gradle
+#     with its rustBuild* tasks excluded (they would call the CLI and hit the same wall).
+#
+# Usage: powershell -File scripts\android-build.ps1 [aarch64|armv7|i686|x86_64]
+$ErrorActionPreference = 'Stop'
+
+$repo       = Split-Path -Parent $PSScriptRoot
+$src        = Join-Path $repo 'src-tauri'
+$mirrorRoot = 'D:\aichatt-android'
+$dest       = Join-Path $mirrorRoot 'src-tauri'
+$cli        = Join-Path $mirrorRoot 'node_modules\@tauri-apps\cli\tauri.js'
+$log        = Join-Path $mirrorRoot 'build.log'
+$gradleLog  = Join-Path $mirrorRoot 'gradle.log'
+$abi        = if ($Args.Count -gt 0) { $Args[0] } else { 'aarch64' }
+
+$tripleMap = @{ aarch64 = 'aarch64-linux-android'; armv7 = 'armv7-linux-androideabi';
+                i686 = 'i686-linux-android'; x86_64 = 'x86_64-linux-android' }
+$jniMap    = @{ aarch64 = 'arm64-v8a'; armv7 = 'armeabi-v7a'; i686 = 'x8'; x86_64 = 'x86_64' }
+$archMap   = @{ aarch64 = 'Arm64'; armv7 = 'Arm'; i686 = 'X8'; x86_64 = 'X86_64' }
+
+$env:ANDROID_HOME     = 'D:\AndroidSDK'
+$env:NDK_HOME         = 'D:\AndroidSDK\ndk\27.0.12077973'
+$env:ANDROID_NDK_HOME = $env:NDK_HOME
+$env:JAVA_HOME        = 'D:\JDK'
+
+New-Item -ItemType Directory -Force -Path $mirrorRoot | Out-Null
+Write-Output "mirror: $src -> $dest"
+robocopy $src $dest /MIR /XD target build .gradle .kotlin /NFL /NDL /NJH /NJS | Out-Null
+if ($LASTEXITCODE -gt 7) { throw "robocopy src-tauri failed with code $LASTEXITCODE" }
+# The CLI is mirrored too, so no path handed to the toolchain ever contains non-ASCII.
+robocopy (Join-Path $repo 'node_modules\@tauri-apps') `
+  (Join-Path $mirrorRoot 'node_modules\@tauri-apps') /MIR /NFL /NDL /NJH /NJS | Out-Null
+if ($LASTEXITCODE -gt 7) { throw "robocopy tauri cli failed with code $LASTEXITCODE" }
+
+Push-Location $mirrorRoot
+try {
+  # cmd owns the redirect: PowerShell 5.1 turns a native command's stderr into an
+  # error record while ErrorActionPreference=Stop, which killed the build on its
+  # first informational line. tauri.android.conf.json is auto-merged by the CLI.
+  cmd /c ('node "{0}" android build --apk --debug --target {1} > "{2}" 2>&1' -f $cli, $abi, $log)
+
+  if ($LASTEXITCODE -ne 0 -and (Get-Content $log -Raw) -match 'symbolic link') {
+    Write-Output 'CLI blocked on symlink privilege -> copying .so and running Gradle directly'
+    $arch = $archMap[$abi]
+    $so   = Join-Path $dest ('target\{0}\debug\libaichatt_lib.so' -f $tripleMap[$abi])
+    if (-not (Test-Path $so)) { throw "cargo produced no shared library at $so" }
+    $jniDir = Join-Path $dest ('gen\android\app\src\main\jniLibs\{0}' -f $jniMap[$abi])
+    New-Item -ItemType Directory -Force -Path $jniDir | Out-Null
+    Copy-Item $so $jniDir -Force
+
+    $props = Join-Path $dest 'gen\android\local.properties'
+    if (-not (Test-Path $props)) {
+      Set-Content -Path $props -Value 'sdk.dir=D:/AndroidSDK' -Encoding ASCII
+    }
+
+    Push-Location (Join-Path $dest 'gen\android')
+    try {
+      cmd /c ('gradlew.bat :app:assemble{0}Debug -x rustBuild{0}Debug -x rustBuildUniversalDebug > "{1}" 2>&1' `
+        -f $arch, $gradleLog)
+      if ($LASTEXITCODE -ne 0) { Get-Content $gradleLog -Tail 40; throw "gradle failed with code $LASTEXITCODE" }
+    } finally { Pop-Location }
+  } elseif ($LASTEXITCODE -ne 0) {
+    Get-Content $log -Tail 40
+    throw "tauri android build failed with code $LASTEXITCODE"
+  }
+} finally {
+  Pop-Location
+}
+
+$apk = Get-ChildItem -Path (Join-Path $dest 'gen\android\app') -Recurse -Filter '*-debug.apk' |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $apk) { throw 'build reported success but no apk was produced' }
+$out = Join-Path $repo 'aichatt-debug.apk'
+Copy-Item $apk.FullName $out -Force
+Write-Output ("APK: {0}  {1} MB" -f $out, [math]::Round($apk.Length / 1MB, 1))
