@@ -1388,6 +1388,37 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
   }
 }
 
+/* 流式呈现动效:段级上浮 + 句级淡入(preview-stream-effects.html 的 A3 选型)。
+   作用域只有 live 档(.md-live),即「生成中的 assistant 消息」;历史消息与定格后走
+   rich 档,不挂这两个类,因此打开长对话零动画风暴。
+   上浮给块(transform 对 display:inline 不生效)、淡入给句(inline 只吃 opacity),
+   两者都是块/句「首次挂载」跑一次,React 按 index key 复用节点故不会重放。
+   .md-blk-rise 是同一条上浮的独立工具类:思考流是滑动尾切窗,句序不单调,吃不了句级
+   淡入(preview-reason-motion.html 实测「定稿句改写 148 ≫ 淡入 25」= 动效与内容脱钩),
+   只给整块挂一次上浮。 */
+@keyframes md-blk-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes md-sent-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.md-live > *,
+.md-blk-rise {
+  animation: md-blk-rise 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+.md-sent {
+  animation: md-sent-fade 0.42s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-live > *,
+  .md-blk-rise,
+  .md-sent {
+    animation: none;
+  }
+}
+
 /* 块级代码: 去掉行内 code 的背景/边框,由 pre 容器统一承担 */
 .rich-md pre code {
   background: transparent;

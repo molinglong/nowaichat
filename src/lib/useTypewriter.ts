@@ -45,6 +45,9 @@ interface StoreEntry {
   revealedPos: number
   /** 平滑后的瞬时速度(字符/秒) */
   rate: number
+  /** 本实例速度上限(字符/秒)。默认 RATE_MAX;推理小窗等"永不追平"的流用它压低
+   *  稳态速度:RATE_MAX 下每帧推进 ~25 字(半行),行粒度位移观感就是"一跳一跳" */
+  rateCap: number
   /** 上一帧时间戳(ms), 用于把推进量换算成时间基 */
   lastTs: number
   /** 监听器列表 (useSyncExternalStore 的 subscribe 回调) */
@@ -70,8 +73,8 @@ const TAU_MS = 240 // 平滑时间常数: 越小越跟手, 越大越顺滑
 // 后台标签页里 RAF 被节流到 ~1 帧/秒, dt 不钳一次就跳几百字符
 const MAX_DT_MS = 48
 
-function targetRate(gap: number): number {
-  return Math.min(RATE_MAX, RATE_MIN + gap * RATE_GAIN)
+function targetRate(gap: number, cap: number): number {
+  return Math.min(cap, RATE_MIN + gap * RATE_GAIN)
 }
 
 function getStore(token: object): StoreEntry {
@@ -82,6 +85,7 @@ function getStore(token: object): StoreEntry {
     revealedLength: 0,
     revealedPos: 0,
     rate: RATE_MIN,
+    rateCap: RATE_MAX,
     lastTs: 0,
     listeners: new Set(),
     rafId: null,
@@ -110,7 +114,7 @@ function tick(entry: StoreEntry, now: number) {
   entry.lastTs = now
 
   const gap = target - entry.revealedPos
-  entry.rate += (targetRate(gap) - entry.rate) * (1 - Math.exp(-dtMs / TAU_MS))
+  entry.rate += (targetRate(gap, entry.rateCap) - entry.rate) * (1 - Math.exp(-dtMs / TAU_MS))
 
   entry.revealedPos = Math.min(target, entry.revealedPos + (entry.rate * dtMs) / 1000)
   entry.revealedLength = Math.floor(entry.revealedPos)
@@ -178,7 +182,7 @@ function getServerSnapshot(): string {
 
 /* ── Hook ─────────────────────────────────────────────────────────────── */
 
-export function useTypewriter(fullText: string, enabled: boolean): {
+export function useTypewriter(fullText: string, enabled: boolean, maxRate?: number): {
   displayText: string
   isTyping: boolean
 } {
@@ -192,6 +196,7 @@ export function useTypewriter(fullText: string, enabled: boolean): {
   // ── 关键: 所有 entry 字段修改都放在 useEffect 里, 绝不在 render 函数里 ──
   useEffect(() => {
     const entry = getStore(token)
+    entry.rateCap = maxRate && maxRate > 0 ? maxRate : RATE_MAX
 
     const prevLen = entry.fullText.length
 
@@ -230,7 +235,7 @@ export function useTypewriter(fullText: string, enabled: boolean): {
       }
     }
     // fullText.length 没变: enabled 切换已由下面 effect 处理
-  }, [fullText, enabled, token])
+  }, [fullText, enabled, token, maxRate])
 
   // 单独 effect 处理 enabled 切换 (fullText 没变时)
   useEffect(() => {

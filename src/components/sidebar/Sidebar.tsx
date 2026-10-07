@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react
 import { useRenderProbe } from '@/lib/client-diagnostics'
 import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses, ListChecks, Trash2, Check, X } from 'lucide-react'
+import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses, ListChecks, Trash2, X } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
 import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
@@ -255,7 +255,7 @@ export function Sidebar() {
     setUserMenuOpen(true)
   }, [setSidebarOpen])
 
-  // 用户菜单 → 打开设置弹窗并定位到「账号信息」
+  // 用户菜单 → 打开设置弹窗并定位到「用户中心」
   const handleOpenAccountSettings = useCallback(() => {
     setUserMenuOpen(false)
     setSettingsSection('account')
@@ -355,18 +355,6 @@ export function Sidebar() {
     setSelectedIds(new Set())
     setBatchConfirmOpen(false)
   }, [])
-
-  const allSelected = conversations.length > 0 && conversations.every((c) => selectedIds.has(c.id))
-
-  /** 全选/取消全选的作用域是「已加载的会话」——未加载的分页要靠列表滚动继续加载 */
-  const toggleSelectAll = useCallback(() => {
-    setSelectedIds((prev) => {
-      const loaded = conversations.map((c) => c.id)
-      return prev.size >= loaded.length && loaded.every((id) => prev.has(id))
-        ? new Set<string>()
-        : new Set(loaded)
-    })
-  }, [conversations])
 
   const confirmBatchDelete = useCallback(async () => {
     const ids = Array.from(selectedIds)
@@ -558,7 +546,7 @@ export function Sidebar() {
               临时聊天
             </p>
             <p className="mt-0.5 text-[10px] leading-4 text-content-muted">
-              对话已隔离保存，可在正常模式 设置→账号信息 中找回
+              对话已隔离保存，可在正常模式 设置→用户中心 中找回
             </p>
           </div>
         )}
@@ -801,19 +789,9 @@ export function Sidebar() {
           </div>
         )}
 
-        {/* 批量管理操作条:全选作用域为已加载会话,列表可继续滚动加载 */}
+        {/* 批量管理操作条 */}
         {sidebarEffectiveOpen && manageMode && (
           <div className="px-2 pt-2 pb-2 mt-0.5 border-t border-line/40 flex items-center gap-1.5">
-            <button
-              onClick={toggleSelectAll}
-              className="flex h-7 items-center gap-1 px-2 rounded-lg text-[11px] font-medium
-                border border-line/40 bg-surface-muted/60 text-content-secondary
-                hover:bg-surface-subtle hover:text-content-primary transition-colors active:scale-[0.98] touch-manipulation"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
-            >
-              <Check className="w-3 h-3" aria-hidden />
-              {allSelected ? '取消全选' : '全选'}
-            </button>
             <button
               onClick={() => setBatchConfirmOpen(true)}
               disabled={selectedIds.size === 0 || deleting}

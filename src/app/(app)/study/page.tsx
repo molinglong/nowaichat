@@ -20,10 +20,9 @@ import { ClientOnly } from '@/components/ClientOnly'
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
-import { queryKeys, STALE } from '@/lib/query/keys'
+import { providersModelsQuery } from '@/lib/query/providers'
 import { fetchJson } from '@/lib/query/fetcher'
 import { cn } from '@/lib/utils'
-import type { ModelDefinition } from '@/lib/ai/types'
 
 const CHIP =
   'px-2.5 py-1 rounded-full text-xs bg-surface-subtle/60 border border-line/60 text-content-secondary'
@@ -35,31 +34,10 @@ function StudyContent() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerTab, setDrawerTab] = useState<'review' | 'notes'>('notes')
 
-  const { data: allModels } = useSuspenseQuery<ModelDefinition[]>({
-    queryKey: queryKeys.providers(),
-    queryFn: async () => {
-      const payload = await fetchJson<
-        | Array<{ id?: string; effectiveModels: Array<Omit<ModelDefinition, 'provider'> & { provider?: string }> }>
-        | { providers: Array<{ id?: string; effectiveModels: Array<Omit<ModelDefinition, 'provider'>> }> }
-      >('/api/providers')
-      const list = Array.isArray(payload) ? payload : payload.providers ?? []
-      return list.flatMap(
-        (p) => p.effectiveModels.map(
-          (m): ModelDefinition => ({
-            id: m.id,
-            name: m.name,
-            provider: p.id ?? (m as { provider?: string }).provider ?? '',
-            contextWindow: m.contextWindow,
-            supportsVision: m.supportsVision,
-            supportsFiles: m.supportsFiles,
-            supportsReasoning: m.supportsReasoning,
-          })
-        )
-      )
-    },
-    staleTime: STALE.providers,
-  })
-  const defaultModel = allModels[0]?.id || 'gpt-5.4-mini'
+  const { data: allModels } = useSuspenseQuery(providersModelsQuery)
+  // 首跑默认模型优先公共池门面档,与 /chat 同规则(见 chat/page.tsx 注释)
+  const defaultModel =
+    allModels.find((m) => m.publicPool)?.id || allModels[0]?.id || 'gpt-5.4-mini'
 
   // 状态条计数:与 /api/study/queue、服务端学情回灌同口径(到期含新卡;薄弱=lapses>=1 或掌握度<0.3)
   const { data: queue } = useQuery({

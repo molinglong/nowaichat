@@ -334,7 +334,7 @@ export function ProfileProbeDialog({
                   className={cn(
                     'max-w-[85%] rounded-lg px-2.5 py-1.5 leading-relaxed',
                     b.from === 'me'
-                      ? 'bg-accent text-white'
+                      ? 'bg-accent text-accent-foreground'
                       : 'bg-surface text-content-primary border border-line/40'
                   )}
                 >
@@ -395,7 +395,7 @@ export function ProfileProbeDialog({
               type="button"
               onClick={() => void submitTyped()}
               disabled={saving || !typed.trim()}
-              className="shrink-0 inline-flex items-center justify-center rounded-md px-3 min-h-[36px] bg-accent text-white disabled:opacity-40"
+              className="shrink-0 inline-flex items-center justify-center rounded-md px-3 min-h-[36px] bg-accent text-accent-foreground disabled:opacity-40"
               aria-label="把这句记进档案"
             >
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}

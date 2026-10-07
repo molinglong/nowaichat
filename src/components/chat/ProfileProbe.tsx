@@ -294,7 +294,7 @@ export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: Prof
               type="button"
               onClick={reviewProbe}
               className="shrink-0 inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-md text-xs font-medium
-                bg-accent text-white transition-transform active:scale-95"
+                bg-accent text-accent-foreground transition-transform active:scale-95"
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
               <RefreshCw className="w-3 h-3" />
@@ -305,7 +305,7 @@ export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: Prof
               type="button"
               onClick={startProbe}
               className="shrink-0 inline-flex items-center min-h-[36px] px-2.5 rounded-md text-xs font-medium
-                bg-accent text-white transition-transform active:scale-95"
+                bg-accent text-accent-foreground transition-transform active:scale-95"
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
               开始

@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   }
 
   // 会话隔离:临时会话只返回临时对话,正常会话只返回正常对话。
-  // 例外:正常模式下 ?scope=ephemeral 查看隔离区(设置→账号信息 临时聊天找回专区)。
+  // 例外:正常模式下 ?scope=ephemeral 查看隔离区(设置→用户中心 临时聊天找回专区)。
   const ephemeral = isEphemeralSession(session)
   const { searchParams } = new URL(req.url)
   const scope = (searchParams.get('scope') ?? '').trim().toLowerCase()

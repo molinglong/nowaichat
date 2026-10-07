@@ -399,21 +399,121 @@ function mdEl(name: MdElName, props: MdElProps, key: number | string) {
 
 const LIVE_INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/
 
-/** 行内三件套: 加粗 / 行内码 / 斜体; 未闭合定界符原样留着, 定格富渲染接管 */
+/** 句末切分时的「整体不可切」区段:行内码/加粗/行内公式/链接。
+ *  先全局扫一遍拿区间再按区间走 —— 项目未设 tsconfig target,sticky(y) 标志会被 tsc 拒 */
+const LIVE_SENT_ATOMIC_RE =
+  /(`[^`\n]+`|\*\*[^*\n]+\*\*|\$[^$\n]+\$|\\\([\s\S]*?\\\)|\[[^\]\n]*\]\([^)\n]*\))/g
+
+/**
+ * 按句末标点切句(供句级淡入用)。切分只发生在纯文本里:
+ * 行内码/公式/链接整体跳过,所以 `$f'(x) = 3x² - 3$。` 不会从公式中间断开。
+ * 英文 '.' 要求后跟空白且前一位不是数字,避开 "3.14" 与 "1." 这类序号被误切。
+ */
+function splitLiveSentences(text: string): string[] {
+  const atoms: number[] = []
+  LIVE_SENT_ATOMIC_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = LIVE_SENT_ATOMIC_RE.exec(text))) atoms.push(m.index, m.index + m[0].length)
+
+  const parts: string[] = []
+  let buf = ''
+  let i = 0
+  let a = 0
+  const flush = () => {
+    if (buf) {
+      parts.push(buf)
+      buf = ''
+    }
+  }
+  while (i < text.length) {
+    if (a < atoms.length && i === atoms[a]) {
+      const end = atoms[a + 1]
+      buf += text.slice(i, end)
+      i = end
+      a += 2
+      continue
+    }
+    const ch = text[i]
+    buf += ch
+    i++
+    const isCjkEnd = /[。！？；]/.test(ch)
+    const isLatinEnd = /[!?;]/.test(ch)
+    const isPeriod = ch === '.' && (i >= text.length || /\s/.test(text[i])) && !/\d$/.test(buf.slice(0, -1))
+    if (isCjkEnd || isLatinEnd || isPeriod) {
+      // 收尾引号/括号跟着上一句走,不留孤点起句
+      while (i < text.length && /[”’）】」』]/.test(text[i])) {
+        buf += text[i]
+        i++
+      }
+      flush()
+    }
+  }
+  flush()
+  return parts
+}
+
+/**
+ * 打字机停在「只开了头、还没闭合」的行内定界符上时,补一个假闭合再切句/切样式。
+ * 不补的代价(实测: 一篇 900 字长回答,流式期间 9 次「上面已上屏的文字被改写」):
+ * `**` / 反引号会先按字面画上屏,等真闭合那一刻再从 DOM 里吃掉 —— 那一行的结尾少掉
+ * 2~7 个字、整行向左回收,肉眼就是「正文往下走,上面的行尾又闪一下」。
+ * 补了之后定界符本身永不上屏,内容一出现就是最终样式,真闭合到达时该段 DOM 恰好不动。
+ * 只在流式期生效;定格走 react-markdown,以原文为准。
+ */
+function closePendingAtoms(text: string): string {
+  const bolds = text.split('**').length - 1
+  if (bolds % 2 === 1) {
+    const at = text.lastIndexOf('**')
+    const tail = text.slice(at + 2)
+    // 开头敲完、后面还没字 → 这个开头先别上屏(否则它按字面亮一帧,下一帧再被吃掉)
+    if (!tail) return text.slice(0, at)
+    if (!tail.includes('*')) return text + '**'
+  }
+  const ticks = (text.match(/`/g) || []).length
+  if (ticks % 2 === 1) {
+    const at = text.lastIndexOf('`')
+    const tail = text.slice(at + 1)
+    if (!tail) return text.slice(0, at)
+    if (!tail.includes('`')) return text + '`'
+  }
+  // 不属于 ** 的裸 * 个数为奇 → 斜体开着没关
+  let lastLone = -1
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '*') continue
+    if (text[i + 1] === '*' || text[i - 1] === '*') { i++; continue }
+    lastLone = i
+  }
+  const loneStars = (text.match(/\*/g) || []).length - bolds * 2
+  if (loneStars % 2 === 1 && lastLone >= 0) {
+    const tail = text.slice(lastLone + 1)
+    if (!tail) return text.slice(0, lastLone)
+    if (!tail.includes('*')) return text + '*'
+  }
+  return text
+}
+
+/** 行内三件套: 加粗 / 行内码 / 斜体; 未闭合定界符按「已成形的最终样式」渲染(见 closePendingAtoms)。
+ *  外层再按句切 span.md-sent 承载句级淡入:span 的 key 只跟句序走,
+ *  打字机在同一句内推进时该 span 不重挂载,故一句只淡入一次。 */
 function liveInline(text: string, keyBase: string): React.ReactNode[] {
   const out: React.ReactNode[] = []
-  text.split(LIVE_INLINE_RE).forEach((part, i) => {
-    if (!part) return
-    const key = `${keyBase}-${i}`
-    if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
-      out.push(<strong key={key}>{part.slice(2, -2)}</strong>)
-    } else if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
-      out.push(<CodeInline key={key}>{part.slice(1, -1)}</CodeInline>)
-    } else if (part.length > 2 && part.startsWith('*') && part.endsWith('*')) {
-      out.push(<em key={key}>{part.slice(1, -1)}</em>)
-    } else {
-      out.push(<React.Fragment key={key}>{part}</React.Fragment>)
-    }
+  splitLiveSentences(closePendingAtoms(text)).forEach((sent, si) => {
+    const sentKey = `${keyBase}-s${si}`
+    const nodes: React.ReactNode[] = []
+    sent.split(LIVE_INLINE_RE).forEach((part, i) => {
+      if (!part) return
+      const key = `${sentKey}-${i}`
+      if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+        nodes.push(<strong key={key}>{part.slice(2, -2)}</strong>)
+      } else if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+        nodes.push(<CodeInline key={key}>{part.slice(1, -1)}</CodeInline>)
+      } else if (part.length > 2 && part.startsWith('*') && part.endsWith('*')) {
+        nodes.push(<em key={key}>{part.slice(1, -1)}</em>)
+      } else {
+        nodes.push(<React.Fragment key={key}>{part}</React.Fragment>)
+      }
+    })
+    out.push(<span key={sentKey} className="md-sent">{nodes}</span>)
   })
   return out
 }
@@ -424,10 +524,17 @@ const LIVE_PARA_BREAK_RE = /^(#{1,4}\s|>\s?|\||```|[-*+]\s|\d+[.)]\s|:::)/
 function parseLiveBlocks(md: string): LiveBlock[] {
   const lines = md.split('\n')
   const blocks: LiveBlock[] = []
+  // 最后一个非空行 = 打字机此刻正在写的那一行(只有它处于「半截」状态)
+  let lastLine = lines.length - 1
+  while (lastLine >= 0 && !lines[lastLine].trim()) lastLine--
   let i = 0
   while (i < lines.length) {
     const trimmed = lines[i].trim()
     if (!trimmed) { i++; continue }
+    // 块标记只敲出字符、后面那个空格还没来(整行就剩 # / - / 1 / 1. / 两个反引号)时先不上屏。
+    // 不拦的话它被当成正文并进上一段,标记一到再从段里吃掉:上面那行行尾凭空少几个字,
+    // 且该块从 p 换成 h2/ol/ul —— React 认标签不同即重建节点,整块上浮 + 块内每句重淡
+    if (i === lastLine && /^(#{1,4}|[-*+]|\d{1,3}[.)]?|`{1,2})$/.test(trimmed)) break
     // 试卷块标记(:::material 等)流式期直接隐去, 内部内容照常按普通块渲染
     if (/^:::+/.test(trimmed)) { i++; continue }
     const fence = trimmed.match(/^```+([a-zA-Z0-9+#._-]*)/)
@@ -524,7 +631,7 @@ function renderLiveBlock(b: LiveBlock, k: number): React.ReactNode {
 const LiveMarkdown = memo(function LiveMarkdown({ content }: { content: string }) {
   // 每帧一次行扫描(几十行量级), 比走 react-markdown 全管线低一个数量级
   const blocks = useMemo(() => parseLiveBlocks(content), [content])
-  return <div className="rich-md">{blocks.map((b, k) => renderLiveBlock(b, k))}</div>
+  return <div className="rich-md md-live">{blocks.map((b, k) => renderLiveBlock(b, k))}</div>
 })
 
 /**

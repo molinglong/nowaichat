@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest) {
   const effectiveModels = await getEffectiveModels(userId)
 
   const list = Object.values(providers).map((p) => {
-    const builtinModelIds = p.models.map((m) => m.id)
+    const builtinModelIds = p.models.filter((m) => !m.upstreamOnly).map((m) => m.id)
     const effective = effectiveModels.filter((m) => m.provider === p.id)
     return {
       id: p.id,
@@ -35,6 +35,8 @@ export async function GET(_req: NextRequest) {
         supportsVision: m.supportsVision,
         supportsFiles: m.supportsFiles,
         supportsReasoning: m.supportsReasoning,
+        // 公共池门面模型需要该标志:选择器对它豁免「已配置 Key」过滤(全员可见)
+        ...(m.publicPool ? { publicPool: true } : {}),
       })),
     }
   })

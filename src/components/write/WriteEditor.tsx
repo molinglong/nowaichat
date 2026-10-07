@@ -5,6 +5,7 @@ import { Loader2, PanelLeft, X } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/query/fetcher'
 import { queryKeys, STALE } from '@/lib/query/keys'
+import { providersModelsQuery } from '@/lib/query/providers'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { ModelSelector } from '@/components/explore/ModelSelector'
@@ -33,30 +34,9 @@ interface RewritePreview {
   deaiStats?: string
 }
 
-/** 模型列表拉取:与 TopBar 预热同构(/api/providers → 扁平模型数组) */
+/** 模型列表拉取:全站共享映射(见 lib/query/providers.ts),勿再内联重写 */
 function useModels(): ModelDefinition[] {
-  const { data } = useQuery({
-    queryKey: queryKeys.providers(),
-    queryFn: async () => {
-      const payload = await fetchJson<
-        | Array<{ id?: string; effectiveModels: ModelDefinition[] }>
-        | { providers: Array<{ id?: string; effectiveModels: ModelDefinition[] }> }
-      >('/api/providers')
-      const list = Array.isArray(payload) ? payload : payload.providers ?? []
-      return list.flatMap((p) =>
-        p.effectiveModels.map((m): ModelDefinition => ({
-          id: m.id,
-          name: m.name,
-          provider: p.id ?? '',
-          contextWindow: m.contextWindow,
-          supportsVision: m.supportsVision,
-          supportsFiles: m.supportsFiles,
-          supportsReasoning: m.supportsReasoning,
-        }))
-      )
-    },
-    staleTime: STALE.providers,
-  })
+  const { data } = useQuery(providersModelsQuery)
   return data ?? []
 }
 

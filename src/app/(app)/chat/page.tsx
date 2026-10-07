@@ -22,9 +22,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useSession } from 'next-auth/react'
 import { useChatStore } from '@/store/chat-store'
-import { queryKeys, STALE } from '@/lib/query/keys'
-import { fetchJson } from '@/lib/query/fetcher'
-import type { ModelDefinition } from '@/lib/ai/types'
+import { providersModelsQuery } from '@/lib/query/providers'
 
 function NewChatContent() {
   const { status } = useSession()
@@ -36,32 +34,12 @@ function NewChatContent() {
   // 保证每次「开新对话」都强制卸载重建,回到空白状态。
   const newChatNonce = useChatStore((s) => s.newChatNonce)
 
-  const { data: allModels } = useSuspenseQuery<ModelDefinition[]>({
-    queryKey: queryKeys.providers(),
-    queryFn: async () => {
-      const payload = await fetchJson<
-        | Array<{ id?: string; effectiveModels: Array<Omit<ModelDefinition, 'provider'> & { provider?: string }> }>
-        | { providers: Array<{ id?: string; effectiveModels: Array<Omit<ModelDefinition, 'provider'>> }> }
-      >('/api/providers')
-      const list = Array.isArray(payload) ? payload : payload.providers ?? []
-      return list.flatMap(
-        (p) => p.effectiveModels.map(
-          (m): ModelDefinition => ({
-            id: m.id,
-            name: m.name,
-            provider: p.id ?? (m as { provider?: string }).provider ?? '',
-            contextWindow: m.contextWindow,
-            supportsVision: m.supportsVision,
-            supportsFiles: m.supportsFiles,
-            supportsReasoning: m.supportsReasoning,
-          })
-        )
-      )
-    },
-    staleTime: STALE.providers,
-  })
+  const { data: allModels } = useSuspenseQuery(providersModelsQuery)
 
-  const defaultModel = allModels[0]?.id || 'gpt-5.4-mini'
+  // 首跑默认模型优先公共池门面档(注册即用、必然发得出去);allModels[0] 是 openai
+  // 系模型,对零 Key 用户必报 config_missing。用户选过一次后由 localStorage 接管。
+  const defaultModel =
+    allModels.find((m) => m.publicPool)?.id || allModels[0]?.id || 'gpt-5.4-mini'
 
   // 跳转桥: /chat?q= 外部入口(bento AI 卡片「继续对话」等)自动发送;
   // useSearchParams 读取,ChatPanel 内部空会话触发一次并清参数

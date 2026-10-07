@@ -25,12 +25,6 @@ interface MessageListProps {
   onRegenerate?: () => void
   /** 「保存并重答」:归档该消息及其后续后以新文本重发 */
   onEditMessage?: (messageId: string, newText: string) => void | Promise<void>
-  /** 「仅保存」:就地改文本,不动后续消息、不重答 */
-  onSaveEditMessage?: (messageId: string, newText: string) => void | Promise<void>
-  /** 「只重答这条」:就地改文本并重新生成该轮回答,后续消息原位保留 */
-  onReanswerMessage?: (messageId: string, newText: string) => void | Promise<void>
-  /** 统计消息 id 之后的消息条数(编辑确认条用)。稳定引用的惰性 getter,勿传数字 */
-  getFollowingCount?: (messageId: string) => number
   /** 澄清问答:提交回答文本(通常接 ChatPanel 的 handleSend,复用排队/发送全链路) */
   onClarifySubmit?: (answersText: string) => void
   /** local_file:决策(批准/拒绝),透传给 ToolCallCard 内的 LocalFileCard */
@@ -54,6 +48,15 @@ interface MessageListProps {
   virtualized?: boolean
   /** 虚拟化的滚动容器(ChatPanel 的 messagesScrollEl,与 OutlineSidebar 同源) */
   scrollElement?: HTMLDivElement | null
+  /** 首屏分页:存在未下发的更早消息时渲染顶部"查看更早"入口(仅滚动容器内,in-flow) */
+  hasEarlier?: boolean
+  /** 更早消息剩余条数(未知时不显示数字) */
+  earlierCount?: number
+  /** 更早页拉取中:按钮换成转圈并禁用重复点击 */
+  earlierLoading?: boolean
+  /** 更早页前插后要复位的那条消息(id + 距容器顶像素 + 每次点击自增的 token) */
+  restoreAnchor?: { id: string; top: number; token: number } | null
+  onLoadEarlier?: () => void
 }
 
 export function MessageList({
@@ -63,14 +66,16 @@ export function MessageList({
   className,
   onRegenerate,
   onEditMessage,
-  onSaveEditMessage,
-  onReanswerMessage,
-  getFollowingCount,
   onClarifySubmit,
   onLocalFileDecision,
   onOpenEditor,
   virtualized,
   scrollElement,
+  hasEarlier,
+  earlierCount,
+  earlierLoading,
+  restoreAnchor,
+  onLoadEarlier,
 }: MessageListProps) {
   useRenderProbe('MessageList')
   // 键盘导航:收集每个消息的 ref,按 id 索引
@@ -225,6 +230,38 @@ export function MessageList({
     return () => registerListScrollFacade(null)
   }, [facade])
 
+  // ── 更早页前插后的位置复位 ──
+  // 只按「消息」复位,不按 scrollHeight 增量:新页在虚拟化列表里是估算高度,
+  // 增量法会把视口拽偏上千米(实测 1.5k px ≈ 几十条消息)。
+  // 先按索引把锚点拉回渲染范围,再用它渲染后的真实 rect 精修;
+  // 最多 12 帧收敛到 ±2px,超帧即停手,不跟用户抢滚动。
+  const handledAnchorTokenRef = useRef(0)
+  useEffect(() => {
+    if (!restoreAnchor || restoreAnchor.token === handledAnchorTokenRef.current) return
+    handledAnchorTokenRef.current = restoreAnchor.token
+    const el = scrollElRef.current
+    if (!el) return
+    const { id, top } = restoreAnchor
+    let frame = 0
+    const step = () => {
+      const node = el.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+      if (node) {
+        const drift = node.getBoundingClientRect().top - el.getBoundingClientRect().top - top
+        if (Math.abs(drift) <= 2 || frame >= 12) return
+        el.scrollTop += drift
+      } else {
+        const v = virtualizerRef.current
+        const idx = indexByIdRef.current.get(id)
+        if (!v || idx === undefined || frame >= 12) return
+        const got = v.getOffsetForIndex(idx, 'start')
+        if (got) v.scrollToOffset(got[0] - top, { behavior: 'auto' })
+      }
+      if (++frame >= 12) return
+      requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }, [restoreAnchor])
+
   // 跟随滚动的判定与执行已上移到 ChatPanel(那里持有滚动容器 DOM):
   // 用户向上滚动即脱离跟随、可自由回看历史,滚回底部或点"回到底部"按钮恢复跟随。
 
@@ -359,9 +396,6 @@ export function MessageList({
     onRegenerate,
     canEdit: canEditAll,
     onEdit: onEditMessage,
-    onSaveEdit: onSaveEditMessage,
-    onReanswer: onReanswerMessage,
-    getFollowingCount,
     onClarifySubmit,
     onLocalFileDecision,
     onOpenEditor,
@@ -394,6 +428,27 @@ export function MessageList({
   // (scrollMargin 已被 getTotalSize 扣除),item 的 translateY 要减回
   // scrollMargin(它已含在 measurement.start 里)。measureElement 挂在外层
   // 定位 div 上(须带 data-index),保活项同样挂着,尺寸变化实时回传。
+  // 顶部"查看更早"入口:放在滚动容器内容流里(虚拟化分支的定高轨道之前),
+  // 滚上去即消失;拉取中显示转圈并禁点,防止重复请求。
+  const earlierHeader = hasEarlier ? (
+    <div className="max-w-2xl mx-auto px-4 pt-3 pb-1 flex justify-center">
+      {earlierLoading ? (
+        <span className="flex items-center gap-2 py-1.5 text-[11px] text-content-muted">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-content-muted border-t-transparent" />
+          正在加载更早消息…
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onLoadEarlier}
+          className="rounded-full border border-line bg-surface/70 px-4 py-1.5 text-[11px] text-content-secondary transition-colors hover:bg-surface-subtle hover:text-content-primary"
+        >
+          {earlierCount && earlierCount > 0 ? `查看更早消息(还有 ${earlierCount} 条)` : '查看更早消息'}
+        </button>
+      )}
+    </div>
+  ) : null
+
   if (virtualized && scrollElement) {
     const items = virtualizer.getVirtualItems()
     const measurements = virtualizer.measurementsCache
@@ -434,6 +489,7 @@ export function MessageList({
 
     return (
       <div className={cn('w-full', className)}>
+        {earlierHeader}
         <div className="max-w-2xl mx-auto overflow-x-hidden">
           <div
             style={{ height: virtualizer.getTotalSize(), minHeight: '100%', position: 'relative' }}
@@ -469,8 +525,9 @@ export function MessageList({
   }
 
   return (
-    <div className={cn('w-full min-h-full overflow-x-hidden', className)}>
-      <div className="max-w-2xl mx-auto overflow-x-hidden">
+    <div className={cn('w-full min-h-full overflow-x-hidden flex flex-col', className)}>
+      {earlierHeader}
+      <div className="max-w-2xl mx-auto overflow-x-hidden w-full">
         {messages.map((message, index) => (
           <MessageBubble key={message.id} {...bubbleProps(message, index)} />
         ))}

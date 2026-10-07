@@ -5,13 +5,28 @@ import { z } from 'zod'
 import { deleteReferencedFiles } from '@/lib/uploads'
 import { getMaskById } from '@/lib/ai/mask-resolve'
 import { ephemeralScope } from '@/lib/ephemeral'
+import {
+  alignStartToRoundHead,
+  formatMessageRows,
+  type MessageRow,
+} from '@/lib/conversation-message-format'
+
+/** 首屏尾部窗口条数:长会话不再全量下发,更早部分由前端"查看更早消息"续载 */
+const MESSAGE_TAIL = 80
+/** 轮对齐截断的缓冲行数:窗口头部可能落在半轮中间,多取几条供前端回退到整轮起点 */
+const TRIM_BUFFER = 40
 
 /**
  * GET /api/conversations/[id]
  *
- * 返回单个会话的完整数据,包括消息列表。
+ * 返回单个会话的数据,包括消息列表。
  * 设计目的:让 /chat/c/[id] 可以是 Client Component,
  * 这样 Tauri 桌面端静态导出时,该页不再依赖 Server runtime。
+ *
+ * 长会话首屏分页(单聊):只下发最近 MESSAGE_TAIL 条(轮对齐:从一条 user 起头),
+ * 更早的消息带 earlierCount/earlierCursorId 返回,前端经 GET .../messages?before= 续载。
+ * 对比模式保持全量——泳道按 model 过滤消息,尾部窗口会让各泳道的轮数不对齐,
+ * 且对比会话轮数天然少(一轮多模型同发),全量拉取代价可控。
  *
  * 返回结构:
  * {
@@ -21,7 +36,11 @@ import { ephemeralScope } from '@/lib/ephemeral'
  *     id, role, content, reasoning?, model?, groupId?,
  *     attachments: Attachment[],   // 已 JSON.parse
  *     promptTokens?, completionTokens?, createdAt
- *   }>
+ *   }>,
+ *   totalMessageCount: number,     // 未归档消息总数
+ *   earlierCount: number,          // 未下发(可续载)的消息数
+ *   hasEarlier: boolean,
+ *   earlierCursorId: string | null, // 前端"查看更早"的游标 = 已下发最早一条本身
  * }
  */
 export async function GET(
@@ -56,12 +75,16 @@ export async function GET(
       userId: session.user.id,
       ...scope,
     },
-    include: {
-      messages: {
-        // C 分支轻量版: 归档消息不在正常列表中展示(仅回看端点可见)
-        where: { archived: false },
-        orderBy: { createdAt: 'asc' },
-      },
+    select: {
+      id: true,
+      title: true,
+      model: true,
+      mode: true,
+      styleOffset: true,
+      stylePreset: true,
+      replyLength: true,
+      maskId: true,
+      compareModels: true,
     },
   })
 
@@ -69,43 +92,59 @@ export async function GET(
     return NextResponse.json({ error: '内容不存在或已被删除' }, { status: 404 })
   }
 
-  // 解析 JSON 字段供前端直接消费,避免前端重复处理
-  const messages = conversation.messages.map((m) => {
-    let attachments: unknown[] = []
-    if (m.attachments) {
-      try {
-        const parsed = JSON.parse(m.attachments)
-        if (Array.isArray(parsed)) attachments = parsed
-      } catch {
-        // 损坏 JSON 返回空数组,前端兜底处理
-      }
-    }
-    let metadata: unknown = null
-    if (m.metadata) {
-      try {
-        const parsed = JSON.parse(m.metadata)
-        if (parsed && typeof parsed === 'object') metadata = parsed
-      } catch {
-        // 损坏 JSON 视为无 metadata,前端按普通 system 文本渲染
-      }
-    }
-    return {
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      reasoning: m.reasoning,
-      model: m.model,
-      groupId: m.groupId,
-      streaming: m.streaming,
-      attachments,
-      // 结构化 UI 提示:{kind, sourceId, sourceTitle, ...}
-      // 仅由后端写入;前端按 kind 分发渲染分支
-      metadata,
-      promptTokens: m.promptTokens,
-      completionTokens: m.completionTokens,
-      createdAt: m.createdAt,
-    }
-  })
+  const isCompare = (conversation.mode ?? 'single') === 'compare'
+
+  // C 分支轻量版: 归档消息不在正常列表中展示(仅回看端点可见)
+  const activeWhere = { conversationId: id, archived: false }
+  const totalMessageCount = await prisma.message.count({ where: activeWhere })
+
+  const messageSelect = {
+    id: true,
+    role: true,
+    content: true,
+    reasoning: true,
+    model: true,
+    groupId: true,
+    streaming: true,
+    attachments: true,
+    metadata: true,
+    promptTokens: true,
+    completionTokens: true,
+    createdAt: true,
+  } satisfies Record<keyof MessageRow, boolean>
+
+  // 单聊尾部窗口:倒序取最近 MESSAGE_TAIL+TRIM_BUFFER 行再翻回正序,
+  // 起点做轮对齐;对比模式全量下发(见顶部注释)。
+  // 排序一律带 (createdAt, id) 元组:同批写入的多条消息共享同一时间戳,
+  // 单列排序的并列次序不确定,翻页游标的元组比较会算错边界。
+  let rows: MessageRow[]
+  let windowStart = 0
+  if (isCompare || totalMessageCount <= MESSAGE_TAIL) {
+    rows = await prisma.message.findMany({
+      where: activeWhere,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: messageSelect,
+    })
+  } else {
+    const tail = await prisma.message.findMany({
+      where: activeWhere,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: MESSAGE_TAIL + TRIM_BUFFER,
+      select: messageSelect,
+    })
+    tail.reverse()
+    windowStart = alignStartToRoundHead(tail, Math.max(0, tail.length - MESSAGE_TAIL))
+    rows = tail.slice(windowStart)
+  }
+
+  // 游标 = 已下发窗口的最早一条**本身**;翻页端点只取严格早于它的行,
+  // 于是「窗口 + 逐页」恰好覆盖全量,不漏不重。
+  // 窗口已含全部未归档行(短会话/对比/对齐回退吃满了缓冲)时不暴露更早入口。
+  const hasEarlier = !isCompare && totalMessageCount > rows.length
+  const earlierCursorId = hasEarlier ? rows[0]?.id ?? null : null
+  const earlierCount = Math.max(0, totalMessageCount - rows.length)
+
+  const messages = formatMessageRows(rows)
 
   let compareModels: string[] = []
   if (conversation.compareModels) {
@@ -136,6 +175,10 @@ export async function GET(
     compareModels,
     latestVote: latestVote ?? null,
     messages,
+    totalMessageCount,
+    earlierCount,
+    hasEarlier,
+    earlierCursorId,
   })
 }
 

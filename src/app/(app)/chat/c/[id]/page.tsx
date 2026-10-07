@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, Suspense } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
@@ -11,9 +11,9 @@ import { ClientOnly } from '@/components/ClientOnly'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import { queryKeys, STALE } from '@/lib/query/keys'
+import { providersModelsQuery } from '@/lib/query/providers'
 import { fetchJson, AuthorizationError, NotFoundError, type FetchJsonOptions } from '@/lib/query/fetcher'
 import type { Attachment } from '@/lib/attachment-types'
-import type { ModelDefinition } from '@/lib/ai/types'
 
 // ── Types ────────────────────────────────────────────────────────
 interface ApiMessage {
@@ -51,21 +51,11 @@ interface ApiConversation {
   /** E 对比模式投票: 最新一轮投票(对比模式回显高亮用) */
   latestVote?: { groupId: string; votedModel: string } | null
   messages: ApiMessage[]
-}
-
-interface ApiProviderModel {
-  id: string
-  name: string
-  contextWindow: number
-  supportsVision: boolean
-  supportsFiles: boolean
-  supportsReasoning: boolean
-}
-
-interface ApiProvider {
-  id: string
-  name: string
-  effectiveModels: ApiProviderModel[]
+  /** 首屏分页(单聊):未归档消息总数与更早续载游标;对比模式恒全量下发 */
+  totalMessageCount?: number
+  earlierCount?: number
+  hasEarlier?: boolean
+  earlierCursorId?: string | null
 }
 
 // ── QueryFn ──────────────────────────────────────────────────────
@@ -73,24 +63,13 @@ async function fetchConversation(id: string, opts?: FetchJsonOptions): Promise<A
   return fetchJson<ApiConversation>(`/api/conversations/${id}`, opts)
 }
 
-async function fetchProviders(): Promise<ModelDefinition[]> {
-  const payload = await fetchJson<ApiProvider[] | { providers: ApiProvider[] }>('/api/providers')
-  const list = Array.isArray(payload)
-    ? payload
-    : payload.providers ?? []
-  return list.flatMap((p) =>
-    p.effectiveModels.map(
-      (m): ModelDefinition => ({
-        id: m.id,
-        name: m.name,
-        provider: p.id,
-        contextWindow: m.contextWindow,
-        supportsVision: m.supportsVision,
-        supportsFiles: m.supportsFiles,
-        supportsReasoning: m.supportsReasoning,
-      })
-    )
-  )
+/** 更早页(游标之前最近 60 行;游标是已下发最早一条,服务端严格早于它取,可见过滤在本页做) */
+async function fetchEarlierPage(
+  id: string,
+  before: string,
+  opts?: FetchJsonOptions
+): Promise<{ messages: ApiMessage[]; hasEarlier: boolean; earlierCursorId: string | null }> {
+  return fetchJson(`/api/conversations/${id}/messages?before=${before}`, opts)
 }
 
 // ── UIMessage adapter ────────────────────────────────────────────
@@ -168,11 +147,7 @@ function ConversationClientContent() {
 
   // 模型列表 — Suspense 版本,切会话瞬间从 cache 命中,无网络等待。
   // TopBar 在 hover / 点击其他 tab 时已经把这一项预热。
-  const { data: allModels } = useSuspenseQuery<ModelDefinition[]>({
-    queryKey: queryKeys.providers(),
-    queryFn: () => fetchProviders(),
-    staleTime: STALE.providers,
-  })
+  const { data: allModels } = useSuspenseQuery(providersModelsQuery)
 
   // 鉴权:未登录跳 /login
   useEffect(() => {
@@ -197,6 +172,48 @@ function ConversationClientContent() {
 
   const conversation = conversationQuery.data
 
+  // ── 首屏分页:更早消息续载(仅单聊;对比模式端点恒全量下发) ──
+  // 已加载的更早页缓存在组件本地(不进 useQuery 详情缓存,避免缓存膨胀),
+  // 与最新窗口详情拼接后交给 initialMessages;ChatPanel remount(key=id)时自然清空。
+  const [accumulated, setAccumulated] = useState<ApiMessage[]>([])
+  const accumulatedRef = useRef<ApiMessage[]>([])
+  accumulatedRef.current = accumulated
+  const [accumulatedCursor, setAccumulatedCursor] = useState<string | null | undefined>(undefined)
+  const cursorRef = useRef<string | null | undefined>(undefined)
+  cursorRef.current = accumulatedCursor
+
+  useEffect(() => {
+    setAccumulated([])
+    accumulatedRef.current = []
+    setAccumulatedCursor(undefined)
+  }, [id])
+
+  useEffect(() => {
+    if (!conversation) return
+    // 只在未初始化(或切换会话重置后)播种;后台 refetch 不覆盖已推进的游标
+    setAccumulatedCursor((prev) => (prev === undefined ? conversation.earlierCursorId ?? null : prev))
+  }, [conversation])
+
+  const loadEarlier = useCallback(async (): Promise<UIMessage[]> => {
+    const convId = conversation?.id
+    const cursor = cursorRef.current
+    if (!convId || !cursor) return []
+    const page = await fetchEarlierPage(convId, cursor)
+    const raw = page.messages
+    const mode = conversation?.mode ?? 'single'
+    // 可见过滤与 initialState 同一口径(单聊:非当前模型的其他 model 回复不下发)
+    const visible =
+      mode === 'compare'
+        ? raw
+        : raw.filter((m) => m.role === 'user' || m.groupId == null || m.model === conversation?.model)
+    const ui = visible.map(toUIMessage)
+    // ref 即时镜像:同帧连点两次不至于重复下发同一页
+    accumulatedRef.current = [...raw, ...accumulatedRef.current]
+    setAccumulated(accumulatedRef.current)
+    setAccumulatedCursor(page.hasEarlier ? page.earlierCursorId : null)
+    return ui
+  }, [conversation])
+
   // 鉴权:未登录跳 /login
 
   // 把当前会话元数据同步到 chat-store,让 TopBar 标题、Sidebar 高亮等保持一致
@@ -216,7 +233,7 @@ function ConversationClientContent() {
     }
   }, [conversation, setCurrentConversationId, setConversationTitle, setConversationStylePreset])
 
-  // 派生: 单聊/对比模式的消息分发
+  // 派生: 单聊/对比模式的消息分发(更早页拼在最新窗口前,首屏一次给全已加载部分)
   const initialState = useMemo(() => {
     if (!conversation) {
       return {
@@ -225,25 +242,24 @@ function ConversationClientContent() {
       }
     }
     const mode = conversation.mode ?? 'single'
-    const uiMessages = conversation.messages.map(toUIMessage)
+    const rawAll = [...accumulated, ...conversation.messages]
+    const uiMessages = rawAll.map(toUIMessage)
     const visibleMessages =
       mode === 'compare'
         ? uiMessages
         : uiMessages.filter((_, i) => {
-            const m = conversation.messages[i]
+            const m = rawAll[i]
             return m.role === 'user' || m.groupId == null || m.model === conversation.model
           })
 
     if (mode === 'compare' && conversation.compareModels.length >= 2) {
       const lanes = conversation.compareModels.map((modelId) =>
-        conversation.messages
-          .filter((m) => m.role === 'user' || m.model === modelId)
-          .map(toUIMessage)
+        rawAll.filter((m) => m.role === 'user' || m.model === modelId).map(toUIMessage)
       )
       return { initialMessages: visibleMessages, laneInitialMessages: lanes }
     }
     return { initialMessages: visibleMessages, laneInitialMessages: undefined }
-  }, [conversation])
+  }, [conversation, accumulated])
 
   // ── 渲染分支 ─────────────────────────────────────────────────
   // 1) 鉴权中(query 尚未允许启动) → 保留 loading 骨架
@@ -291,6 +307,15 @@ function ConversationClientContent() {
     return null
   }
 
+  // 更早入口:端点只报首屏口径(hasEarlier/游标),续载后由游标是否耗尽决定收摊
+  const serverEarlier = conversation.hasEarlier === true && !!conversation.earlierCursorId
+  const showEarlierEntry =
+    conversation.mode !== 'compare' && (accumulatedCursor === undefined ? serverEarlier : !!accumulatedCursor)
+  const remainingEarlierCount = Math.max(
+    0,
+    (conversation.earlierCount ?? 0) - accumulated.length
+  )
+
   return (
     // key={conversation.id} 让 React 在切换会话时干净地卸载/重建 ChatPanel,
     // 避免 useChat 的 messages 流污染到上一个会话。同时配合 useQuery 缓存,
@@ -300,6 +325,8 @@ function ConversationClientContent() {
       conversationId={conversation.id}
       conversationTitle={conversation.title}
       initialMessages={initialState.initialMessages}
+      earlierCount={remainingEarlierCount}
+      onLoadEarlier={showEarlierEntry ? loadEarlier : undefined}
       initialModel={conversation.model}
       allModels={allModels}
       mode={conversation.mode}

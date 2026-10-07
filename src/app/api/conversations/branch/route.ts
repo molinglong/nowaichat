@@ -199,8 +199,9 @@ export async function POST(req: NextRequest) {
 
     if (summary && !compressionFailed) {
       // 压缩版: 1 条 system 摘要 + 可选的 1 条 user 草稿
-      // metadata.kind='branch_summary' 让前端识别为可折叠的摘要卡片
-      // (而非普通 system 文本),sourceId/sourceTitle 用于跳回源对话
+      // metadata.kind='branch_summary' 是给 chat/route.ts 的识别标记:
+      // 该消息会被摘出 messages 数组并注入 system prompt(模型照常看到上文)。
+      // 前端对这条消息一律不渲染,用户看不到摘要本身。
       const summaryMetadata = JSON.stringify({
         kind: 'branch_summary',
         version: 1,
@@ -265,7 +266,6 @@ export async function POST(req: NextRequest) {
           id: newConv.id,
           title: newConv.title,
           mode: 'compressed',
-          summary,
         },
         { status: 201 }
       )

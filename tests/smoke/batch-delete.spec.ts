@@ -4,9 +4,8 @@ import { FULLTESTER } from "./helpers"
 /**
  * 批量删除会话冒烟(复用 setup 生成的 admin 会话):
  *  1) UI 多选链路:批量管理 → 勾选 → 自定义确认弹窗 → 列表即时移除 + toast
- *  2) 「全选」只验证勾选态,不点删除 —— 全选会连带选中 admin 的真实历史会话
- *  3) 归属校验:他人会话 id 混入批量请求只被跳过,不会被删;整批无一条属于本人 → 400/404
- *  4) 入参护栏:空数组与超过单次上限 200 条都拒绝
+ *  2) 归属校验:他人会话 id 混入批量请求只被跳过,不会被删;整批无一条属于本人 → 400/404
+ *  3) 入参护栏:空数组与超过单次上限 200 条都拒绝
  * 未覆盖:级联清理磁盘附件 —— 造一条带附件消息需要打真实上游,冒烟不花这个成本。
  * 行定位一律非精确匹配:普通态的行是 <a>,无障碍名会把行内「重命名/删除对话」按钮的 aria-label 也算进去。
  * 用例自建会话(标题含 MARK),结束兜底清理。
@@ -115,21 +114,6 @@ test("取消确认弹窗不删除;确认后再次进入模式勾选态已清空"
   await expect(page.getByRole("button", { name: "批量管理对话" })).toBeVisible()
   await page.getByRole("button", { name: "批量管理对话" }).click()
   await expect(page.getByRole("button", { name: "删除 0 个对话" })).toBeDisabled()
-})
-
-test("全选把已加载行置为选中,取消全选复原(不触发删除)", async ({ page }) => {
-  await createConversations(page, [21, 22])
-  await gotoWithSidebar(page)
-
-  await page.getByRole("button", { name: "批量管理对话" }).click()
-  const row21 = page.getByRole("button", { name: title(21) })
-
-  await expect(row21).toHaveAttribute("aria-pressed", "false")
-  await page.getByRole("button", { name: /全选/ }).click()
-  await expect(row21).toHaveAttribute("aria-pressed", "true")
-
-  await page.getByRole("button", { name: /取消全选/ }).click()
-  await expect(row21).toHaveAttribute("aria-pressed", "false")
 })
 
 test("单条删除也走自定义弹窗(替代原生 window.confirm)", async ({ page }) => {

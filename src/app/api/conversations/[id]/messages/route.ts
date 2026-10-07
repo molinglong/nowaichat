@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { ephemeralScope } from "@/lib/ephemeral"
+import { formatMessageRows } from "@/lib/conversation-message-format"
+
+/** 更早翻页一次下发的最大行数 */
+const EARLIER_PAGE_SIZE = 60
 
 export async function GET(
   req: NextRequest,
@@ -26,6 +30,60 @@ export async function GET(
 
   if (!conversation) {
     return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
+  }
+
+  // 更早翻页(首屏消息分页化的续载):?before=<earlierCursorId>
+  // 口径:游标 = **已下发的最早一条本身**,本次下发严格早于它的那一批。
+  // 严格比较用 (createdAt, id) 元组而非单列 —— 同批写入的消息共享同一 createdAt,
+  // 只比时间会把它们整批漏掉或重复下发;可见过滤(非当前模型的其他 model 回复)
+  // 留在前端 page 里做,与首屏同一口径,服务端只保证"每行恰好下发一次"。
+  const before = searchParams.get("before")
+  if (before) {
+    const beforeRow = await prisma.message.findFirst({
+      where: { id: before, conversationId: id },
+      select: { createdAt: true },
+    })
+    if (!beforeRow) {
+      return NextResponse.json({ error: "内容不存在或已被删除" }, { status: 404 })
+    }
+    const fetched = await prisma.message.findMany({
+      where: {
+        conversationId: id,
+        archived: false,
+        OR: [
+          { createdAt: { lt: beforeRow.createdAt } },
+          { createdAt: beforeRow.createdAt, id: { lt: before } },
+        ],
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: EARLIER_PAGE_SIZE + 1,
+      select: {
+        id: true,
+        role: true,
+        content: true,
+        attachments: true,
+        reasoning: true,
+        metadata: true,
+        model: true,
+        groupId: true,
+        streaming: true,
+        promptTokens: true,
+        completionTokens: true,
+        createdAt: true,
+      },
+    })
+    // 取回来的顺序是"新→旧";多取的那一行是**最旧**的一条,只用来判定"更早还有剩余",
+    // 不下发 —— 若反过来先转正序再切头部,丢的就是最新那一行,它会永远消失在页缝里。
+    const hasRawMore = fetched.length > EARLIER_PAGE_SIZE
+    const pageRows = fetched.slice(0, hasRawMore ? EARLIER_PAGE_SIZE : fetched.length)
+    pageRows.reverse()
+    // 游标 = 本页最早一条;空页(游标行即全库最早)时收摊
+    const earlierCursorId = pageRows[0]?.id ?? null
+    return NextResponse.json({
+      messages: formatMessageRows(pageRows),
+      hasEarlier: hasRawMore && !!earlierCursorId,
+      earlierCursorId,
+    })
   }
 
   const messages = await prisma.message.findMany({

@@ -8,7 +8,7 @@ import { monitor } from '@/lib/monitor'
 /**
  * 临时聊天隔离区管理端点(仅正常模式可用,临时模式 403)。
  *
- * GET    /api/ephemeral          列出隔离区对话(设置→账号信息 临时聊天专区)
+ * GET    /api/ephemeral          列出隔离区对话(设置→用户中心 临时聊天专区)
  * GET    /api/ephemeral?id=      查看单条对话的消息预览(同一专区「查看」)
  * POST   /api/ephemeral          { action: 'restore' | 'delete', id }
  *        - restore: 转正(清 isEphemeral 标记,回到正常历史列表)

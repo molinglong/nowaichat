@@ -4,8 +4,8 @@ import { test, expect, type Page } from "@playwright/test"
 /**
  * 「编辑已发送消息」冒烟(复用 setup 生成的 admin 会话):
  *  1) 失焦不提交:点消息区其他位置后仍停留编辑态,不归档、不重答
- *  2) 「仅保存」就地改文本:等长替换也即时刷新,不动后续消息、不触发重答,服务端落库
- *  3) 「保存并重答」:确认条提示归档条数,提交后旧链归档、新消息重发,可回看历史版本
+ *  2) ✕ 取消:复原气泡,不归档、不重答
+ *  3) 「保存并重答」(编辑卡唯一动作):提交后旧链归档、新消息重发,可回看历史版本(卡内无警示行)
  *  4) 带附件消息重发保留附件(此前会静默丢图)
  * 依赖 .env 已配置的 DeepSeek Key;用例自建会话,结束即删(正文含 MARK,中断也能兜底清理)。
  */
@@ -96,7 +96,7 @@ function parseMeta(raw: unknown): Record<string, unknown> {
   }
 }
 
-test("失焦不提交 / 仅保存 / 保存并重答(归档+回看)", async ({ page }) => {
+test("失焦不提交 / ✕ 取消 / 保存并重答(归档+回看)", async ({ page }) => {
   test.setTimeout(300_000)
   await cleanupLeaks(page)
   await gotoFreshChat(page)
@@ -105,45 +105,40 @@ test("失焦不提交 / 仅保存 / 保存并重答(归档+回看)", async ({ pa
   await sendAndWaitReply(page, v1)
   const convId = await convIdFromUrl(page)
 
+  // 主钮可访问名含钮面上的 ⏎ 快捷键提示,统一用正则匹配
+  const resendBtn = () => page.getByRole("button", { name: /保存并重答/ })
+
   try {
-    // 进入编辑态
+    // 进入编辑态:编辑卡出现,无警示行(定案已删,归档影响面只在主钮 title 中说明)
     await page.getByRole("button", { name: "编辑", exact: true }).first().click()
     const editBox = page.getByRole("textbox", { name: "编辑消息内容" })
     await expect(editBox).toBeVisible()
     await expect(editBox).toHaveValue(v1)
-    await expect(page.getByRole("button", { name: "仅保存" })).toBeVisible()
-    await expect(page.getByRole("button", { name: "保存并重答" })).toBeVisible()
-    await expect(page.getByText("保存并重答将归档后续 1 条")).toBeVisible()
+    await expect(resendBtn()).toBeVisible()
+    await expect(page.getByText("提交后将归档")).toHaveCount(0)
 
-    // ① 失焦(点输入框):仍停留编辑态。编辑态下用户气泡被编辑框整体替换,
+    // ① 失焦(点输入框):仍停留编辑态。编辑态下用户气泡被编辑卡整体替换,
     //    [data-message-id] 只剩 assistant 一条 —— 数量不变即未提交、未重答
     await page.getByPlaceholder("输入消息...").click()
     await expect(editBox).toBeVisible()
-    await expect(page.getByRole("button", { name: "保存并重答" })).toBeVisible()
+    await expect(resendBtn()).toBeVisible()
     await expect(page.locator("[data-message-id]")).toHaveCount(1)
 
-    // ② 仅保存:等长替换(一→二)必须就地刷新 —— 气泡比较器只看长度指纹,
-    //    等长文本若无 metadata 引用变化会静默不重渲
+    // ② ✕ 取消:编辑卡收起,气泡原文复原,不归档不重答
     const v2 = "编辑冒烟:第二版,请只回复 ok"
-    expect(v2.length).toBe(v1.length)
     await editBox.fill(v2)
-    await page.getByRole("button", { name: "仅保存" }).click()
-    await expect(page.getByText("已编辑", { exact: true })).toBeVisible()
+    await page.getByRole("button", { name: "取消编辑" }).click()
     await expect(editBox).toBeHidden()
-    await expect(copyButtons(page)).toHaveCount(2) // 未重答
-    await expect(page.locator("[data-message-id]").first()).toContainText(v2)
-
-    const afterSave = await fetchMessages(page, convId)
-    const savedUser = afterSave.messages.find((m) => m.role === "user")
-    expect(savedUser?.content).toBe(v2) // 临时 id 经 内容+时间窗 回退定位后已落库
-    expect(parseMeta(savedUser?.metadata).editedAt).toBeTruthy()
+    await expect(page.locator("[data-message-id]").first()).toContainText(v1)
+    const afterCancel = await fetchMessages(page, convId)
+    expect(afterCancel.messages.find((m) => m.role === "user")?.content).toBe(v1) // 取消未落库
 
     // ③ 保存并重答:归档旧链 → 重发 → 新回复;历史版本可回看
     await page.getByRole("button", { name: "编辑", exact: true }).first().click()
     const v3 = "编辑冒烟:第三版,请只回复 ok"
     await page.getByRole("textbox", { name: "编辑消息内容" }).fill(v3)
-    await expect(page.getByText("保存并重答将归档后续 1 条")).toBeVisible()
-    await page.getByRole("button", { name: "保存并重答" }).click()
+    await expect(page.getByText("提交后将归档")).toHaveCount(0)
+    await resendBtn().click()
     await waitReplyDone(page)
 
     const afterResend = await fetchMessages(page, convId)
@@ -158,11 +153,12 @@ test("失焦不提交 / 仅保存 / 保存并重答(归档+回看)", async ({ pa
     )
     expect(archivedRes.ok()).toBeTruthy()
     const archived = (await archivedRes.json()) as { messages: Array<{ content: string }> }
-    expect(archived.messages.map((m) => m.content)).toContain(v2)
+    expect(archived.messages.map((m) => m.content)).toContain(v1)
 
-    // UI 回看入口:展开历史版本能看到旧文本
+    // UI 回看入口:展开历史版本能看到旧文本。v1 同时是会话标题(header 也有同名文本),
+    // 断言收窄到消息区,避免 strict mode 歧义
     await page.getByRole("button", { name: /查看历史版本/ }).click()
-    await expect(page.getByText(v2)).toBeVisible()
+    await expect(page.getByRole("main").getByText(v1)).toBeVisible()
   } finally {
     await page.request.delete(`/api/conversations/${convId}`)
   }
@@ -197,7 +193,7 @@ test("带附件消息重发保留附件", async ({ page }) => {
     await page.getByRole("button", { name: "编辑", exact: true }).first().click()
     const v2 = "编辑冒烟:带附件改说法,请只回复 ok"
     await page.getByRole("textbox", { name: "编辑消息内容" }).fill(v2)
-    await page.getByRole("button", { name: "保存并重答" }).click()
+    await page.getByRole("button", { name: /保存并重答/ }).click()
     await waitReplyDone(page)
     await expect(page.locator("[data-message-id]").first()).toContainText(v2)
 

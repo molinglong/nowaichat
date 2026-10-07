@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo, KeyboardEvent, memo, type CSSProperties } from 'react'
 import { useRenderProbe } from '@/lib/client-diagnostics'
-import { useRouter } from 'next/navigation'
 import {
   Bot,
   Copy,
@@ -15,12 +14,11 @@ import {
   FileType,
   Code2,
   Reply,
-  ExternalLink,
   BookmarkPlus,
   CheckCircle2,
-  Layers,
   History,
   Loader2,
+  X,
 } from 'lucide-react'
 import { cn, splitReasoningTail } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
@@ -110,145 +108,6 @@ export type UIMessageWithAttachments = UIMessage & {
   metadata?: MessageMetadata | null
 }
 
-/**
- * 上下文摘要卡片 —— 在「在新对话继续」触发的分支对话顶部展示压缩后的对话摘要。
- *
- * 设计目标:
- * - 与普通 system 文本消息视觉上明确区分(卡片样式 + 顶部色条)
- * - 默认折叠,只露头标题栏;展开后显示 Markdown 渲染的摘要正文
- * - 头部显示来源对话标题 + 跳回按钮,方便用户回查原文
- * - 复制按钮一键复制 Markdown 原文
- *
- * 只在 role==='system' 且 metadata.kind==='branch_summary' 时使用,
- * 不会乱触发 —— system 消息只有我们的后端会写。
- */
-interface SummaryCardProps {
-  /** 摘要 Markdown 原文(不含首行 ## 标题,首行由卡片头部替代) */
-  content: string
-  /** 后端写入的 metadata */
-  meta: Extract<MessageMetadata, { kind: 'branch_summary' }>
-}
-
-function SummaryCardInner({ content, meta }: SummaryCardProps) {
-  const router = useRouter()
-  // 摘要卡片默认展开,让用户一进来就能看到上下文;
-  // 折叠交给用户主动操作(内容多时省屏幕)
-  const [expanded, setExpanded] = useState(true)
-  const [copied, setCopied] = useState(false)
-  // 摘要卡片只在分支对话顶部出现,直接读当前会话 id 判断"跳回"是否要禁用
-  const currentConversationId = useChatStore((s) => s.currentConversationId)
-
-  // 来源对话 id 与当前 id 相同(用户自己从源对话跳进去看)
-  // → 「跳回源对话」按钮禁用,避免无意义跳转
-  const sameAsSource = !currentConversationId || currentConversationId === meta.sourceId
-
-  const handleJumpBack = useCallback(() => {
-    if (!meta.sourceId || sameAsSource) return
-    router.push(`/chat/c/${meta.sourceId}`)
-  }, [meta.sourceId, sameAsSource, router])
-
-  const handleCopy = useCallback(() => {
-    if (!navigator.clipboard?.writeText) {
-      toast.error('当前浏览器不支持自动复制', { title: '复制失败' })
-      return
-    }
-    navigator.clipboard.writeText(content)
-      .then(() => {
-        setCopied(true)
-        toast.success('已复制摘要 Markdown', { title: '复制' })
-        setTimeout(() => setCopied(false), 2000)
-      })
-      .catch((err) => {
-        console.error('[SummaryCard] copy failed:', err)
-        toast.error('复制失败', { title: '复制' })
-      })
-  }, [content])
-
-  return (
-    <div
-      className={cn(
-        'rounded-xl border border-line/70 bg-surface-subtle/60 overflow-hidden',
-        'transition-colors hover:border-line'
-      )}
-      data-summary-card="true"
-    >
-      {/* 头部:左侧图标 + 标题 + 来源,右侧操作按钮组 */}
-      <div
-        className={cn(
-          'flex items-center justify-between gap-2 px-3.5 py-2',
-          'border-b border-line/60 bg-gradient-to-r from-accent/[0.06] via-accent/[0.03] to-transparent',
-          // 折叠时去掉下边框,让卡片视觉上更紧凑
-          !expanded && 'border-b-0'
-        )}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Layers className="w-3.5 h-3.5 text-accent shrink-0" />
-          <span className="text-xs font-semibold text-content-primary tracking-wide">
-            上下文摘要
-          </span>
-          {meta.sourceTitle && (
-            <>
-              <span className="text-content-muted/50 text-xs shrink-0">·</span>
-              <button
-                type="button"
-                onClick={handleJumpBack}
-                disabled={sameAsSource}
-                title={sameAsSource ? '当前已在源对话' : `跳回源对话:${meta.sourceTitle}`}
-                className={cn(
-                  'group inline-flex items-center gap-1 min-w-0 text-xs text-content-secondary',
-                  'hover:text-accent transition-colors',
-                  sameAsSource && 'opacity-60 cursor-default hover:text-content-secondary'
-                )}
-              >
-                <span className="truncate max-w-[200px]">来自《{meta.sourceTitle}》</span>
-                {!sameAsSource && (
-                  <ExternalLink className="w-3 h-3 shrink-0 opacity-60 group-hover:opacity-100" />
-                )}
-              </button>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
-            title="复制 Markdown"
-            aria-label="复制摘要"
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-green-500" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
-            title={expanded ? '折叠' : '展开'}
-            aria-label={expanded ? '折叠摘要' : '展开摘要'}
-            aria-expanded={expanded}
-          >
-            <ChevronDown
-              className={cn('w-3.5 h-3.5 transition-transform', !expanded && '-rotate-90')}
-            />
-          </button>
-        </div>
-      </div>
-
-      {/* 折叠态:不渲染内容,节省屏幕 */}
-      {expanded && (
-        <div className="px-3.5 py-3 text-xs leading-relaxed">
-          <MarkdownRenderer content={content} messageId="summary-card" rich />
-        </div>
-      )}
-    </div>
-  )
-}
-
-const SummaryCard = memo(SummaryCardInner)
-
 /** 格式化完整日期时间:YYYY-MM-DD HH:MM */
 function formatFullDateTime(date: Date): string {
   const y = date.getFullYear()
@@ -290,15 +149,6 @@ interface MessageBubbleProps {
   canEdit?: boolean
   /** 「保存并重答」:归档此消息及其后续,然后以新文本重发(异步实现,失败应抛错) */
   onEdit?: (messageId: string, newText: string) => void | Promise<void>
-  /** 「仅保存」:就地更新文本,不动后续消息、不重答(未提供则不显示该按钮) */
-  onSaveEdit?: (messageId: string, newText: string) => void | Promise<void>
-  /** 「只重答这条」:就地更新文本并重新生成该轮回答,后续消息原位保留(未提供则不显示该按钮) */
-  onReanswer?: (messageId: string, newText: string) => void | Promise<void>
-  /**
-   * 统计该消息之后还有多少条消息(编辑确认条提示用)。
-   * 必须是稳定引用的惰性 getter —— 若改传数字,每次追加消息都会打穿全列表 memo
-   */
-  getFollowingCount?: (messageId: string) => number
   /** 键盘导航选中状态 */
   isFocused?: boolean
   /** 外层 ref callback，用于滚动到视野 */
@@ -334,9 +184,6 @@ function MessageBubbleInner({
   onRegenerate,
   canEdit,
   onEdit,
-  onSaveEdit,
-  onReanswer,
-  getFollowingCount,
   isFocused,
   wrapperRef,
   prevUserContent,
@@ -351,10 +198,10 @@ function MessageBubbleInner({
   const isAssistant = message.role === 'assistant'
   const isSystem = message.role === 'system'
 
-  // 结构化 UI 提示: system + metadata.kind === 'branch_summary' 走摘要卡片分支
-  // 仅后端会写 system 消息,所以这个分支只在新创建的分支对话顶部触发
+  // 结构化 UI 提示: system + metadata.kind === 'branch_summary' 是「在新对话继续」
+  // 写入的上文载体,仅后端会写 system 消息。这类消息只喂模型,前端不展示。
   const messageMeta = getMessageMetadata(message)
-  const isSummaryCard =
+  const isBranchSummary =
     isSystem && messageMeta?.kind === 'branch_summary' && !!messageMeta.sourceId
 
   // C 分支轻量版: 编辑产生的新消息带 editedFrom(指向被编辑消息),
@@ -365,7 +212,7 @@ function MessageBubbleInner({
     typeof (messageMeta as { editedFrom?: unknown }).editedFrom === 'string'
       ? ((messageMeta as { editedFrom?: unknown }).editedFrom as string)
       : null
-  // 「仅保存」路径的编辑标记:无归档链(没有历史版本可看),只提示内容已改过
+  // 历史「仅保存」路径的编辑标记(入口已下线,旧数据仍可能带 editedAt):只提示内容改过
   const savedEditAt =
     isUser &&
     !editedFrom &&
@@ -373,31 +220,11 @@ function MessageBubbleInner({
     typeof (messageMeta as { editedAt?: unknown }).editedAt === 'string'
       ? ((messageMeta as { editedAt?: unknown }).editedAt as string)
       : null
-  // 卡片用的"摘要正文":剥掉首行 `## 来自上文的上下文摘要...`,
-  // 因为卡片头部已经有自己的标题,避免重复
-  const summaryContent = useMemo(() => {
-    if (!isSummaryCard) return ''
-    const lines = message.parts
-      .filter((p) => p.type === 'text')
-      .map((p) => p.text)
-      .join('')
-      .split('\n')
-    // 找到第一个以 `## ` 开头的行后,从下一行开始切
-    const idx = lines.findIndex((l) => /^##\s+/.test(l))
-    if (idx === -1) return lines.join('\n').trim()
-    return lines.slice(idx + 1).join('\n').trim()
-  }, [isSummaryCard, message.parts])
-  const summaryMeta = messageMeta && isSummaryCard
-    ? (messageMeta as Extract<MessageMetadata, { kind: 'branch_summary' }>)
-    : null
-
   const [copied, setCopied] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
-  // 提交中(保存并重答要等 DELETE 归档往返):禁用确认条按钮,避免重复提交
+  // 提交中(保存并重答要等 DELETE 归档往返):禁用编辑卡按钮,避免重复提交
   const [isSaving, setIsSaving] = useState(false)
-  // 进入编辑态时惰性取一次"后续消息条数",确认条据此显示归档影响面
-  const [followingCount, setFollowingCount] = useState(0)
   // 思考框展开状态: null=未手动干预(自动行为接管),true/false=用户点过折叠按钮后的选择
   const [userShowReasoning, setUserShowReasoning] = useState<boolean | null>(null)
   const autoCollapseReasoning = useChatStore((s) => s.autoCollapseReasoning)
@@ -577,6 +404,60 @@ function MessageBubbleInner({
     if (isThinkingActive) setThinkingThisMount(true)
   }, [isThinkingActive])
 
+  // ── 思考期限高小窗:真实流是突发的(SSE 一块 1~40 字,思考可上千字),整段挂载会
+  // 随长度全段重排版越滚越卡,无限增高又把外层视口一路往上顶。生成中只渲染尾部
+  // REASON_TAIL 字符并封顶 120px,新内容在窗内贴底;页面高度到顶即止。
+  // 思考完毕走原塌缩分支,回看/手动展开都是全量文本,不受此限。
+  // 推理流也过正文同款时间基打字机:直写 DOM 时块大小决定跳动幅度(一跳 1~3 行),
+  // 平滑揭示后每帧增量恒定,贴底写入连起来就是连续滚动。
+  // 打字机喂原始 reasoningText(单调增长):displayReasoningText 会被 stripLeadingEcho
+  // 中途剥掉复述前缀而缩短,触发打字机"重置从头回放"的换轮次语义,窗内容塌一下;
+  // 剥回声挪到输出侧逐帧做(思考期内 displayReasoningText 本就等价于这条链)。
+  // 速度钳到 420 字/秒:推理流常年超过默认上限 1500 字/秒,稳态贴顶时每帧推进
+  // ~25 字(半行),行粒度的位移就是用户说的"字一跳一跳";420 ≈ 每帧 7 字/3.4px,
+  // 窗内是连续滚带。思考完毕本来就塌成胶囊,慢半拍无残留
+  const { displayText: typedReasoningRaw } = useTypewriter(reasoningText, isThinkingActive, 420)
+  const typedReasoning = stripLeadingEcho(typedReasoningRaw, prevUserContent)
+  const REASON_TAIL = 600
+  // 尾切按换行对齐:逐字符滑窗时每进一个字窗头就掉一个字,窗内每一行都得重新
+  // 断行(实测 tlen 恒定时整段高度 ±39px 震荡,观感就是"字一跳一跳")。
+  // 钉到窗内首个换行后,已上屏的行不再重排,只有末行随打字机延长
+  const liveReasoningText = (() => {
+    if (!isThinkingActive || typedReasoning.length <= REASON_TAIL) return typedReasoning
+    const tail = typedReasoning.slice(-REASON_TAIL)
+    const nl = tail.indexOf('\n')
+    return '…' + (nl === -1 ? tail : tail.slice(nl + 1))
+  })()
+  const reasonWinRef = useRef<HTMLDivElement>(null)
+  const reasonWinFollowRef = useRef(true)
+  const reasonTouchYRef = useRef<number | null>(null)
+  // 脱离判定必须走输入事件而非 scrollTop 方向差:打字机/尾部截断会让窗内内容
+  // 塌缩,浏览器随之回缩 scrollTop,方向判定会把这记成"用户上滑"而误脱离(实测)
+  const onReasonWinWheel = useCallback((e: React.WheelEvent) => {
+    if (e.deltaY < 0) reasonWinFollowRef.current = false
+  }, [])
+  const onReasonWinTouchMove = useCallback((e: React.TouchEvent) => {
+    const y = e.touches[0]?.clientY ?? null
+    if (y != null && reasonTouchYRef.current != null && y > reasonTouchYRef.current + 2) {
+      reasonWinFollowRef.current = false
+    }
+    reasonTouchYRef.current = y
+  }, [])
+  // 滚回窗底即恢复跟随
+  const onReasonWinScroll = useCallback(() => {
+    const el = reasonWinRef.current
+    if (!el) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= 4) reasonWinFollowRef.current = true
+  }, [])
+  useEffect(() => {
+    if (isThinkingActive) reasonWinFollowRef.current = true
+  }, [isThinkingActive])
+  // 打字机每帧推进一次 commit,这里每帧贴底一次;窗内上滑可脱离、回窗底恢复
+  useEffect(() => {
+    const el = reasonWinRef.current
+    if (el && isThinkingActive && reasonWinFollowRef.current) el.scrollTop = el.scrollHeight
+  }, [liveReasoningText, isThinkingActive])
+
   // Typewriter effect: only for live streaming, not for historical messages
   // Skip typewriter when message is already complete (streaming ended) to avoid
   // performance issues with long messages on page refresh
@@ -609,9 +490,8 @@ function MessageBubbleInner({
   // beginEdit 是无事件版本:右键菜单项也要进编辑态(菜单里拿不到原 MouseEvent)
   const beginEdit = useCallback(() => {
     setEditValue(text)
-    setFollowingCount(getFollowingCount ? getFollowingCount(message.id) : 0)
     setIsEditing(true)
-  }, [text, getFollowingCount, message.id])
+  }, [text])
 
   const startEditing = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -625,46 +505,41 @@ function MessageBubbleInner({
   }, [])
 
   /**
-   * 提交编辑。三种语义:
-   * - 'resend' 保存并重答: 父级归档此消息及其后续,再以新文本重发(有破坏性,确认条已提示影响面)
-   * - 'save'   仅保存:     就地更新文本,不动后续消息、不触发重答
-   * - 'reanswer' 只重答这条: 就地更新文本并重新生成该轮回答,后续消息原位保留
+   * 提交编辑(唯一动作「保存并重答」): 父级归档此消息及其后续,再以新文本重发。
+   * 归档影响面只在主钮 title 悬浮提示中说明,卡片内不设警示行(定案: 用户嫌啰嗦)。
    * 失败时父级抛错 → 停留在编辑态,用户可重试或取消。
    */
-  const submitEdit = useCallback(async (mode: 'save' | 'resend' | 'reanswer') => {
+  const submitEdit = useCallback(async () => {
     if (isSaving) return
     const trimmed = editValue.trim()
     if (!trimmed || trimmed === text) {
       setIsEditing(false)
       return
     }
-    const handler = mode === 'save' ? onSaveEdit : mode === 'reanswer' ? onReanswer : onEdit
-    if (!handler) {
+    if (!onEdit) {
       setIsEditing(false)
       return
     }
     setIsSaving(true)
     try {
-      await handler(message.id, trimmed)
+      await onEdit(message.id, trimmed)
       setIsEditing(false)
     } catch {
       // 错误提示由父级 toast 负责;保持编辑态供重试
     } finally {
       setIsSaving(false)
     }
-  }, [isSaving, editValue, text, onSaveEdit, onReanswer, onEdit, message.id])
+  }, [isSaving, editValue, text, onEdit, message.id])
 
   const handleEditKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      // Enter=主操作(保存并重答);Ctrl/Cmd+Enter=仅保存;Alt+Enter=只重答这条
-      if (e.altKey && onReanswer) void submitEdit('reanswer')
-      else void submitEdit(e.metaKey || e.ctrlKey ? 'save' : 'resend')
+      void submitEdit()
     } else if (e.key === 'Escape') {
       e.preventDefault()
       if (!isSaving) cancelEditing()
     }
-  }, [submitEdit, cancelEditing, isSaving, onReanswer])
+  }, [submitEdit, cancelEditing, isSaving])
 
   const copyPayload = useCallback((text: string) => {
     // copyText 内部:Clipboard API 被拒(无 transient activation / webview 权限受限)时退 execCommand 兜底
@@ -890,32 +765,36 @@ function MessageBubbleInner({
     message.id, message.role,
   ])
 
-  // 结构化摘要卡片分支 —— system + branch_summary metadata 走独立渲染
-  // 整张卡片独占一行,不显示 AI 头像 / 操作按钮,视觉上与正常消息流明确区分
-  if (isSummaryCard && summaryMeta) {
-    return (
-      <div
-        ref={setWrapperRef}
-        style={wrapperStyle}
-        data-message-id={message.id}
-        className={cn(
-          'flex justify-start px-4 max-md:px-2 py-2 transition-colors group relative',
-          isFocused && 'bg-accent/5 border-l-2 border-l-accent'
-        )}
-      >
-        <div className="min-w-0 flex-1 max-w-full">
-          <SummaryCard content={summaryContent} meta={summaryMeta} />
-        </div>
-      </div>
-    )
-  }
+  // 分支摘要对用户不可见:这条 system 消息只是「喂给模型的上文」的载体,
+  // 真正生效的位置在 chat/route.ts(摘出 messages 后 unshift 进 system prompt)。
+  // 消息本身照常入库、照常随请求上传,前端一律不渲染。
+  if (isBranchSummary) return null
 
-  // Edit mode: inline textarea for user messages
+  // Edit mode: 就地编辑卡(方案A 定案)——头部✎+✕、唯一动作「保存并重答」，无警示行。
+  // 失焦不提交:只有点主钮 / Enter 才提交,✕ / Esc 取消。
   if (isUser && isEditing) {
     return (
       <div className="flex justify-end px-4 max-md:px-2 py-2">
-        <div className="max-w-[80%] w-full">
-          <div className="rounded-lg bg-accent overflow-hidden">
+        <div className="w-full max-w-[460px] max-md:max-w-none">
+          <div className="rounded-[13px] border border-line-strong bg-surface overflow-hidden">
+            <div className="flex items-center gap-1.5 h-[34px] max-md:h-10 px-3 border-b border-line text-[11.5px] max-md:text-[12.5px] text-content-secondary select-none">
+              <Pencil className="w-3 h-3 text-content-muted shrink-0" />
+              <span>编辑消息</span>
+              <span className="ml-auto max-md:hidden text-[10.5px] text-content-muted">Esc 取消</span>
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={cancelEditing}
+                aria-label="取消编辑"
+                className={cn(
+                  'ml-auto max-md:ml-auto shrink-0 w-6 h-6 max-md:w-10 max-md:h-10 -mr-1 flex items-center justify-center',
+                  'rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle',
+                  'transition-colors disabled:opacity-50 disabled:pointer-events-none'
+                )}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
             <textarea
               ref={textareaRef}
               value={editValue}
@@ -925,61 +804,25 @@ function MessageBubbleInner({
                 // Auto-resize
                 const ta = e.target
                 ta.style.height = 'auto'
-                ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+                ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`
               }}
               onKeyDown={handleEditKeyDown}
               rows={1}
-              className="w-full resize-none bg-transparent text-sm leading-relaxed text-accent-foreground outline-none px-3 py-1.5 min-h-[24px] max-h-[200px]"
+              className="w-full resize-none bg-transparent text-[13.5px] leading-relaxed text-content-primary outline-none px-3 pt-2.5 pb-1.5 min-h-[66px] max-h-[220px]"
             />
-          </div>
-          {/* 确认条:失焦不提交(只有点按钮 / Enter 才提交),破坏性动作的影响面前置告知 */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span className="mr-auto text-[11px] text-content-muted select-none">
-              {isSaving
-                ? '处理中…'
-                : followingCount > 0
-                  ? `保存并重答将归档后续 ${followingCount} 条；「只重答这条」保留它们`
-                  : '保存并重答将重新生成回答'}
-            </span>
-            <div className="flex items-center gap-1.5">
+            <div className="flex p-3">
               <button
                 type="button"
                 disabled={isSaving}
-                onClick={cancelEditing}
-                className="px-2.5 py-1 rounded-md text-xs text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              >
-                取消
-              </button>
-              {onSaveEdit && (
-                <button
-                  type="button"
-                  disabled={isSaving}
-                  onClick={() => void submitEdit('save')}
-                  title="仅就地修改文本,不重新生成回答（Ctrl/⌘+Enter）"
-                  className="px-2.5 py-1 rounded-md text-xs border border-line text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  仅保存
-                </button>
-              )}
-              {onReanswer && (
-                <button
-                  type="button"
-                  disabled={isSaving}
-                  onClick={() => void submitEdit('reanswer')}
-                  title="改这句并重新生成它的回答,后续消息保留（Alt+Enter）。注意:后续回答仍基于改前的内容"
-                  className="px-2.5 py-1 rounded-md text-xs border border-line text-content-secondary hover:text-content-primary hover:bg-surface-subtle transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  只重答这条
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => void submitEdit('resend')}
+                onClick={() => void submitEdit()}
                 title="归档此消息之后的对话并重新生成回答（Enter）"
-                className="px-2.5 py-1 rounded-md text-xs bg-accent text-accent-foreground hover:opacity-90 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
+                className="ml-auto max-md:w-full max-md:ml-auto h-8 max-md:h-11 px-4 max-md:px-0 rounded-lg bg-accent text-accent-foreground text-xs max-md:text-[13.5px] font-medium inline-flex items-center justify-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
               >
-                保存并重答
+                {isSaving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isSaving ? '处理中…' : '保存并重答'}
+                {!isSaving && (
+                  <span className="max-md:hidden text-[10px] opacity-60 border border-current rounded px-1 leading-[1.4]">⏎</span>
+                )}
               </button>
             </div>
           </div>
@@ -1041,13 +884,25 @@ function MessageBubbleInner({
                     )}
                   >
                     <div className="overflow-hidden">
-                      <div className="mt-1.5 pl-3 border-l-2 border-line-strong/60">
-                        <p className="text-xs text-content-secondary whitespace-pre-wrap break-words leading-relaxed">
-                          {displayReasoningText}
-                          {isReasoningStreaming && (
-                            <span className="inline-block w-1 h-3 ml-0.5 bg-accent animate-pulse align-middle" />
-                          )}
-                        </p>
+                      {/* md-blk-rise:与正文段级上浮同款(同 keyframes/时长/缓动),只在思考块
+                          挂载那一帧跑一次。窗内不切句 —— 尾切窗句序每掉一批字整体左移,
+                          同 key 只改文本不重放,句级淡入在这条链上等于没动效。 */}
+                      <div className="md-blk-rise mt-1.5 pl-3 border-l-2 border-line-strong/60">
+                        <div
+                          ref={isThinkingActive ? reasonWinRef : null}
+                          onScroll={isThinkingActive ? onReasonWinScroll : undefined}
+                          onWheel={isThinkingActive ? onReasonWinWheel : undefined}
+                          onTouchMove={isThinkingActive ? onReasonWinTouchMove : undefined}
+                          onTouchEnd={isThinkingActive ? () => { reasonTouchYRef.current = null } : undefined}
+                          className={cn(isThinkingActive && 'max-h-[120px] overflow-y-auto overscroll-contain [scroll-behavior:auto]')}
+                        >
+                          <p className="text-xs text-content-secondary whitespace-pre-wrap break-words leading-relaxed">
+                            {liveReasoningText}
+                            {isReasoningStreaming && (
+                              <span className="inline-block w-1 h-3 ml-0.5 bg-accent animate-pulse align-middle" />
+                            )}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1418,9 +1273,6 @@ function areMessageBubblePropsEqual(
   if (prev.canEdit !== next.canEdit) return false
   if (prev.onRegenerate !== next.onRegenerate) return false
   if (prev.onEdit !== next.onEdit) return false
-  if (prev.onSaveEdit !== next.onSaveEdit) return false
-  if (prev.onReanswer !== next.onReanswer) return false
-  if (prev.getFollowingCount !== next.getFollowingCount) return false
   if (prev.isFocused !== next.isFocused) return false
   if (prev.prevUserContent !== next.prevUserContent) return false
   if (prev.contentVisibilityOff !== next.contentVisibilityOff) return false

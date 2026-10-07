@@ -122,19 +122,15 @@ export function TopBar() {
         id: string
         title?: string
         mode?: 'compressed' | 'cloned'
-        summary?: string
         warning?: string
       }
       const modeLabel =
         newConv.mode === 'compressed'
-          ? '已压缩上文,新对话已就绪'
+          ? '已带上文,新对话已就绪'
           : newConv.mode === 'cloned'
             ? '压缩失败,已克隆原对话'
             : '新对话已就绪'
-      const summaryPreview = newConv.summary ? newConv.summary.slice(0, 80) + '…' : ''
-      toast.success(summaryPreview ? `${modeLabel}\n${summaryPreview}` : modeLabel, {
-        title: '分支对话',
-      })
+      toast.success(modeLabel, { title: '分支对话' })
       // 通知侧边栏刷新会话列表（创建了新对话）
       bumpConversationVersion()
       router.push(`/chat/c/${newConv.id}`)
