@@ -31,10 +31,30 @@ export function ModelQuickSheet({ open, onClose, models, selectedModel, onModelC
   // rendered=DOM 存在;shown=过渡目标态。开:双 RAF 置 shown 触发上滑;关:先落 shown,340ms 后卸载
   const [rendered, setRendered] = useState(false)
   const [shown, setShown] = useState(false)
+  // 已配置 Key 的 provider 名单(null=未加载):与桌面 ModelSelector 同口径,
+  // 只列已配置 provider 的模型 + 自定义 + 公共池门面 —— 手机端此前不过滤,全量内置全漏出来
+  const [configuredProviders, setConfiguredProviders] = useState<Set<string> | null>(null)
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!open) return
+    // 用 keys-status 而非 /api/keys:后者返回掩码密钥,临时模式被 middleware 整体 403(同桌面口径)
+    let cancelled = false
+    fetch('/api/providers/keys-status')
+      .then((r) => r.json())
+      .then((keys: { provider: string }[]) => {
+        if (!cancelled) setConfiguredProviders(new Set(keys.map((k) => k.provider)))
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguredProviders(new Set())
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (open) {
@@ -71,6 +91,14 @@ export function ModelQuickSheet({ open, onClose, models, selectedModel, onModelC
     onClose()
   }
 
+  // 与桌面 ModelSelector isVisible 同口径:已配置 provider / 自定义 / 公共池门面豁免
+  const visibleModels =
+    configuredProviders === null
+      ? []
+      : models.filter(
+          (m) => configuredProviders.has(m.provider) || m.provider === 'custom' || m.publicPool === true
+        )
+
   return createPortal(
     <>
       {/* 背景压暗 */}
@@ -104,10 +132,12 @@ export function ModelQuickSheet({ open, onClose, models, selectedModel, onModelC
         <div aria-hidden className="mx-auto mt-3 h-2 w-[46px] rounded-full bg-line-strong/40" />
         <p className="px-5 pb-2.5 pt-3.5 text-center text-sm font-semibold text-content-primary">切换模型</p>
         <div className="max-h-[52vh] overflow-y-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {models.length === 0 ? (
+          {configuredProviders === null ? (
+            <p className="px-6 py-6 text-center text-[13px] text-content-muted">正在加载模型…</p>
+          ) : visibleModels.length === 0 ? (
             <p className="px-6 py-6 text-center text-[13px] text-content-muted">请先在设置中配置 API Key</p>
           ) : (
-            models.map((m, i) => {
+            visibleModels.map((m, i) => {
               const on = m.id === selectedModel
               return (
                 <button

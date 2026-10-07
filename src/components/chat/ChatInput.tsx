@@ -1116,11 +1116,11 @@ export function ChatInput({
     // useVisualViewport hook 会把键盘高度写入 --keyboard-height(桌面上始终 0px);
     // --sab 是 Home Indicator 安全区(浏览器内为 0,PWA 全屏/无键盘时非 0),
     // 取较大者避免键盘弹出时叠加出多余空白。
-    // 间距走 --m-input-pad:桌面回落 0.5rem(内联默认值),手机端由 globals 覆写成 0(贴边)
+    // 间距走 --m-input-pad:桌面回落 0.5rem(内联默认值),手机端由 globals 覆写成 12px(悬浮)
     <div
     // 层级必须高于消息区的错误横幅浮层(z-40):⋯ 面板从胶囊向上弹到 60vh,
     // 若沿用 z-20 会被横幅吃掉点击(实测 390×844 有横幅时「切换模型」点不动)
-      className={cn('relative z-[42] px-0 pt-1 md:px-3', className)}
+      className={cn('relative z-[42] px-3 pt-1', className)}
       style={{
         // --m-input-pad: 手机端胶囊底距(globals.css 断点定义,桌面 0.5rem)
         paddingBottom: 'calc(var(--m-input-pad, 0.5rem) + max(var(--keyboard-height, 0px), var(--sab, 0px)))',

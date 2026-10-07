@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, ArrowLeft, Settings as SettingsIcon } from 'lucide-react'
+import { Menu, ArrowLeft, Settings as SettingsIcon, RotateCw } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/store/chat-store'
 import { cn } from '@/lib/utils'
@@ -66,6 +66,18 @@ export function MobileFloatButtons() {
             <Menu className="w-[18px] h-[18px]" />
           </button>
         )}
+        {/* 右二:刷新(整页重载,壳内即重新拉远程站) */}
+        <button
+          onClick={() => window.location.reload()}
+          className={cn(
+            btnBase,
+            'pointer-events-auto absolute right-[calc(var(--m-chrome-inset)_+_40px_+_var(--m-chrome-gap))] top-0'
+          )}
+          aria-label="刷新页面"
+          style={btnStyle}
+        >
+          <RotateCw className="w-[18px] h-[18px]" />
+        </button>
         {/* 右:设置 */}
         <button
           onClick={() => setSettingsOpen(true)}

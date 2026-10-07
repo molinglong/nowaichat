@@ -1,6 +1,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.aichatt" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- 状态栏区域底衬:颜色跟随 values(-night)/colors.xml 的 window_bg -->
+        <item name="android:windowBackground">@color/window_bg</item>
     </style>
 </resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色档:对齐 app .dark --background rgb(12 12 13) -->
+    <color name="window_bg">#FF0C0C0D</color>
+</resources>
