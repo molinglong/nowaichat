@@ -838,7 +838,7 @@ function MessageBubbleInner({
       data-message-id={message.id}
       onContextMenu={handleMessageContextMenu}
       className={cn(
-        'flex gap-2.5 px-4 max-md:px-2 py-2 transition-colors group relative',
+        'flex gap-2.5 px-4 max-md:px-2 py-2 max-md:py-[11px] transition-colors group relative',
         isUser ? 'justify-end' : 'justify-start',
         isFocused && 'bg-accent/5 border-l-2 border-l-accent'
       )}

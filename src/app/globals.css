@@ -414,16 +414,33 @@ html {
 
   /* 手机端顶部 chrome 基线(浮钮簇 / 抽屉头部簇 / 设置面板页头簇共用的同一坐标系)
      2026-10-05 用户现场改定:去掉原来的 sat+56 空带,三簇一律贴顶;但纯 sat 在真机上是 0
-     (Safari/Chrome 非 PWA 拿不到 safe-area),贴顶=被地址栏压住,所以保底 14px。
-     即:有刘海走安全区,无刘海/浏览器内走 14px,不再有任何一条空带。
+     (Safari/Chrome 非 PWA 拿不到 safe-area),贴顶=被地址栏压住,所以保底 16px。
+     即:有刘海走安全区,无刘海/浏览器内走 16px,不再有任何一条空带。
      左右内缩 14px 与同排间距 8px 不变。 */
-  --m-chrome-top: max(var(--sat, 0px), 14px);
+  --m-chrome-top: max(var(--sat, 0px), 16px);
   --m-chrome-inset: 14px;
   --m-chrome-gap: 8px;
+
+  /* 聊天页顶部渐隐/留白档位(2026-10-07 预览定案落码):全部从浮钮簇基线推导,
+     真机 safe-area 变了整组跟着走;浏览器内(sat=0)即 16/44/64。
+     fade-mid = 渐隐中段(40% 灰)锚点;pad-top = 渐隐完全体,也是消息首行起点。 */
+  --m-chat-fade-mid: calc(var(--m-chrome-top) + 28px);
+  --m-chat-pad-top: calc(var(--m-chrome-top) + 48px);
 
   /* 软键盘高度(由 useVisualViewport hook 写入)。键盘未弹出时为 0px。
      ChatInput 等组件用 padding-bottom: var(--keyboard-height, 0px) 顶住键盘。 */
   --keyboard-height: 0px;
+}
+
+/* 手机端聊天滚动区上沿渐隐:内容滚上去时从浮钮簇底下「融化」出来,代替硬切一刀
+   (桌面端走 TopFade,与本规则互不相干)。mask 固定在容器边框盒上不随滚动,
+   三档停顿曲线(全透→按住→40%→全显)让贴底内容在按钮带下渐显、
+   滚到顶时首条消息完整可见 —— 档位取值与预览页逐帧对齐后定稿。 */
+@media (max-width: 767px) {
+  .chat-scroll-fade {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent var(--m-chrome-top), rgba(0, 0, 0, 0.4) var(--m-chat-fade-mid), #000 var(--m-chat-pad-top));
+    mask-image: linear-gradient(to bottom, transparent 0, transparent var(--m-chrome-top), rgba(0, 0, 0, 0.4) var(--m-chat-fade-mid), #000 var(--m-chat-pad-top));
+  }
 }
 
 /* 手机端设置面板字号下限:桌面密排用的 text-[10px]/text-[11px] 在 390px 屏上属于

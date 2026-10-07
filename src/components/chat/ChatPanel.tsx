@@ -2123,7 +2123,7 @@ export function ChatPanel({
             <div
               ref={setMessagesScrollEl}
               data-tauri-drag-region=""
-              className="h-full overflow-y-auto overflow-x-hidden scroll-contain md:pt-12 [scroll-behavior:auto]"
+              className="h-full overflow-y-auto overflow-x-hidden scroll-contain md:pt-12 max-md:pt-[var(--m-chat-pad-top)] chat-scroll-fade [scroll-behavior:auto]"
             >
               {/* error 时给内容尾部留出一张卡片的高度：浮层会压住正文下缘，
                   滚到底时最后一条(往往是断掉的回复)仍能完整露出 */}

@@ -282,7 +282,7 @@ export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: Prof
         <div
           role="status"
           aria-live="polite"
-          className="flex items-center gap-2 px-3 py-2 rounded-lg
+          className="flex items-center gap-2 px-3 py-2 rounded-full
             bg-surface-subtle/70 border border-line/50 backdrop-blur-sm"
         >
           <Sparkles className="w-3.5 h-3.5 shrink-0 text-content-muted" />
@@ -293,7 +293,7 @@ export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: Prof
             <button
               type="button"
               onClick={reviewProbe}
-              className="shrink-0 inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-md text-xs font-medium
+              className="shrink-0 inline-flex items-center gap-1 min-h-[36px] px-2.5 rounded-full text-xs font-medium
                 bg-accent text-accent-foreground transition-transform active:scale-95"
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
@@ -304,7 +304,7 @@ export function ProfileProbe({ lastUserText, disabled, allowPromo = true }: Prof
             <button
               type="button"
               onClick={startProbe}
-              className="shrink-0 inline-flex items-center min-h-[36px] px-2.5 rounded-md text-xs font-medium
+              className="shrink-0 inline-flex items-center min-h-[36px] px-2.5 rounded-full text-xs font-medium
                 bg-accent text-accent-foreground transition-transform active:scale-95"
               style={{ WebkitTapHighlightColor: 'transparent' }}
             >
