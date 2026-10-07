@@ -689,6 +689,36 @@ body {
   background-color: rgb(var(--surface-muted) / 0.35);
 }
 
+/* ── 桌面阅读纱(≥md;壁纸只做环境,正文落纱) ─────────────────────
+   2026-10-07 定案 S5「整列纱」:放弃「居中一张纸」这个物体 —— 纱铺满整个
+   内容列、无边界无模糊,壁纸只从纱里透出。毛玻璃(backdrop-filter)已被
+   用户否(「太丑」),别再往这条规则上加。
+   浓度是扫出来的(scripts/tmp-check-wp-veil.cjs,真实渲染像素取样):
+   浅色 0.78 是「次要灰字最差 5% 到 4.5」的最薄一档(4.7/100%),再薄到 0.72
+   就掉到 99%、0.62 直接 52%;深色 0.72 同判据已达 4.9/100%,不必多压。
+   注意 --content-muted(11.5px 元信息那一档)在两档下都只有 2.7~3.0:1,
+   但它在不开壁纸时也是这个数 —— 属 token 旧账,不在本次范围内动。
+   判据复用 .app-shell:has(> .welcome-wallpaper) —— 壁纸关时整条不命中,
+   桌面会话页与改版前逐像素相同;欢迎页没有消息区,自然也没有纱。
+   z-index:-1 与壁纸同层,按 DOM 序本元素在后 → 垫在壁纸之上、消息流之下,
+   不需要给滚动容器加 z-index。手机端由 scrim 承担同一职责,故 ≥md 才出。 */
+.wp-plate {
+  display: none;
+}
+@media (min-width: 768px) {
+  .app-shell:has(> .welcome-wallpaper) .wp-plate {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: rgb(var(--surface) / 0.72);
+  }
+  html:not(.dark) .app-shell:has(> .welcome-wallpaper) .wp-plate {
+    background: rgb(var(--surface) / 0.78);
+  }
+}
+
 /* ── 主题专属元素门控（显隐走纯 CSS,不做 JS 条件渲染）────────────
    data-pal 由 layout 首帧内联脚本在首次绘制前写好,首帧即正确 ——
    无闪烁、无水合(hydration)分歧,装饰元素也不需要客户端状态。
@@ -2161,11 +2191,20 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
       rgb(var(--background) / 0.80) 74%,
       rgb(var(--background) / 0.95) 100%);
   }
+  /* 会话页蒙版:壁纸只留顶部一条光带,消息首行起点即完全收口。
+     浓度与锚点都是扫出来的(scripts/tmp-check-wp-mobile-scrim.cjs,真实渲染像素):
+     手机端壁纸层没有桌面那层 0.6 基座预压(原图直接上屏),而次要灰字 110 在
+     96% 白底上就只剩 4.35:1 —— 正文区只要露一点图必然掉出 AA。上一版按百分比
+     收口(0.72@26%)实测首行只有 2.9:1(浅色)/2.5:1(深色白字压亮图),不可读。
+     只有「首行起 1.0 实底」这一档在两主题 × sat=0/59 四种组合下全 100% 达标
+     (正文 15.5/18,次要 4.7/7.5),且顶带壁纸噪声 15.5 与改版前 17.7 同级。
+     锚点必须走 var(--m-chat-pad-top) 而非百分比:刘海机首行在 107px(=12.7%),
+     百分比收口会甩到正文底下 —— 那正是上一版读不动的根因。 */
   .mobile-page-scrim.mps-chat {
     background: linear-gradient(180deg,
-      rgb(var(--background) / 0.58) 0%,
-      rgb(var(--background) / 0.74) 40%,
-      rgb(var(--background) / 0.92) 100%);
+      rgb(var(--background) / 0.26) 0px,
+      rgb(var(--background) / 0.55) calc(var(--m-chat-pad-top) - 32px),
+      rgb(var(--background) / 1) var(--m-chat-pad-top));
   }
   .mobile-page-scrim.mps-work {
     background: linear-gradient(180deg,

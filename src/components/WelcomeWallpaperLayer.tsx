@@ -12,7 +12,9 @@ import { useIsMobileViewport } from '@/hooks/useIsMobileViewport'
  * 方案 C 手机端:壁纸为全局主视觉 —— ≤md 时只要壁纸开关开启就常驻,
  * 不再要求「新对话欢迎页」激活;其上由 .mobile-page-scrim 按路由叠
  * 三档渐变蒙版(欢迎页最透 / 会话页居中 / 功能页最重,保可读性)。
- * 桌面端(≥md)保持原行为:仅新对话欢迎页激活时显示,无蒙版层。
+ * 桌面端(≥md):聊天页(欢迎态与会话态同权)常驻,判据走路由不靠 store;
+ * 其余 tab(生图/探索/写作/错题本)仍无壁纸。可读性两件套:.welcome-wallpaper
+ * 自带的 0.6 基座蒙版 + 会话页那张整列阅读纱(.wp-plate,globals.css 定档)。
  */
 export function WelcomeWallpaperLayer() {
   const mode = useChatStore((s) => s.backdropMode)
@@ -21,11 +23,11 @@ export function WelcomeWallpaperLayer() {
   const pathname = usePathname()
 
   if (mode !== 'image') return null
-  // 桌面端:沿用旧逻辑,仅欢迎页激活时渲染(蒙版层不渲染)
-  if (!isMobile && !active) return null
+  // /chat 全域(含具体会话)都在;桌面端额外收口:非聊天页不渲染
+  const isChatRoute = !!pathname?.startsWith('/chat')
+  if (!isMobile && !isChatRoute) return null
 
   // 手机端蒙版分档:/chat 欢迎态 → home;/chat 会话态 → chat;其余(生图/探索/写作/错题本)→ work
-  const isChatRoute = !!pathname?.startsWith('/chat')
   const scrimClass = isChatRoute
     ? active
       ? 'mps-home'
