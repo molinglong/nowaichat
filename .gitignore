@@ -71,12 +71,20 @@ deploy/backups/
 # Rust/Tauri 编译产物
 src-tauri/target/
 **/src-tauri/target/
+# 安卓工程构建产物（Gradle 每次 build 生成，机器相关的 local.properties 也不入库）
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/.kotlin/
+src-tauri/gen/android/**/build/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/app/build/
+# 安卓构建产物（APK 只作本机分发用，不入库）
+*.apk
 # 旧仓库备份目录
 .git-backup-*/
 # 日志与诊断输出
 *.log
 tsc*.out
-query
+# 此处原有裸规则 `query`：它会连带吞掉 src/lib/query/ 的 6 个被 import 源文件（新克隆编译不过），已删
 # 临时诊断脚本
 diag-*.cjs
 pg-diag.cjs
@@ -100,6 +108,9 @@ test-ephemeral-full.ps1
 login-redesign-preview.html
 # 设计预览稿(不入库)
 public/preview-*.html
+# 外部工具会话标记与一次性查询稿(verify-gate.json 仍需入库,故只点名这两类)
+.acode/*.flag
+.acode/*.sql
 # 预览稿配套资源目录(仅被 preview-*.html 引用,不入库)
 public/preview-*/
 # 根目录聊天重设计预览稿(2026-09-26 卫生清理追加)
