@@ -12,6 +12,7 @@ import { xaiProvider } from "./providers/xai"
 import { doubaoProvider } from "./providers/doubao"
 import { groqProvider } from "./providers/groq"
 import { prisma } from "@/lib/db"
+import { getModelTotalConsumed } from "@/lib/quota"
 
 // All registered providers
 export const providers: Record<string, ProviderDefinition> = {
@@ -150,13 +151,76 @@ export async function getEffectiveModels(userId: string): Promise<ModelDefinitio
   const userAddedIds = new Set(userAddedModels.map(m => m.id))
 
   const builtinVisible = getAllModels().filter(
-    m => !hiddenSet.has(`${m.provider}:${m.id}`)
+    m => !m.upstreamOnly && !hiddenSet.has(`${m.provider}:${m.id}`)
   )
 
   // 过滤掉被用户添加同名覆盖的内置模型，让用户配置生效
   const builtinFiltered = builtinVisible.filter(m => !userAddedIds.has(m.id))
 
-  return [...builtinFiltered, ...userAddedModels]
+  // 公共池门面模型（管理员在 DB 维护）：对所有人可见，服务端出钱+计费语义在 chat route。
+  // 放在最后：首跑默认取 find(m => m.publicPool)，与排序无关
+  const publicPoolModels = await getPublicPoolModelDefs()
+
+  return [...builtinFiltered, ...userAddedModels, ...publicPoolModels]
+}
+
+/**
+ * 公共池门面模型（PublicPoolModel 表，enabled 行）→ ModelDefinition。
+ * 能力（上下文窗/视觉/推理）从 upstreamId 指向的内置定义继承；上游锚点必须
+ * 是同 provider 的内置定义，查不到即丢行（管理员配置错误的防呆）。
+ * 全站累计消耗达到 capTokens（预算，0=不限）的行不返回——停运+用户端隐藏，
+ * 管理员改大 cap 即恢复；用量查询失败时放行（宁可多发，不因辅助查询误杀全部门面）。
+ */
+export async function getPublicPoolModelDefs(): Promise<ModelDefinition[]> {
+  const rows = await prisma.publicPoolModel.findMany({
+    where: { enabled: true },
+    orderBy: { createdAt: 'asc' },
+  })
+  let usage: Map<string, number> | null = null
+  try {
+    usage = await getModelTotalConsumed()
+  } catch (err) {
+    console.error("[registry] model usage lookup failed, skip cap filter:", err)
+  }
+  // 复合键建表:不同 provider 允许同名上游(qianwen 锚点 kimi-k3 与 moonshot 内置
+  // kimi-k3 互不踩),查找时强制门面行 provider 与锚点 provider 一致——不一致即丢行
+  const builtin = new Map(getAllModels().map(m => [`${m.provider}:${m.id}`, m]))
+  const defs: ModelDefinition[] = []
+  for (const r of rows) {
+    const upstream = builtin.get(`${r.provider}:${r.upstreamId}`)
+    if (!upstream) continue
+    if (usage && r.capTokens > 0 && (usage.get(r.id) ?? 0) >= r.capTokens) continue
+    defs.push({
+      id: r.id,
+      name: r.name,
+      provider: r.provider,
+      contextWindow: upstream.contextWindow,
+      supportsVision: upstream.supportsVision,
+      supportsFiles: upstream.supportsFiles,
+      supportsReasoning: upstream.supportsReasoning,
+      publicPool: true,
+      upstreamId: r.upstreamId,
+    })
+  }
+  return defs
+}
+
+/**
+ * 该模型不可用是否因「公共门面模型预算触顶被隐藏」：是则回模型名给聊天路由出
+ * 「额度已用完」的明确文案（否则用户只会看到「不在可用列表中」，误以为模型没了）。
+ * 已停用/未触顶/非门面一律 null 走通用分支。
+ */
+export async function getCappedPublicPoolModel(modelId: string): Promise<{ name: string } | null> {
+  const row = await prisma.publicPoolModel
+    .findUnique({ where: { id: normalizeModelId(modelId) } })
+    .catch(() => null)
+  if (!row || !row.enabled || row.capTokens <= 0) return null
+  try {
+    const usage = await getModelTotalConsumed()
+    return (usage.get(row.id) ?? 0) >= row.capTokens ? { name: row.name } : null
+  } catch {
+    return null
+  }
 }
 
 /**

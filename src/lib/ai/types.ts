@@ -15,6 +15,12 @@ export interface ModelDefinition {
   supportsReasoning: boolean  // 是否原生支持推理/思考（如 DeepSeek-R1, o1 等）
   /** 省略等同 mainstream（用户自定义模型与历史数据无需补该字段） */
   tier?: ModelTier
+  /** 公共池门面模型：注册即用，一律服务端出钱 + 公共额度计费，模型选择器对所有人可见 */
+  publicPool?: boolean
+  /** 门面模型发上游用的真实模型 id（如「标准」复用 deepseek-flash 引擎）；缺省即 id 本身 */
+  upstreamId?: string
+  /** 仅作公共池门面的上游锚点（能力继承来源+上游真名），不进用户模型列表与设置页内置管理 */
+  upstreamOnly?: boolean
 }
 
 export interface ProviderDefinition {

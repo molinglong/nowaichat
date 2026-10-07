@@ -18,6 +18,7 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [code, setCode] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
@@ -41,7 +42,7 @@ export default function RegisterPage() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, email, password, code }),
       })
 
       const data = await res.json()
@@ -70,6 +71,22 @@ export default function RegisterPage() {
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {error && <ErrorBar message={error} />}
+
+        <div className="auth-reveal auth-delay-3">
+          <label htmlFor="regcode" className={labelClass}>
+            注册码
+          </label>
+          <input
+            id="regcode"
+            type="text"
+            required
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="例如：REG-7K2P-9XQM"
+            autoCapitalize="characters"
+            className={inputClass}
+          />
+        </div>
 
         <div className="auth-reveal auth-delay-3">
           <label htmlFor="name" className={labelClass}>

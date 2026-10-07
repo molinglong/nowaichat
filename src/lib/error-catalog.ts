@@ -11,6 +11,7 @@ export type UpstreamErrorCode =
   | 'config_missing'
   | 'insufficient_balance'
   | 'rate_limit'
+  | 'quota_exhausted'
   | 'model_not_found'
   | 'context_length'
   | 'content_policy'
@@ -25,6 +26,7 @@ export const ERROR_CODES: UpstreamErrorCode[] = [
   'config_missing',
   'insufficient_balance',
   'rate_limit',
+  'quota_exhausted',
   'model_not_found',
   'context_length',
   'content_policy',
@@ -79,6 +81,11 @@ const CATALOG: Record<
     title: '请求过于频繁',
     detail: '触发了服务商的限流（每分钟请求数或 token 数超限）。稍等十几秒再重试通常就好了。',
     action: null,
+  },
+  quota_exhausted: {
+    title: '公共额度已用完',
+    detail: '内置模型的公共额度暂时不可用。明天自动恢复；也可以在设置里配置自己的 API Key，自带 Key 的调用不占公共额度。',
+    action: { label: '去配置自己的 Key', settingsSection: 'providers' },
   },
   model_not_found: {
     title: '模型不存在',
@@ -292,7 +299,18 @@ export function encodeUpstreamError(info: UpstreamErrorInfo): string {
 
 /** 客户端入口：先解 envelope，解不出再按关键词分类（兼容 SDK 自产错误与非本服务的响应） */
 export function decodeUpstreamError(message: string): UpstreamErrorInfo {
-  const text = message ?? ''
+  let text = message ?? ''
+  // DefaultChatTransport 对非 200 响应 throw new Error(await response.text())，
+  // message 是整个 JSON 响应体；先剥出 error 字段再走 envelope 解析，
+  // 否则正文里的英文关键词(code 名等)会被下方 MATCHERS 误分类
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown }
+      if (typeof parsed.error === 'string') text = parsed.error
+    } catch {
+      // 非 JSON 或结构不符，保留原文走降级分类
+    }
+  }
   if (!text.startsWith(ENVELOPE_PREFIX)) {
     const cleaned = sanitizeErrorText(text.replace(/^AI_APICallError:\s*/i, '').trim())
     const code = classifyMessage(cleaned)

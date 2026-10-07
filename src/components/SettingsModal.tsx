@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen, Gauge, Ticket, Gift } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import {
@@ -36,6 +36,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory/import-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
+import QuotaAdminSection from '@/components/settings/QuotaAdminSection'
+import QuotaPersonalCard from '@/components/settings/QuotaPersonalCard'
 import McpSettings from '@/components/settings/McpSettings'
 import { confirmDialog } from '@/components/ui/ConfirmDialog'
 import { generalFieldLabel, type GeneralFields } from '@/lib/profile/general'
@@ -499,9 +501,9 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens' | 'quota' | 'redeem' | 'regcodes'
 
-type NavItem = { id: SectionId; label: string; icon: typeof Key }
+type NavItem = { id: SectionId; label: string; icon: typeof Key; adminOnly?: boolean }
 type NavGroup = { title: string; items: NavItem[] }
 
 const NAV_GROUPS: NavGroup[] = [
@@ -538,6 +540,16 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'general', label: '通用', icon: Settings2 },
       { id: 'help', label: '帮助', icon: HelpCircle },
       { id: 'about', label: '关于', icon: Info },
+    ],
+  },
+  // 管理员专属分组:整组 adminOnly,两个导航渲染位按 isAdmin 过滤后普通用户不可见;
+  // 号池(公共池/公共模型/服务端 Key/用户用量)、激活码(额度分发)、注册码(注册准入)各占一 tab
+  {
+    title: '管理',
+    items: [
+      { id: 'quota', label: '额度号池', icon: Gauge, adminOnly: true },
+      { id: 'redeem', label: '激活码', icon: Gift, adminOnly: true },
+      { id: 'regcodes', label: '注册码', icon: Ticket, adminOnly: true },
     ],
   },
 ]
@@ -1212,6 +1224,9 @@ export function SettingsModal({
   const { data: session, update: updateSession } = useSession()
   // 临时聊天模式:精简版设置(会话管理/通用/关于,不加载任何账户数据)
   const isEphemeral = session?.ephemeral === true
+  // 管理员入口显隐依据 JWT role(登录时固化);服务端 API 一律按 DB 实时值验权,
+  // 所以 role 变更/老会话需要重新登录才看到入口,不会出现「看到入口但接口放行」的错配
+  const isAdmin = session?.user?.role === 'admin'
 
   // ── 临时会话管理:剩余时间 / 清空本会话对话 / 退出登录 ──
   const [sessionRemaining, setSessionRemaining] = useState<string | null>(null)
@@ -2923,7 +2938,7 @@ export function SettingsModal({
                         {group.title}
                       </div>
                       <div className="flex md:flex-col gap-0.5 md:space-y-px">
-                        {group.items.map((item) => (
+                        {group.items.filter((i) => !i.adminOnly || isAdmin).map((item) => (
                           <NavButton
                             key={item.id}
                             item={item}
@@ -2998,7 +3013,7 @@ export function SettingsModal({
               </div>
             </div>
             {(isEphemeral ? EPHEMERAL_NAV_GROUPS.filter((g) => g.title !== '会话') : NAV_GROUPS)
-              .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'account') }))
+              .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'account' && (!i.adminOnly || isAdmin)) }))
               .filter((g) => g.items.length)
               .map((group) => (
               <div key={group.title} className="pt-4">
@@ -4693,6 +4708,13 @@ export function SettingsModal({
                 {/* API 令牌(外部静态页 Bearer 调用凭证) */}
                 {activeSection === 'apitokens' && <ApiTokensSection />}
 
+                {/* 管理(管理员专属):号池 / 激活码 / 注册码三 tab 共用同一组件按视图切片;接口自行验权,非管理员只会看到 403 降级态 */}
+                {activeSection === 'quota' && <QuotaAdminSection view="pool" />}
+
+                {activeSection === 'redeem' && <QuotaAdminSection view="redeem" />}
+
+                {activeSection === 'regcodes' && <QuotaAdminSection view="register" />}
+
                 {activeSection === 'account' && (
                   <div className="space-y-3 text-left">
                     {/* 用户卡片 */}
@@ -5105,6 +5127,8 @@ export function SettingsModal({
                 {/* 用量统计 */}
                 {activeSection === 'usage' && (
                   <div className="space-y-3">
+                    {/* 今日公共额度(本人):与下方个人统计独立取数,池未初始化时自隐藏 */}
+                    <QuotaPersonalCard />
                     {!usageStats ? (
                       <p className="text-[11px] text-content-muted text-left py-1">
                         暂无统计数据。发起对话后，每次回复的 Token 消耗会自动记录在这里。

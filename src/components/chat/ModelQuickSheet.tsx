@@ -123,6 +123,11 @@ export function ModelQuickSheet({ open, onClose, models, selectedModel, onModelC
                   <span className="flex min-w-0 items-center gap-2">
                     <span className={cn('h-1.5 w-1.5 flex-none rounded-full', PROVIDER_DOT[m.provider] ?? 'bg-content-muted')} />
                     <span className="truncate">{m.name}</span>
+                    {m.publicPool && (
+                      <span className="flex-none rounded bg-accent-soft px-1 py-0.5 text-[10px] leading-none text-content-secondary">
+                        公共额度
+                      </span>
+                    )}
                   </span>
                   <Check className={cn('h-[17px] w-[17px] flex-none text-accent', on ? 'opacity-100' : 'opacity-0')} />
                 </button>

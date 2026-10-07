@@ -25,6 +25,7 @@ const TYPE_BY_CODE: Record<UpstreamErrorCode, ChatErrorInfo['type']> = {
   config_missing: 'api_key',
   insufficient_balance: 'general',
   rate_limit: 'rate_limit',
+  quota_exhausted: 'general',
   model_not_found: 'general',
   context_length: 'general',
   content_policy: 'general',

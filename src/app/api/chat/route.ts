@@ -14,7 +14,7 @@ import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { decrypt } from "@/lib/crypto"
 import { classifyUpstreamError, encodeUpstreamError } from "@/lib/error-catalog"
-import { getEffectiveModel, createProviderInstanceForEffectiveModel } from "@/lib/ai/registry"
+import { getEffectiveModel, getCappedPublicPoolModel, createProviderInstanceForEffectiveModel } from "@/lib/ai/registry"
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import { buildMemorySystemPrompt, getRelevantMemories, extractAndSaveMemories } from "@/lib/memory"
 import { buildGeneralProfileSection } from "@/lib/profile/injection"
@@ -126,6 +126,7 @@ import { sanitizeUploadName, readUploadAsDataUrl, sweepOrphanUploadsThrottled } 
 import { SCANNED_PDF_MIN_CHARS } from "@/lib/file-parser"
 import type { ModelDefinition } from "@/lib/ai/types"
 import { isEphemeralSession } from "@/lib/ephemeral"
+import { checkQuota, settleQuota, isQuotaBilledModel, getPublicPoolKey } from "@/lib/quota"
 import { monitor } from "@/lib/monitor"
 
 export const maxDuration = 120 // seconds。深度思考耗时较长,Vercel Pro 允许到 300
@@ -442,6 +443,9 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // Validate model (builtin or custom)
   let modelDef: ModelDefinition
   let apiKey: string | undefined
+  // 公共额度计费标记:本次请求是否走「服务端兜底 Key」的计费模型
+  // (见 lib/quota.ts 的 QUOTA_BILLED_MODEL_IDS)。决定请求前过额度闸、onFinish 结算
+  let usesServerBilledKey = false
   let provider: (modelId: string) => ReturnType<typeof createProviderInstanceForEffectiveModel>
   let realModelId = modelId // for builtin models same as input; for custom use modelId from DB
   // 自定义模型推理信息:是否勾选推理 + Base URL(决定 deepThink 时是否注入 reasoning_effort 档位)
@@ -481,6 +485,25 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
     // 用户级有效模型：内置预置（未被该用户隐藏）+ 用户添加的自定义模型（复用 provider Key）
     const builtinModelDef = await getEffectiveModel(userId, modelId)
     if (!builtinModelDef) {
+      // 甄别:公共门面模型预算触顶被隐藏时,给「额度用完」而非「不在可用列表」
+      // (选择器已隐藏,走到这的多是旧会话残留选中或并发窗口)
+      const capped = await getCappedPublicPoolModel(modelId).catch(() => null)
+      if (capped) {
+        console.warn(`[chat] MODEL_CAPPED: model=${modelId}, user=${userId}`)
+        monitor("chat_quota_denied", { reason: "model_capped", provider: modelId })
+        return new Response(
+          JSON.stringify({
+            error: encodeUpstreamError(
+              classifyUpstreamError(new Error(`「${capped.name}」的公共额度已用完`), {
+                code: "quota_exhausted",
+                status: 429,
+                fallbackDetail: "该模型的公共额度预算已用完，请换个模型",
+              })
+            ),
+          }),
+          { status: 429, headers: { "Content-Type": "application/json" } }
+        )
+      }
       console.error(`[chat] Unknown model: ${modelId}`)
       monitor("chat_upstream_error", { code: "model_not_found", stage: "precheck" })
       return new Response(
@@ -499,6 +522,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       )
     }
     modelDef = builtinModelDef
+    // 门面模型上游映射:「标准」引擎与 deepseek-flash 同款,发上游用真实模型 id
+    if (modelDef.upstreamId) realModelId = modelDef.upstreamId
 
     // Fetch and decrypt the user's API key for this provider
     const apiKeyRecord = await prisma.apiKey.findUnique({
@@ -512,7 +537,27 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
 
     // For Qwen/DashScope: fall back to environment variable API key if user hasn't configured one
     // This enables free-tier access without requiring users to manually configure API keys
-    if (!apiKeyRecord && modelDef.provider === "qianwen") {
+    if (modelDef.publicPool) {
+      // 公共池门面模型(DB 动态注册):一律服务端出钱 + 公共额度计费,即便用户自带
+      // 同厂 Key——门面档语义唯一,自带 Key 想省池子请选原厂模型
+      apiKey = (await getPublicPoolKey(modelDef.provider)) ?? undefined
+      if (!apiKey) {
+        console.error(`[chat] No public pool key configured for provider ${modelDef.provider} (user ${userId})`)
+        monitor("chat_upstream_error", { code: "config_missing", stage: "precheck", provider: modelDef.provider })
+        return new Response(
+          JSON.stringify({
+            error: encodeUpstreamError(
+              classifyUpstreamError(new Error(`公共池未配置 ${modelDef.provider} 的服务端 Key`), {
+                code: "config_missing",
+              })
+            ),
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        )
+      }
+      usesServerBilledKey = true
+      console.log(`[chat] Using public pool server key (provider=${modelDef.provider})`)
+    } else if (!apiKeyRecord && modelDef.provider === "qianwen") {
       apiKey = process.env.API_KEY_DASHSCOPE
       if (!apiKey) {
         console.error(`[chat] No DashScope API key configured for user ${userId}`)
@@ -529,6 +574,31 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
         )
       }
       console.log("[chat] Using DashScope env var API key for Qwen models")
+    } else if (
+      !apiKeyRecord &&
+      modelDef.provider === "deepseek" &&
+      isQuotaBilledModel(modelDef.id)
+    ) {
+      // DeepSeek 公共额度接入:服务端兜底 Key 只对计费名单内模型开放(当前仅
+      // deepseek-flash)。名单外的重型模型(如 deepseek-v4-pro,输出价约 3.4 倍)
+      // 落到下方 config_missing 引导用户自带 Key——堵「免费重型模型」漏洞
+      apiKey = process.env.API_KEY_DEEPSEEK
+      if (!apiKey) {
+        console.error(`[chat] No DeepSeek API key configured for user ${userId}`)
+        monitor("chat_upstream_error", { code: "config_missing", stage: "precheck", provider: "deepseek" })
+        return new Response(
+          JSON.stringify({
+            error: encodeUpstreamError(
+              classifyUpstreamError(new Error("服务端环境变量 API_KEY_DEEPSEEK 未配置"), {
+                code: "config_missing",
+              })
+            ),
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        )
+      }
+      usesServerBilledKey = true
+      console.log("[chat] Using DeepSeek env var API key (public quota billed)")
     } else if (!apiKeyRecord) {
       console.error(`[chat] No API key configured for ${modelDef.provider} for user ${userId}`)
       monitor("chat_upstream_error", { code: "config_missing", stage: "precheck", provider: modelDef.provider })
@@ -578,6 +648,33 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
           ),
         }),
         { status: 500, headers: { "Content-Type": "application/json" } }
+      )
+    }
+  }
+
+  // 公共额度闸:仅服务端兜底 Key 的计费模型请求过闸(自带 Key / 非计费模型直通)。
+  // 池空与个人超限都回 429,错误体走 error-catalog envelope,客户端按码出中文提示
+  let quotaBaseLimit: number | null = null // 结算处判定附加余额扣减用
+  if (usesServerBilledKey) {
+    const check = await checkQuota(userId, isEphemeral)
+    if (check.baseLimit) quotaBaseLimit = check.baseLimit
+    if (!check.ok) {
+      console.warn(`[chat] QUOTA_DENIED: reason=${check.reason}, user=${userId}, model=${modelId}`)
+      monitor("chat_quota_denied", { reason: check.reason, provider: "deepseek" })
+      return new Response(
+        JSON.stringify({
+          error: encodeUpstreamError(
+            classifyUpstreamError(new Error("公共额度已用完"), {
+              code: "quota_exhausted",
+              status: 429,
+              fallbackDetail:
+                check.reason === "pool_exhausted"
+                  ? "全站公共池已耗尽，等待每日自动补货"
+                  : "你今日的个人额度已用完，北京时间 0 点自动恢复",
+            })
+          ),
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
       )
     }
   }
@@ -1528,7 +1625,8 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
   // systemParts and received by the model via the `system` param instead.
   // Branch-summary system messages are mirrored into systemParts first so the
   // LLM actually sees the upstream context, then dropped from the messages
-  // array (the frontend still renders the summary card from DB metadata).
+  // array (the frontend never renders them — see MessageBubble's branch_summary
+  // early return; the copy lives in the DB only as the model's upstream).
   let branchSummaryInjected = 0
   const llmMessages = messages.filter((m) => {
     if (m.role !== "system") return true
@@ -1781,6 +1879,16 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
             await prisma.message.delete({ where: { id: draftMessageId } }).catch(() => {})
           }
         }
+        // 断流结算:生成中断时上游成本可能已发生,按快照内容估算入账;
+        // 连接没建立就失败时快照为空,settleQuota 对 0 token 自动跳过
+        if (usesServerBilledKey) {
+          await settleQuota({
+            userId,
+            modelId,
+            fallbackText: snapText + snapReasoning,
+            baseLimit: quotaBaseLimit,
+          })
+        }
         return
       }
 
@@ -1858,6 +1966,19 @@ const requestedMask = await getMaskById(body.maskId ?? null, userId)
       // A 流式恢复: 停止新快照并等在途快照完成,避免旧快照覆盖最终内容。
       snapStopped = true
       await snapChain
+
+      // 公共额度结算:按真实 usage 入账;上游没报数(少数 provider)时按最终
+      // 文本估算。重新生成不回补旧流水——上游成本真实发生。
+      if (usesServerBilledKey) {
+        await settleQuota({
+          userId,
+          modelId,
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          fallbackText: (text ?? "") + (reasoningText ?? ""),
+          baseLimit: quotaBaseLimit,
+        })
+      }
 
       try {
         // 工具调用明细随消息入库(前端历史回显工具卡片);极端大结果(>32KB)放弃入库防膨胀

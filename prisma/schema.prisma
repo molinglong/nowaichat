@@ -15,6 +15,9 @@ model User {
   /// 刻意不回退邮箱前缀——邮箱是登录凭据，不是用户希望被叫的名字
   nickname      String?
   passwordHash  String?
+  /// 角色:user=普通用户(默认);admin=管理员,可访问 /api/quota/admin 查看公共池与各用户用量。
+  /// API 一律按 DB 实时值验权(不信任 JWT),此字段仅作 UI 入口显隐
+  role          String    @default("user")
   image         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -149,7 +152,7 @@ model Conversation {
   replyLength   String?
   maskId        String?  // 面具 id:内置面具 id 来自 BUILTIN_MASKS(如 translator);将来用户自定义面具用 user:<cuid> 前缀. 为 null 时不启用面具
   /// 临时聊天标记:临时模式(访客密码登录)下创建的对话进入隔离区,
-  /// 正常模式列表不可见,设置→账号信息 的临时聊天专区可找回/转正/删除。
+  /// 正常模式列表不可见,设置→用户中心 的临时聊天专区可找回/转正/删除。
   /// 隔离由服务端按 session 模式强制执行
   isEphemeral   Boolean  @default(false)
   createdAt     DateTime @default(now())
@@ -750,4 +753,83 @@ model ClientDiagEvent {
   lastAt    DateTime @default(now())
 
   @@index([lastAt])
+}
+
+// ── 公共额度（内置模型「服务端出钱」调用的总闸与个人日限）─────────────────
+// 计费边界：仅覆盖走服务端环境变量兜底 Key 的内置模型(当前仅 deepseek-flash,
+// 见 lib/quota.ts 的 QUOTA_BILLED_MODEL_IDS)。用户自带 Key 的调用、custom: 模型、
+// 标题生成/记忆提取/上下文压缩等后台辅助调用一律不计费。
+// token 计数用 Int 而非 BigInt:JSON 序列化 BigInt 会抛 TypeError,且 21 亿
+// token 上限对本项目规模绰绰有余。
+model QuotaPool {
+  id                          String   @id @default("global")
+  totalTokens                 Int // 累计注入额度;充值 = 对它做增量
+  usedTokens                  Int      @default(0) // 累计消耗;允许越过 total(结算不做条件闸,超支幅度=并发窗口,闸在请求前)
+  dailyRefillTokens           Int      @default(0) // 每日惰性补货量,0=不补;读到 dayKey 非当天时一次性加上并翻页,无需 cron
+  dayKey                      String // 北京时间 yyyy-MM-dd,补货翻页锚点
+  perUserDailyTokens          Int // 正式用户个人日限
+  ephemeralPerUserDailyTokens Int // 临时访客(访客密码登录)个人日限,低档防借号刷穿
+  updatedAt                   DateTime @updatedAt
+}
+
+// 计费流水:一次请求一行,结算时追加。个人日限按 userId+dayKey 聚合本表;
+// 重新生成/断流重试不做回补——上游成本真实发生了。刻意不与 Message 表挂钩:
+// 消息会归档删除,账不能跟着删。
+model QuotaLedger {
+  id        String   @id @default(cuid())
+  userId    String
+  dayKey    String // 北京时间 yyyy-MM-dd
+  tokens    Int
+  kind      String // chat(聊天真实消耗) | redeem(激活码到账,附加余额+) | bonus_spend(日限触顶后烧的附加余额,跨天存续)
+  model     String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, dayKey])
+}
+
+// 激活码：管理员在 设置→公共额度 里批量生成,用户兑换后到账「附加余额」——跨天存续,
+// 基础日限烧完后自动继续烧余额,用完为止。code 明文存(低价值凭证,泄露可停用);
+// 余额只由 ledger 的 redeem/bonus_spend 流水推导,删码不影响已到账额度。
+model QuotaRedeemCode {
+  code       String    @id // 码本身,如 ACH-7K2P9XQM(去易混淆字符)
+  tokens     Int // 面值:兑换到账的附加余额 tokens
+  note       String    @default("") // 批次备注
+  enabled    Boolean   @default(true)
+  redeemedBy String? // 兑换人 userId
+  redeemedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+// 注册码：注册为邀请制,必须持管理员生成的注册码才能建号(防脚本批量注册烧池)。
+// 一码一用,usedBy/usedAt 记占用;code 明文存(低价值凭证,泄露可停用)。
+model RegisterCode {
+  code      String    @id // 码本身,如 REG-7K2P9XQM
+  note      String    @default("") // 批次备注
+  enabled   Boolean   @default(true)
+  usedBy    String? // 注册人 userId
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// 公共池门面模型（管理员在 设置→公共额度 里增删）：对所有人可见、一律服务端出钱 +
+// 公共额度计费。原静态「标准」已迁入本表（迁移种子行）；能力（上下文窗/视觉等）
+// 在读取时从 upstreamId 指向的内置定义继承，本表只存门面语义。
+model PublicPoolModel {
+  id         String   @id // 门面模型 id：选择器/账本用；发上游时映射到 upstreamId
+  name       String // 选择器显示名
+  provider   String   // 服务商 id（须在内置 provider 注册表内）
+  upstreamId String   // 上游真实模型 id（须为该 provider 的内置模型）
+  weight    Float    @default(1) // 计费倍率：落账 tokens×weight（1=与「标准」flash 同口径），管理卡可改
+  capTokens Int      @default(0) // 全站累计消耗预算：Σchat 落账（×倍率后）达到即停运+用户端隐藏，0=不限；管理员改大即恢复
+  enabled   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// 公共池服务端 Key（按 provider 一把）：门面模型发上游时从这里取（服务端出钱的主体）。
+// deepseek 无 DB 行时回退环境变量 API_KEY_DEEPSEEK。API 出参一律掩码（只露尾 4 位）。
+model PublicPoolKey {
+  provider  String   @id
+  apiKey    String
+  updatedAt DateTime @updatedAt
 }

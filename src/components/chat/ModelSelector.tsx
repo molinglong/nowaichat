@@ -173,7 +173,7 @@ export function ModelSelector({
   const { favorites, recent, all } = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     const isVisible = (m: ModelDefinition) =>
-      (configuredProviders.has(m.provider) || m.provider === 'custom') &&
+      (configuredProviders.has(m.provider) || m.provider === 'custom' || m.publicPool === true) &&
       (!q ||
         m.name.toLowerCase().includes(q) ||
         (PROVIDER_NAMES[m.provider] || m.provider).toLowerCase().includes(q))
@@ -537,6 +537,11 @@ const ModelRow = memo(function ModelRow({
             {PROVIDER_NAMES[model.provider] || model.provider} · {formatContext(model.contextWindow)} 上下文
             {model.tier === 'legacy' && ' · 旧版'}
           </span>
+          {model.publicPool && (
+            <span className="inline-flex items-center h-[14px] px-1 rounded bg-accent-soft text-content-secondary text-[9px] leading-none shrink-0">
+              公共额度
+            </span>
+          )}
           {model.supportsReasoning && (
             <span className="inline-flex items-center justify-center w-[14px] h-[14px] rounded bg-accent-soft text-content-secondary shrink-0">
               <Zap className="w-2 h-2" />

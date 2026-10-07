@@ -107,6 +107,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             email: user.email,
             name: user.name,
             image: user.image,
+            role: user.role,
           }
         }
 
@@ -122,6 +123,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             email: user.email,
             name: user.name,
             image: user.image,
+            role: user.role,
             ephemeral: true,
           }
         }
@@ -136,6 +138,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         token.id = user.id
         token.sub = user.id  // explicitly set sub for reliability
+        // 角色入 JWT:仅供设置页 UI 显隐;服务端 API 验权一律按 DB 实时值
+        token.role = user.role
         // 临时模式标记:访客密码登录产生;同时把临时会话有效期压到 12h
         token.ephemeral = (user as { ephemeral?: boolean }).ephemeral === true
         if (token.ephemeral) {
@@ -157,6 +161,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!userId || !session.user) return session
 
       session.user.id = userId
+      if (token.role) session.user.role = token.role
       // 透出临时模式标记:服务端 API 隔离与前端 UI 均以此为准
       session.ephemeral = token.ephemeral === true
       if (typeof token.sessionEndsAt === 'number') {

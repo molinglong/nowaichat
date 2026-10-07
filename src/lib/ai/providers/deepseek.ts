@@ -44,6 +44,8 @@ export const deepseekProvider: ProviderDefinition = {
     // chat/reasoner 的非思考/思考分家已并入本模型,思考改由请求参数 thinking 控制
     // (默认 enabled),服务端按 deepThink 开关注入 providerOptions(见 chat 路由)。
     { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", provider: "deepseek", contextWindow: 1000000, supportsVision: true, supportsFiles: false, supportsReasoning: true },
+    // 公共池门面模型已迁入 DB(PublicPoolModel 表,迁移种子含「标准」→flash 引擎),
+    // 管理员在 设置→公共额度 增删;此处不再静态注册,避免与 DB 行双源漂移
     // V4-Pro: 复杂推理/大型任务用,输出价格约为 Flash 的 3.4 倍,不支持图像理解。
     { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", provider: "deepseek", contextWindow: 1000000, supportsVision: false, supportsFiles: false, supportsReasoning: true },
   ],

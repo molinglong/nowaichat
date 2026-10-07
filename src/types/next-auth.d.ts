@@ -10,11 +10,13 @@ declare module "next-auth" {
     ephemeral?: boolean
     /** 临时会话的真实过期时间(毫秒时间戳);仅 ephemeral 会话有值,供剩余时长展示 */
     sessionEndsAt?: number
-    user?: DefaultSession["user"] & { id?: string }
+    user?: DefaultSession["user"] & { id?: string; role?: string }
   }
 
   interface User {
     ephemeral?: boolean
+    /** 管理员标记:authorize 从 DB 带出;仅作 UI 显隐,API 验权一律查 DB */
+    role?: string
   }
 }
 
@@ -24,5 +26,6 @@ declare module "next-auth/jwt" {
     /** 临时会话过期时间(毫秒),透出到 Session.sessionEndsAt */
     sessionEndsAt?: number
     id?: string
+    role?: string
   }
 }
