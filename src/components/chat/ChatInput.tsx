@@ -13,7 +13,6 @@ import { MaskPickerMenu } from './MaskPickerMenu'
 import { McpToolMenu } from './McpToolMenu'
 import { MiniSwitch } from '@/components/settings/MiniSwitch'
 import { ActivityHeatmap } from './ActivityHeatmap'
-import { RecentChats } from './RecentChats'
 import type { MaskDTO } from '@/lib/ai/mask-types'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
 import { useMaskMenuMaxHeight } from '@/hooks/useMaskMenuMaxHeight'
@@ -1104,8 +1103,8 @@ export function ChatInput({
           <div className="hidden md:block mt-3">
             <ActivityHeatmap />
           </div>
-          {/* 最近对话快捷区: 仅手机端欢迎页,最多 3 条,点击直达会话 */}
-          <RecentChats />
+          {/* 「最近对话」快捷区已于 2026-10-07 应用户要求整体下线(同 WelcomeCarousel/BottomDock 口径:
+              只撤 UI 不删组件,RelativeTime 仍被 MobileDrawer 引用;要回挂在原位重新 import 渲染即可) */}
         </div>
       </div>
     )
@@ -1204,14 +1203,14 @@ export function ChatInput({
           // 方案 C 手机端:与欢迎页同款单行胶囊(圆角拉满 + 白玻璃 + 柔投影)
           // base 是 flex-col,手机端必须显式改回 row,否则 flex-wrap 会横向开新列
           'max-md:flex max-md:flex-row max-md:flex-wrap max-md:items-end max-md:gap-1 max-md:p-1.5 max-md:pl-4',
-          // 手机端贴边后底角圆弧与屏幕缘脱相:底部两角切直角(dock 入底边),顶部保留胶囊弧
-          'max-md:rounded-full max-md:rounded-b-none max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
+          // 2026-10-07 用户定案:底部两角改回圆角(推翻 10-06 直角版),四角完整胶囊弧
+          'max-md:rounded-full max-md:border-white/55 max-md:bg-surface/85 max-md:glass-blur',
           // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .pill 定稿改主题线色
           'dark:max-md:border-line/90',
           'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
           // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
-          // (只收上两角——写 rounded-3xl 会被 cn 的 tailwind-merge 判为覆盖 rounded-b-none,底角又圆回去)
-          mobileCard && 'max-md:rounded-t-3xl'
+          // (写 rounded-3xl 会被 cn 的 tailwind-merge 判为覆盖 rounded-full,四角一起收,正合此形态)
+          mobileCard && 'max-md:rounded-3xl'
         )}
       >
           {mobileFileUploadHost}

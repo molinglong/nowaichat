@@ -11,8 +11,8 @@ import { cn } from '@/lib/utils'
  *
  * - 欢迎页/功能页:左 = ☰ 抽屉,右 = ⚙ 设置
  * - 会话页(/chat/c/*):左 = ← 返回欢迎页,左二 = ☰ 抽屉,右 = ⚙ 设置
- * - 设计稿参数:40px 圆、rgb(28 28 30/.36) 底 + blur(14px)、白 1px 半透明描边;
- *   亮壁纸上看不清的白玻璃已按原型定稿改深色半透明
+ * - 设计稿参数:40px 圆、浅色页 = 白 72% 玻璃 + 墨 8% 描边 + 墨图标(2026-10-07 换色定案),
+ *   暗色回落 rgb(28 28 30/.36) + 白图标;
  * - z-30:压过页面内容与 TopFade(z-10),低于全屏抽屉(z-50)与设置弹窗(z-100)
  */
 export function MobileFloatButtons() {
@@ -23,12 +23,16 @@ export function MobileFloatButtons() {
 
   const isConversation = !!pathname?.startsWith('/chat/c/')
 
+  // 2026-10-07 换色定案:浅色页上原「深 36% 玻璃」渲染成脏灰,改白玻璃+墨图标(与输入胶囊同族材质);
+  // 暗色页白玻璃刺眼,回落回原深玻璃。只换配色,40px/结构/位置一律未动
   const btnBase =
-    'flex items-center justify-center w-10 h-10 rounded-full border border-white/35 ' +
-    'text-white shadow-[0_2px_12px_rgb(0_0_0_/_0.18)] transition-transform duration-150 ' +
+    'flex items-center justify-center w-10 h-10 rounded-full border ' +
+    'border-[rgba(29,29,31,0.08)] bg-[rgba(255,255,255,0.72)] text-content-primary ' +
+    'shadow-[0_2px_12px_rgb(0_0_0_/_0.10)] ' +
+    'dark:border-white/35 dark:bg-[rgb(28_28_30_/_0.36)] dark:text-white ' +
+    'transition-transform duration-150 ' +
     'active:scale-90 touch-manipulation'
   const btnStyle: React.CSSProperties = {
-    background: 'rgb(28 28 30 / 0.36)',
     WebkitBackdropFilter: 'blur(14px)',
     backdropFilter: 'blur(14px)',
     WebkitTapHighlightColor: 'transparent',
