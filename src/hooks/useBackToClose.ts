@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 
 /**
  * 让系统/浏览器「返回」先关浮层，而不是整页 goBack。
@@ -19,18 +20,30 @@ import { useEffect, useRef } from 'react'
  * 停在哨兵A 上，用户下一次按返回是「空响一声」哪也去不了
  * （tmp-check-back-stack.cjs 的 D1/D3 就是把这条量出来的）。
  * 共一条哨兵后，交接只是组成员变化，历史深度不动。
+ *
+ * 浮层内导航必须走 navigate()（真机事故，2026-10-07）：历史行点击原来是
+ * close()+router.push()，抽屉一关就 armPop，其 back() 抢在 Next 的 RSC 导航写入
+ * 历史之前弹掉哨兵，popstate 把在途导航一并取消 —— 表现为「点历史对话没反应」
+ * （探针实测：back() 在 39ms 触发，此后全程无 pushState）。
+ * navigate() 立 navigatingAway 旗标让 armPop 跳过 back()，并用 replace 原地改写
+ * 哨兵条目，落点历史栈与桌面端 push 后一致（返回键从目标页直接回上一层，
+ * 不会撞上哨兵空响）。
  */
 
 const SENTINEL = 'aichattOverlayBackToken'
 
 // 在架浮层的 id，底→顶。顶层 = 返回键该关的那一个。
 const open: number[] = []
-// id → 关闭回调（popstate 时只调最上层那个）
-const closers = new Map<number, () => void>()
+// id → 关闭回调（popstate 时只调最上层那个）。回调返回 false = 这次返回已被浮层
+// 内部消化(弹掉自己的一层内部页,浮层仍开着),监听器要重新入组+补哨兵。
+const closers = new Map<number, () => void | false>()
 let seq = 0
 
 // 全局一个 popstate 监听：按实例各挂各的会出现「一次返回关掉两层」。
 let listenerInstalled = false
+
+// 「浮层里正在跳走」：路由 replace 接管了哨兵条目，armPop 收尾时不许再 back()。
+let navigatingAway = false
 
 const currentToken = (): number | null => {
   const t = (typeof history !== 'undefined' ? (history.state as Record<string, unknown> | null) : null)?.[SENTINEL]
@@ -56,7 +69,15 @@ const installListener = () => {
     open.pop()
     const fn = closers.get(id)
     closers.delete(id)
-    fn?.()
+    const handled = fn?.()
+    if (handled === false && fn) {
+      // 浮层内部消化了这次返回(弹掉自己的一层内部页,如设置 二级→一级,浮层仍开着):
+      // 重新入组并补一条哨兵,下一次返回继续先落在本浮层,而不是穿透成页面导航。
+      open.push(id)
+      closers.set(id, fn)
+      writeSentinel(++seq, true)
+      return
+    }
     // 组里还剩下层浮层 → 补一条哨兵，返回键继续有得弹。
     if (open.length > 0) writeSentinel(++seq, true)
   })
@@ -69,19 +90,40 @@ function armPop() {
   popArmed = true
   setTimeout(() => {
     if (!popArmed) return
-    // 交接：又有浮层进组了 → 这条哨兵归它们，不收。
-    if (open.length > 0) {
-      popArmed = false
+    popArmed = false
+    // 正在跳走：条目已由路由 replace 接管，back() 会连在途导航一起取消。
+    // 旗标先于 open.length 判断消费 —— 浮层交接时它同样已失效，
+    // 留着会在下一次合法收尾时误吞一次 back()（返回键空响）。
+    if (navigatingAway) {
+      navigatingAway = false
       return
     }
-    popArmed = false
+    // 交接：又有浮层进组了 → 这条哨兵归它们，不收。
+    if (open.length > 0) return
     if (currentToken() !== null) history.back()
   }, 0)
 }
 
-export function useBackToClose(openNow: boolean, close: () => void) {
+/**
+ * close 返回 false = 这次返回被浮层内部消化(弹掉自己的一层内部页),浮层保持
+ * 注册并补哨兵;返回 undefined/void = 浮层真的关了,按原语义出组。
+ */
+export function useBackToClose(openNow: boolean, close: () => void | false) {
   const closeRef = useRef(close)
   closeRef.current = close
+  const router = useRouter()
+
+  // 浮层内导航统一出口：先立旗标 → 再关浮层（随后的 armPop 只清旗不 back()）→
+  // replace 原地改写哨兵条目。桌面端无此 hook，仍走自己的 router.push，行为不变。
+  const navigate = useCallback(
+    (url: string) => {
+      // 只有组里有哨兵才会触发 armPop 收尾；没有就别立旗，防旗标滞留到下个浮层
+      if (open.length > 0) navigatingAway = true
+      closeRef.current()
+      router.replace(url)
+    },
+    [router]
+  )
 
   useEffect(() => {
     if (!openNow || typeof window === 'undefined') return
@@ -109,4 +151,6 @@ export function useBackToClose(openNow: boolean, close: () => void) {
       if (open.length === 0) armPop()
     }
   }, [openNow])
+
+  return { navigate }
 }

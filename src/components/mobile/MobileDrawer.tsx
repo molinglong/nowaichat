@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { X, ChevronRight, Search } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQuery, type InfiniteData } from '@tanstack/react-query'
@@ -73,8 +73,7 @@ export function MobileDrawer() {
   const setSettingsOpen = useChatStore((s) => s.setSettingsOpen)
   const setSettingsSection = useChatStore((s) => s.setSettingsSection)
   const conversationVersion = useChatStore((s) => s.conversationVersion)
-  const router = useRouter()
-  const { items: navItems, isEphemeral } = usePageNav()
+  const pathname = usePathname()
   const { data: session } = useSession()
   const isMobile = useIsMobileViewport()
 
@@ -125,7 +124,12 @@ export function MobileDrawer() {
   }, [open, setSidebarOpen])
 
   // 系统/浏览器「返回」先收抽屉:抽屉不占路由,而壳内返回键固定走 WebView goBack
-  useBackToClose(isMobile && open, () => setSidebarOpen(false))
+  const { navigate: navClose } = useBackToClose(isMobile && open, () => setSidebarOpen(false))
+
+  // 抽屉内导航一律走 navClose(replace + 抑制 armPop 收尾的 history.back):
+  // 旧 push 版本里收尾的 back() 抢在在途导航落历史之前弹掉哨兵,把导航一并取消——
+  // 真机「点历史对话没反应」事故。导航项注入后 handleGo/handleChat 内部也走同一路径。
+  const { items: navItems, isEphemeral } = usePageNav({ navigate: navClose })
 
   // 会话历史:与 Sidebar 同 queryKey 共享缓存(bump 版本联动刷新),无额外请求
   const {
@@ -168,6 +172,9 @@ export function MobileDrawer() {
   const user = session?.user
 
   const close = () => setSidebarOpen(false)
+
+  // 正打开的会话:点自己这一条只收抽屉(同 URL replace 不动历史,白跑一次导航)
+  const currentConvId = pathname?.startsWith('/chat/c/') ? pathname.slice('/chat/c/'.length) : null
 
   // 级联入场延迟(与原型一致 0.02 起步逐项递增)
   const d = (i: number) => ({ ['--d' as string]: `${i}s` }) as React.CSSProperties
@@ -253,7 +260,10 @@ export function MobileDrawer() {
                     return (
                       <button
                         key={conv.id}
-                        onClick={() => { close(); router.push(`/chat/c/${conv.id}`) }}
+                        onClick={() => {
+                          if (conv.id === currentConvId) { close(); return }
+                          navClose(`/chat/c/${conv.id}`)
+                        }}
                         className="mdr-st flex w-full items-center gap-2.5 py-2 text-left active:opacity-70 transition-opacity touch-manipulation"
                         /* 首屏条目走级联入场;续载进来的(第 2 页起)不再延迟,
                            否则触底后要空等 0.5s 才露面 */
@@ -309,8 +319,7 @@ export function MobileDrawer() {
         onClose={() => setSearchOpen(false)}
         onSelect={(id) => {
           setSearchOpen(false)
-          close()
-          router.push(`/chat/c/${id}`)
+          navClose(`/chat/c/${id}`)
         }}
       />
     </>

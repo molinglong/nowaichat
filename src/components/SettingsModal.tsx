@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen, Gauge, Ticket, Gift } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen, Gauge, Ticket, Gift, Smartphone } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import {
@@ -501,7 +501,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens' | 'quota' | 'redeem' | 'regcodes'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'mobileapp' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens' | 'quota' | 'redeem' | 'regcodes'
 
 type NavItem = { id: SectionId; label: string; icon: typeof Key; adminOnly?: boolean }
 type NavGroup = { title: string; items: NavItem[] }
@@ -539,6 +539,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'general', label: '通用', icon: Settings2 },
       { id: 'help', label: '帮助', icon: HelpCircle },
+      { id: 'mobileapp', label: '手机客户端', icon: Smartphone },
       { id: 'about', label: '关于', icon: Info },
     ],
   },
@@ -569,7 +570,8 @@ const EPHEMERAL_NAV_GROUPS: NavGroup[] = [
     .filter((g) => g.title === '应用')
     .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'help') })),
 ]
-const EPHEMERAL_SAFE_SECTIONS = new Set<SectionId>(['overview', 'session', 'general', 'about'])
+// 「手机客户端」访客也留:没登录的人正是最可能想装 App 的那批
+const EPHEMERAL_SAFE_SECTIONS = new Set<SectionId>(['overview', 'session', 'general', 'mobileapp', 'about'])
 
 // 单个侧边栏项:macOS 风格左侧 3px accent 指示条 + 极淡背景
 function NavButton({
@@ -1039,6 +1041,29 @@ export function SettingsModal({
     // 用 inTauri(桌面专属)会把手机端这两项藏掉,设置里根本调不了。
     const inShell = useIsTauriShell()
 
+    // 安卓安装包清单:nginx /apk/ 与站点同源(见 scripts/android-publish.ps1),
+    // 取到才在「手机客户端」分区显示版本号与包体大小,取不到就退化成「重试」。
+    const [apkManifest, setApkManifest] = useState<{ version: string; url: string; size: number } | null>(null)
+    const [apkLoading, setApkLoading] = useState(false)
+    const loadApkManifest = useCallback(() => {
+      setApkLoading(true)
+      fetch('/apk/latest.json')
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((j: Record<string, unknown>) =>
+          setApkManifest({
+            version: String(j.version ?? ''),
+            url: String(j.url ?? ''),
+            size: Number(j.size) || 0,
+          })
+        )
+        .catch(() => setApkManifest(null))
+        .finally(() => setApkLoading(false))
+    }, [])
+    useEffect(() => {
+      if (inShell) return
+      loadApkManifest()
+    }, [inShell, loadApkManifest])
+
     // 回复完成系统通知开关:仅桌面端有意义(依赖系统通知能力),偏好存 localStorage(默认开)
     const [notifyOnReply, setNotifyOnReplyState] = useState(true)
     useEffect(() => {
@@ -1227,6 +1252,13 @@ export function SettingsModal({
   // 管理员入口显隐依据 JWT role(登录时固化);服务端 API 一律按 DB 实时值验权,
   // 所以 role 变更/老会话需要重新登录才看到入口,不会出现「看到入口但接口放行」的错配
   const isAdmin = session?.user?.role === 'admin'
+
+  // 导航行统一显隐口径:管理组按 role,「手机客户端」按端 —— 桌面壳自己就是客户端,
+  // 安卓壳另有 UpdateBanner 走应用内更新,两处壳里放一个"下载 APK"入口只会误导。
+  const navItemVisible = useCallback(
+    (item: NavItem) => (!item.adminOnly || isAdmin) && !(item.id === 'mobileapp' && inShell),
+    [isAdmin, inShell]
+  )
 
   // ── 临时会话管理:剩余时间 / 清空本会话对话 / 退出登录 ──
   const [sessionRemaining, setSessionRemaining] = useState<string | null>(null)
@@ -1820,20 +1852,8 @@ export function SettingsModal({
     else setClosePending(true)
   }, [isDesktop, setSettingsOpen])
 
-  // 系统/浏览器「返回」先关本浮层:设置页不占路由、不产生历史条目,
-  // 而安卓壳的返回键被 wry 固定处理成 WebView goBack(实测「设置→返回」掉回 /login)。
-  // forceOpen 是桌面独立子窗口形态,整页就是设置本身,不参与历史栈。
-  useBackToClose(settingsOpen && !forceOpen, requestClose)
-
-  // Close on Escape(桌面即时关,移动端走滑出动画)
-  useEffect(() => {
-    if (!settingsOpen) return
-    function handleEscape(e: KeyboardEvent) {
-      if (e.key === 'Escape') requestClose()
-    }
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
-  }, [settingsOpen, requestClose])
+  // 系统/浏览器「返回」与 Escape 的智能出栈接线在下方 closeMobilePicker 定义之后:
+  // 二级/三级要先逐级弹回,一级才整层关闭(旧实现无条件 requestClose,二级按返回直接掉回聊天页)。
   const { onCardPointerDown, onCardPointerMove, onCardPointerUp, onCardPointerCancel, recenter } = useWindowDrag({
     cardRef,
     // 独立子窗口模式禁用卡片内拖拽：拖动改由标题条 data-tauri-drag-region 走原生窗口层
@@ -2584,6 +2604,35 @@ export function SettingsModal({
     }, 300)
   }, [])
 
+  // 系统/浏览器「返回」智能出栈(2026-10-08 用户报障:二级页按返回直接掉回聊天页):
+  // 三级单选页 → 回二级;二级详情 → 回一级;一级才整层关闭。
+  // 返回 false 告诉 useBackToClose「浮层仍开着」,由它重新入组+补哨兵,下次返回继续先落这里。
+  // 内层状态只在移动端真实呈现(md 隐藏分支),桌面(含深链误置的 mobileInDetail)直接整层关。
+  // forceOpen 是桌面独立子窗口形态,整页就是设置本身,不参与历史栈,照旧不注册。
+  const smartBack = useCallback((): false | void => {
+    if (!isDesktop && mobilePicker) {
+      closeMobilePicker()
+      return false
+    }
+    if (!isDesktop && mobileInDetail) {
+      setMobileInDetail(false)
+      return false
+    }
+    requestClose()
+  }, [isDesktop, mobilePicker, mobileInDetail, closeMobilePicker, requestClose])
+  useBackToClose(settingsOpen && !forceOpen, smartBack)
+
+  // Escape 与返回键同语义:有内层先弹内层,一级才关(桌面无内层状态,行为不变)。
+  // 位置约束:必须在 `if (!settingsOpen) return null` 之前,且引用的 closeMobilePicker 已定义。
+  useEffect(() => {
+    if (!settingsOpen) return
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') smartBack()
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [settingsOpen, smartBack])
+
   if (!settingsOpen) return null
 
   const configured = providers.filter((p) => keys.some((k) => k.provider === p.id))
@@ -2604,6 +2653,7 @@ export function SettingsModal({
     clarify: clarifyEnabled ? '开' : '关',
     localfiles: inTauri ? (localFilesEnabled ? '开' : '关') : '仅桌面端',
     general: [themeLabel, getStylePresetLabel(conversationStylePreset)].filter(Boolean).join(' · '),
+    mobileapp: apkManifest?.version ? `v${apkManifest.version}` : undefined,
     account: profile?.nickname || profile?.name || profile?.email || undefined,
     session: ephCount != null ? `${ephCount} 段` : undefined,
   }
@@ -2938,7 +2988,7 @@ export function SettingsModal({
                         {group.title}
                       </div>
                       <div className="flex md:flex-col gap-0.5 md:space-y-px">
-                        {group.items.filter((i) => !i.adminOnly || isAdmin).map((item) => (
+                        {group.items.filter(navItemVisible).map((item) => (
                           <NavButton
                             key={item.id}
                             item={item}
@@ -3013,7 +3063,7 @@ export function SettingsModal({
               </div>
             </div>
             {(isEphemeral ? EPHEMERAL_NAV_GROUPS.filter((g) => g.title !== '会话') : NAV_GROUPS)
-              .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'account' && (!i.adminOnly || isAdmin)) }))
+              .map((g) => ({ ...g, items: g.items.filter((i) => i.id !== 'account' && navItemVisible(i)) }))
               .filter((g) => g.items.length)
               .map((group) => (
               <div key={group.title} className="pt-4">
@@ -3376,20 +3426,6 @@ export function SettingsModal({
                   </div>
                 </div>
 
-                {/* 危险区隔离(方案 C .gcard.danger):手机端退出登录从问候行挪到列表末尾整行居中,
-                    拇指热区不再有一击即登出的按钮(登出无二次确认,重进还要输密码) */}
-                {session?.user && (
-                  <div className="md:hidden rounded-2xl border border-red-500/25 bg-surface/60 overflow-hidden">
-                    <button
-                      onClick={handleSignOut}
-                      className="w-full min-h-[50px] flex items-center justify-center gap-1.5 text-[13px] font-semibold text-red-500 active:bg-red-50/60 dark:active:bg-red-950/30 transition-colors"
-                      style={{ WebkitTapHighlightColor: 'transparent' }}
-                    >
-                      <LogOut className="w-4 h-4" />
-                      退出登录
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -5121,6 +5157,22 @@ export function SettingsModal({
                         </button>
                       </div>
                     </div>
+
+                    {/* 危险区隔离:手机端退出登录挂账号页末尾整行居中(2026-10-08 自总览底部迁入——
+                        10-05 改版后手机端到不了总览,安卓壳又没有侧栏用户菜单,导致无任何登出入口)。
+                        登出无二次确认,重进还要输密码;桌面有侧栏用户菜单,md:hidden 保持桌面零改动 */}
+                    {session?.user && (
+                      <div className="md:hidden rounded-2xl border border-red-500/25 bg-surface/60 overflow-hidden">
+                        <button
+                          onClick={handleSignOut}
+                          className="w-full min-h-[50px] flex items-center justify-center gap-1.5 text-[13px] font-semibold text-red-500 active:bg-red-50/60 dark:active:bg-red-950/30 transition-colors"
+                          style={{ WebkitTapHighlightColor: 'transparent' }}
+                        >
+                          <LogOut className="w-4 h-4" />
+                          退出登录
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -6259,6 +6311,73 @@ export function SettingsModal({
                         })}
                       </ul>
                     </div>
+                  </div>
+                )}
+
+                {/* 手机客户端:仅浏览器 web 出现(桌面壳/安卓壳被 navItemVisible 藏掉) */}
+                {activeSection === 'mobileapp' && (
+                  <div className="space-y-2.5">
+                    <p className="text-xs text-content-secondary text-left leading-relaxed">
+                      安卓客户端把本站打包成 App,界面、账号与会话数据与网页完全一致。
+                    </p>
+
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-content-primary">
+                          <Smartphone className="w-4 h-4" />
+                        </span>
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="truncate text-xs font-medium text-content-primary">aichatt · Android</p>
+                          <p className="truncate text-[11px] text-content-muted">
+                            {apkManifest?.version
+                              ? `v${apkManifest.version}${apkManifest.size ? ` · ${(apkManifest.size / 1048576).toFixed(0)} MB` : ''}`
+                              : apkLoading
+                                ? '正在获取版本信息…'
+                                : '暂未取到版本信息'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={loadApkManifest}
+                          disabled={apkLoading}
+                          aria-label="刷新版本信息"
+                          className="shrink-0 rounded-md p-1.5 text-content-muted hover:text-content-primary hover:bg-surface-subtle/60 transition-colors disabled:opacity-40"
+                        >
+                          <RefreshCw className={cn('w-3.5 h-3.5', apkLoading && 'animate-spin')} />
+                        </button>
+                      </div>
+
+                      {apkManifest?.url ? (
+                        <a
+                          href={apkManifest.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                          className="flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-medium bg-accent text-accent-foreground hover:bg-accent-hover active:scale-[0.98] transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          下载 APK
+                        </a>
+                      ) : (
+                        <p className="text-[11px] text-content-muted text-left leading-relaxed">
+                          没取到安装包清单(/apk/latest.json),可能发布尚未完成。点右侧刷新按钮重试。
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 text-left">
+                      <p className="text-xs text-content-secondary">安装步骤</p>
+                      <ol className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-content-muted">
+                        <li>1. 建议直接用手机浏览器打开本页下载,省掉传文件这一步。</li>
+                        <li>2. 下载完点开安装包;首次会要求允许「安装未知应用」,在弹窗里授予即可。</li>
+                        <li>3. 覆盖安装保留登录态与本地设置,无需先卸载旧版。</li>
+                        <li>4. 装上后 App 会自己检查新版本,更新不必再回这里下载。</li>
+                      </ol>
+                    </div>
+
+                    <p className="text-[11px] text-content-muted/80 text-left leading-relaxed">
+                      iOS 暂无客户端安装包,可用 Safari 的「添加到主屏幕」获得近似体验。
+                    </p>
                   </div>
                 )}
 

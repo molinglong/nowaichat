@@ -27,7 +27,7 @@ export function useStartNewChat() {
   const router = useRouter()
   const pathname = usePathname()
 
-  return useCallback(() => {
+  return useCallback((opts?: { navigate?: (href: string) => void }) => {
     const store = useChatStore.getState()
     store.setCurrentConversationId(null)
     store.setConversationTitle(null)
@@ -38,7 +38,9 @@ export function useStartNewChat() {
     // 抛错会中断 onClick 链,让按钮彻底无响应 —— 那正是本函数要消灭的症状
     store.bumpNewChatNonce?.()
     if (pathname !== '/chat') {
-      router.push('/chat')
+      // 浮层内（移动抽屉）由调用方注入 replace 流程；其余场景保持 push
+      if (opts?.navigate) opts.navigate('/chat')
+      else router.push('/chat')
     }
   }, [router, pathname])
 }

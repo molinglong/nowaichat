@@ -34,13 +34,27 @@ export interface PageNavItem {
   warm: () => void
 }
 
-export function usePageNav(): { items: PageNavItem[]; isEphemeral: boolean } {
+export function usePageNav(opts?: {
+  /** 浮层内导航注入（移动抽屉）：浮层里点导航必须走它的 replace 流程，
+   *  否则抽屉关 → armPop 的 back() 会在途取消导航（详见 useBackToClose） */
+  navigate?: (href: string) => void
+}): { items: PageNavItem[]; isEphemeral: boolean } {
   const { data: session } = useSession()
   const isEphemeral = session?.ephemeral === true
   const router = useRouter()
   const pathname = usePathname()
   const queryClient = useQueryClient()
   const startNewChat = useStartNewChat()
+  const injectedNavigate = opts?.navigate
+
+  // 导航出口：桌面（无注入）保持 router.push；浮层内交给注入的 replace 流程
+  const go = useCallback(
+    (path: string) => {
+      if (injectedNavigate) injectedNavigate(path)
+      else router.push(path)
+    },
+    [injectedNavigate, router]
+  )
 
   // 导航过渡状态：点击立刻设上，导航完成（pathname 更新）清掉
   const [pendingTab, setPendingTab] = useState<PageNavKey | null>(null)
@@ -59,18 +73,18 @@ export function usePageNav(): { items: PageNavItem[]; isEphemeral: boolean } {
   // 「聊天」：非 /chat 时给高亮过渡反馈；已在 /chat 时 nonce 重置本身立即生效
   const handleChat = useCallback(() => {
     if (pathname !== '/chat') setPendingTab('chat')
-    startNewChat()
-  }, [pathname, startNewChat])
+    startNewChat(injectedNavigate ? { navigate: injectedNavigate } : undefined)
+  }, [pathname, startNewChat, injectedNavigate])
 
   const handleGo = useCallback(
     (key: PageNavKey, path: string, warm?: TabKey) => {
       if (pathname?.startsWith(path)) return
-      // 在 router.push 之前预热 — 点按瞬间就开始拉数据
+      // 在导航之前预热 — 点按瞬间就开始拉数据
       if (warm) prefetchTabData(queryClient, warm)
       setPendingTab(key)
-      router.push(path)
+      go(path)
     },
-    [pathname, queryClient, router]
+    [pathname, queryClient, go]
   )
 
   const isImagesPage = pathname?.startsWith('/images')
