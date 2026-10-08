@@ -75,6 +75,8 @@ Copy-Item -Recurse "$ProjectRoot\public" "$stage\public" -Force
 foreach ($skip in @("fonts-subset", "fonts", "uploads")) {
     Remove-Item -Recurse -Force "$stage\public\$skip" -ErrorAction SilentlyContinue
 }
+# 临时截图目录(tmp-shots-*)不进生产包——组装是整目录并入, 不剔会白传(2026-10-08 包虚胖70MB实测)
+Remove-Item -Recurse -Force "$stage\public\tmp-*" -ErrorAction SilentlyContinue
 # 排除 win32 原生 sharp（Linux 容器用不上; 若代码开始 import sharp 需改为在容器内重装）
 $imgDir = "$stage\node_modules\@img"
 if (Test-Path $imgDir) { Remove-Item -Recurse -Force $imgDir; Write-Host "已排除 node_modules\@img (win32 sharp)" }
