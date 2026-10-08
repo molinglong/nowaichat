@@ -412,7 +412,7 @@ export function MessageList({
 
   const pendingPlaceholder =
     isPending && messages.length > 0 && messages[messages.length - 1].role === 'user' ? (
-      <div className="flex gap-2.5 px-4 max-md:px-2 py-2" aria-hidden>
+      <div className="flex gap-2.5 px-4 max-md:px-[15px] py-2" aria-hidden>
         <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5 max-md:hidden">
           <Bot className="w-3 h-3" />
         </div>

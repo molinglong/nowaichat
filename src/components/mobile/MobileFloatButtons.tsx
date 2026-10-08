@@ -40,7 +40,7 @@ export function MobileFloatButtons() {
 
   return (
     // fixed(不是 absolute):基线要按视口顶算,才能与抽屉头部(fixed inset-0)落在同一条线,
-    // 不吃 app-frame 的 pt-[var(--sat)] 与 shell 1px 边框,免得安全区被算两遍。
+    // 不吃 main 的 max-md:pt-[var(--sat)] 与 shell 1px 边框,免得安全区被算两遍。
     <div
       className="md:hidden pointer-events-none fixed inset-x-0 z-30"
       style={{ top: 'var(--m-chrome-top)' }}
