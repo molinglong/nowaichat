@@ -93,6 +93,65 @@ async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>):
   return tauriInvoke<T>(cmd, args)
 }
 
+/**
+ * 安卓壳专用 invoke:与上面 invoke 的门控相反(只认安卓,排除桌面与浏览器)。
+ * 桌面/浏览器调用一律返回 null,永不发命令。
+ */
+async function androidInvoke<T = unknown>(
+  cmd: string,
+  args?: Record<string, unknown>
+): Promise<T | null> {
+  if (!isAndroidTauriShell()) return null
+  const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
+  return tauriInvoke<T>(cmd, args)
+}
+
+/** 安卓壳事件监听:非安卓环境返回空清理函数,监听失败静默降级 */
+function listenAndroidEvent(event: string, handler: (payload: unknown) => void): () => void {
+  if (!isAndroidTauriShell()) return () => {}
+  let cleanup: (() => void) | null = null
+  ;(async () => {
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      cleanup = await listen(event, (e) => handler(e.payload))
+    } catch (err) {
+      console.error(`[tauri] listen ${event} failed:`, err)
+    }
+  })()
+  return () => {
+    cleanup?.()
+  }
+}
+
+/** updater_check 返回的更新信息(与 Rust UpdateInfo 字段对齐,serde camelCase) */
+export interface AppUpdateInfo {
+  version: string
+  notes: string
+  size: number
+  /** update.apk 已完整落盘,可直接唤起安装器 */
+  downloaded: boolean
+}
+
+/** 用户点「忽略此版本」记录的版本号 localStorage key */
+const UPDATE_IGNORED_KEY = 'app:updateIgnoredVersion'
+
+export function getUpdateIgnoredVersion(): string | null {
+  try {
+    return localStorage.getItem(UPDATE_IGNORED_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setUpdateIgnoredVersion(version: string | null) {
+  try {
+    if (version === null) localStorage.removeItem(UPDATE_IGNORED_KEY)
+    else localStorage.setItem(UPDATE_IGNORED_KEY, version)
+  } catch {
+    // ignore
+  }
+}
+
 /** 回复完成通知开关 localStorage key('0'=关,缺省开) */
 const NOTIFY_ON_REPLY_KEY = 'chat:notifyOnReply'
 
@@ -307,6 +366,63 @@ export const tauri = {
     } catch (err) {
       console.error('[tauri] cancelReplyReminder failed:', err)
     }
+  },
+
+  /**
+   * 应用内自更新三件套(仅安卓壳,见 updater.rs)。
+   * 旧 APK 上命令不存在 → invoke 抛错,一律吞掉返回 null/false:
+   * 横幅在旧版上必须永远安静,所以错误不上报只打日志。
+   */
+  async updateCheck(): Promise<AppUpdateInfo | null> {
+    try {
+      return await androidInvoke<AppUpdateInfo | null>('updater_check')
+    } catch (err) {
+      console.error('[tauri] updater_check failed:', err)
+      return null
+    }
+  },
+
+  /** 启动后台下载;已完整落盘时 Rust 直接推 updater://done */
+  async updateDownload(): Promise<boolean> {
+    try {
+      await androidInvoke('updater_download')
+      return true
+    } catch (err) {
+      console.error('[tauri] updater_download failed:', err)
+      return false
+    }
+  },
+
+  /**
+   * 唤起系统安装器。成功返回 null;失败返回 Rust 侧原文(含被回收的 Java 异常 toString),
+   * 由横幅直接显示——真机没有控制台,错误必须上屏。
+   */
+  async updateInstall(): Promise<string | null> {
+    try {
+      await androidInvoke('updater_install')
+      return null
+    } catch (err) {
+      console.error('[tauri] updater_install failed:', err)
+      return err instanceof Error ? err.message : String(err)
+    }
+  },
+
+  /** 下载进度 updater://progress {received,total}(Rust 侧 200ms 节流) */
+  onUpdateProgress(handler: (received: number, total: number) => void): () => void {
+    return listenAndroidEvent('updater://progress', (payload) => {
+      const p = payload as { received: number; total: number }
+      handler(p.received, p.total)
+    })
+  },
+
+  /** 下载完成 updater://done */
+  onUpdateDone(handler: () => void): () => void {
+    return listenAndroidEvent('updater://done', handler)
+  },
+
+  /** 下载失败 updater://error(负载为错误文案),半截包已被 Rust 侧删除 */
+  onUpdateError(handler: (message: string) => void): () => void {
+    return listenAndroidEvent('updater://error', (payload) => handler(String(payload)))
   },
 }
 

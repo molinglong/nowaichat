@@ -8,6 +8,7 @@ import { ContextMenuHost } from '@/components/ui/ContextMenu'
 import { ConfirmDialogHost } from '@/components/ui/ConfirmDialog'
 import { WelcomeWallpaperLayer } from '@/components/WelcomeWallpaperLayer'
 import { MobileFloatButtons } from '@/components/mobile/MobileFloatButtons'
+import { UpdateBanner } from '@/components/mobile/UpdateBanner'
 import { MobileDrawer } from '@/components/mobile/MobileDrawer'
 
 /**
@@ -32,10 +33,13 @@ export default async function AppLayout({
     redirect('/login')
   }
 
-  // pt-[var(--sat)]: PWA 全屏模式下顶部让出刘海/灵动岛安全区(浏览器内为 0);md 起恢复统一 6px 内边距
+  // 安全区让位从 app-frame 下移到 <main>(2026-10-07 灰条修复):让位带此前由 frame 的
+  // pt-[var(--sat)] 呈现,露出的是 frame 自己的 bg-surface-muted 灰(#F5F5F7/#262628)——
+  // 状态栏灰条即它。移到 main 后,让位带由 app-shell-column(bg-surface 白 / 壁纸)呈现,
+  // 顶部与页面同色。仅 ≤md 让位:md:p-1.5 本就盖过 sat,桌面端零变化。
   // 内容列 relative:承接桌面端浮动工具簇(TopBar ≥md 分支)
   return (
-    <div className="app-frame h-screen bg-surface-muted p-0 pt-[var(--sat)] md:p-1.5 overflow-hidden">
+    <div className="app-frame h-screen bg-surface-muted p-0 md:p-1.5 overflow-hidden">
       {/* app-shell 加 relative isolate: 为 shell 层壁纸(.welcome-wallpaper, z-index:-1)
           提供定位锚点并收拢层叠上下文,保证壁纸压在 shell 底色上、垫在所有面板下。
           底色用 muted 不用 surface: shell 只在浮动侧栏的四周缝隙露出来,取灰不取白,
@@ -51,7 +55,11 @@ export default async function AppLayout({
           {/* 方案 C 手机端(≤md):悬浮圆钮(返回/抽屉/设置)+ 全屏大字导航抽屉。
               BottomDock 已随方案 C 撤下,导航统一走抽屉(组件保留可随时回挂) */}
           <MobileFloatButtons />
-          <main className="flex-1 overflow-hidden">
+          {/* 应用内自更新横幅(仅安卓壳渲染;启动静默检查,有新版才浮出) */}
+          <UpdateBanner />
+          {/* max-md:pt-[var(--sat)]:手机端让位带在 main 内,背景随内容列(白/壁纸);
+              桌面 md 档由 app-frame 的 p-1.5 承担,此处不生效 */}
+          <main className="flex-1 overflow-hidden max-md:pt-[var(--sat)]">
             {children}
           </main>
         </div>

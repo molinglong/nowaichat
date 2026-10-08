@@ -69,6 +69,17 @@ const nextConfig = {
       },
     ]
   },
+  async rewrites() {
+    // 仅本地 dev:把 /apk/* 代理到线上,让设置页「手机客户端」卡片在开发时读到真实版本与包体大小。
+    // 线上由 nginx `location /apk/` 直接发文件,请求根本不经 Next,故生产构建不注册此规则。
+    if (process.env.NODE_ENV !== 'development') return [];
+    return [
+      {
+        source: '/apk/:path*',
+        destination: 'https://chat.yuban.icu/apk/:path*',
+      },
+    ];
+  },
   webpack: (config, { isServer, nextRuntime }) => {
     // Handle node: protocol imports that Prisma v7 uses
     config.externals.push(({ request }, callback) => {

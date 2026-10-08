@@ -57,6 +57,9 @@
     "allow-lf-exists",
     "allow-lf-reveal",
     "allow-lf-undo",
-    "allow-lf-exec"
+    "allow-lf-exec",
+    "allow-updater-check",
+    "allow-updater-download",
+    "allow-updater-install"
   ]
 }

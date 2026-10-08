@@ -9,6 +9,12 @@ mod window_cmds;
 #[cfg(desktop)]
 use window_cmds::*;
 
+// 应用内自更新(仅安卓):检查 VPS 清单 → 下载 APK → FileProvider 唤起系统安装器
+#[cfg(target_os = "android")]
+mod updater;
+#[cfg(target_os = "android")]
+use updater::*;
+
 
 // ============ AI 本地文件能力(工作区沙箱) ============
 //
@@ -1140,6 +1146,19 @@ pub fn run() {
         // 搭子窗口(悬浮球)暂时禁用:安卓适配期移动端不支持多窗口,桌面端一并下线。
         // 恢复:取消下方注释块,并在 tauri.conf.json 的 app.windows 中加回 buddy 窗口配置。
         .setup(|app| {
+            // 安卓真机没有控制台:panic 文本必须落文件才有证据出口
+            // (run-as com.aichatt.app cat cache/panic.log)。
+            #[cfg(target_os = "android")]
+            if let Ok(dir) = app.path().app_cache_dir() {
+                let log = dir.join("panic.log");
+                std::panic::set_hook(Box::new(move |info| {
+                    use std::io::Write;
+                    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log) {
+                        let _ = writeln!(f, "{info}");
+                    }
+                }));
+            }
+
             // 强制创建搭子窗口（无论 enabled 与否,先创建好）
             // if app.get_webview_window("buddy").is_none() {
             //     if let Err(e) = tauri::WebviewWindowBuilder::new(
@@ -1222,7 +1241,7 @@ pub fn run() {
             lf_read_full_file,
         ]);
 
-    // 安卓壳:只注册本地文件桥命令,桌面窗口控制不参与编译
+    // 安卓壳:本地文件桥命令 + 应用内自更新,桌面窗口控制不参与编译
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         lf_set_base,
@@ -1240,6 +1259,9 @@ pub fn run() {
         lf_overview,
         lf_search,
         lf_read_full_file,
+        updater_check,
+        updater_download,
+        updater_install,
     ]);
 
     builder

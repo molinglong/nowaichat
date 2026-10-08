@@ -173,5 +173,7 @@ export const config = {
   // 被 307 成 HTML 会渲染成破图。
   // uploads 的安全头(X-Content-Type-Options/CSP sandbox)由 next.config.mjs headers() 独立提供,
   // 文件名 nanoid(12)/分片 hash 不可枚举,未登录直访风险可控
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|brand|fonts|manifest.json|icons|wallpaper).*)"],
+  // apk(APK 安装包清单/产物)只在本地 dev 由 next.config.mjs 的 dev-only rewrite 代理到线上;
+  // 线上由 nginx 的 location /apk/ 直接吐文件,请求根本到不了 Next,故排除无鉴权面变化。
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|uploads|brand|fonts|manifest.json|icons|wallpaper|apk).*)"],
 }

@@ -33,6 +33,12 @@ image = "0.25"
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 trash = "5"
 
+# 应用内自更新仅安卓实现:HTTP 下载 + semver 比对 + JNI 唤起系统安装器
+[target.'cfg(target_os = "android")'.dependencies]
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+semver = "1"
+jni = "0.21"
+
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
