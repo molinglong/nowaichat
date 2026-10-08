@@ -21,6 +21,11 @@ const VIEWPORT_MARGIN = 8
  * 不触发关闭(同 MessageBubble 复制菜单的外点保护模式)。
  */
 const OPEN_GRACE_MS = 50
+/**
+ * 触屏专用宽限期:菜单是"手指抬起后"才弹的,紧随的惯性微滚与长按补发的合成
+ * mousedown/click 都在抬手瞬间到达,不能算"用户放弃菜单"(手机真机报"菜单一闪就没")。
+ */
+const TOUCH_CLOSE_GRACE_MS = 350
 
 /**
  * 触屏设备(手机/纯平板,pointer:coarse 为主指针)判定:
@@ -196,11 +201,12 @@ export function ContextMenuHost() {
   useEffect(() => {
     if (!open) return
     const openedAt = Date.now()
+    const closeGraceMs = isTouchPrimary() ? TOUCH_CLOSE_GRACE_MS : OPEN_GRACE_MS
     const isInsideMenu = (target: EventTarget | null) =>
       !!menuRef.current && menuRef.current.contains(target as Node)
 
     function onDocMouseDown(e: MouseEvent) {
-      if (Date.now() - openedAt < OPEN_GRACE_MS) return
+      if (Date.now() - openedAt < closeGraceMs) return
       if (!isInsideMenu(e.target)) closeContextMenu()
     }
     function onDocContextMenu(e: MouseEvent) {
@@ -209,7 +215,7 @@ export function ContextMenuHost() {
         e.preventDefault()
         return
       }
-      if (Date.now() - openedAt < OPEN_GRACE_MS) return
+      if (Date.now() - openedAt < closeGraceMs) return
       // 菜单外再次右键:关掉自己,让浏览器默认菜单(或场景方重开)接管
       closeContextMenu()
     }
@@ -219,6 +225,7 @@ export function ContextMenuHost() {
     function onDocScroll(e: Event) {
       // 菜单内部滚动(长菜单 overflow-y-auto)不关闭
       if (e.target instanceof Node && isInsideMenu(e.target)) return
+      if (Date.now() - openedAt < closeGraceMs) return
       closeContextMenu()
     }
     function onResize() {

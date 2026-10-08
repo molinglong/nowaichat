@@ -78,6 +78,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json" },
     },
+    {
+      // 手机端长按菜单用例:复用 admin 会话,需读剪贴板断言复制内容
+      name: "mobile-smoke",
+      testMatch: /mobile-longpress\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json", permissions: ["clipboard-read", "clipboard-write"] },
+    },
   ],
   webServer: {
     command: "npm run dev",
