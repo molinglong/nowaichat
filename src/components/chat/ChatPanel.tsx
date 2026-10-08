@@ -1374,9 +1374,22 @@ export function ChatPanel({
   // 附件会挂到上一条消息上(或无消息可挂),当轮气泡永远看不到附件卡片。
   const pendingAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
 
+  // 装填快照: pending 装填那一刻已存在的 user 消息 id 集合。挂载 effect 只消费
+  // "装填之后新进列的 user 消息"。编辑重答链路 setMessages(截断) 与 AI SDK 乐观消息
+  // push 分属两次 commit:截断那一帧的最后一条 user 是旧消息,旧判据会把它误当目标
+  // (已带附件→提前清空 pending / 未带→挂错消息),当轮气泡丢图、刷新才回填
+  // (2026-10-08 浏览器实测:编辑会话第二条带图消息必丢图,编辑首条不丢)。
+  const armedUserIdsRef = useRef<Set<string> | null>(null)
+  const armPendingAttachments = useCallback((atts: Attachment[] | undefined) => {
+    pendingAttachmentsRef.current = atts && atts.length > 0 ? atts : undefined
+    armedUserIdsRef.current =
+      atts && atts.length > 0
+        ? new Set(messagesRef.current.filter((m) => m.role === 'user').map((m) => m.id))
+        : null
+  }, [])
+
   // 消费判据用 messages 闭包直接读,不靠 setMessages 更新器里的标记:更新器在 React 18 可能延后执行。
-  // 只在真正挂到最后一条 user 消息时才清空 —— 编辑重答链路先 setMessages(截断,此时一条 user 都没有)
-  // 再 sendMessage,无条件清空会在截断那一帧把附件吃掉,当轮气泡看不到图(库内有,刷新才回填)。
+  // 只在"装填后新出现的最后一条 user 消息"上挂载时才清空;旧消息帧(编辑截断那一帧)直接跳过。
   useEffect(() => {
     const atts = pendingAttachmentsRef.current
     if (!atts || atts.length === 0) return
@@ -1388,9 +1401,12 @@ export function ChatPanel({
       }
     }
     if (idx === -1) return
+    // 装填前就存在的旧 user 消息:不是本次目标,既不挂载也不消费,等真正的新消息进列
+    if (armedUserIdsRef.current?.has(messages[idx].id)) return
     if ((messages[idx] as { attachments?: Attachment[] }).attachments) {
       // 该条已带附件(上一轮已挂或服务端回填),不再覆盖
       pendingAttachmentsRef.current = undefined
+      armedUserIdsRef.current = null
       return
     }
     setMessages((prev) => {
@@ -1404,6 +1420,7 @@ export function ChatPanel({
       return next
     })
     pendingAttachmentsRef.current = undefined
+    armedUserIdsRef.current = null
   }, [messages, setMessages])
 
   // 欢迎页壁纸激活态同步给 shell(WelcomeWallpaperLayer 据此显隐,侧栏/内容列随之变玻璃):
@@ -1425,9 +1442,8 @@ export function ChatPanel({
         return
       }
       attachmentsRef.current = attachments
-      // 新发送无条件覆盖:上面 effect 改为"没挂上就保留",这里负责让陈旧待注入项不污染下一轮
-      pendingAttachmentsRef.current =
-        attachments && attachments.length > 0 ? attachments : undefined
+      // 新发送无条件覆盖:这里负责让陈旧待注入项不污染下一轮(含装填快照)
+      armPendingAttachments(attachments)
       // 工作区快照:桌面端发送前确保新鲜(TTL 内复用缓存,过期/失效才重建,fire-and-forget
       // 不阻塞发送;本次 getter 读到的可能是上一次快照,注入段已向模型声明"可能滞后")
       if (inTauri) void ensureWorkspaceSnapshot()
@@ -1449,7 +1465,7 @@ export function ChatPanel({
       // 保留本次值: 下一次发送由上方赋值覆盖(无附件时为 undefined);
       // regenerate 时 getter 仍返回本次附件,服务端注入到最后一条 user 消息,行为正确。
     },
-    [sendMessage, inTauri, bumpConversationVersion]
+    [sendMessage, inTauri, bumpConversationVersion, armPendingAttachments]
   )
 
   // local_file 决策:卡片上用户点「批准」→ 按动作执行(delete=移入回收站;
@@ -1911,17 +1927,18 @@ export function ChatPanel({
       // 无附件必须清空残留,否则上一轮的图会挂进本轮(与 handleReanswerFrom 同款)
       if (oldAtts && oldAtts.length > 0) {
         attachmentsRef.current = oldAtts
-        pendingAttachmentsRef.current = oldAtts
+        armPendingAttachments(oldAtts)
       } else {
         attachmentsRef.current = undefined
         pendingAttachmentsRef.current = undefined
+        armedUserIdsRef.current = null
       }
 
       // C 分支轻量版: 新消息带 editedFrom 指向被编辑消息(真实数据库 id),服务端落库后
       // MessageBubble 据此显示"查看历史版本"回看入口
       sendMessage({ text: newText, metadata: { editedFrom: editedFromId } })
     },
-    [setMessages, sendMessage]
+    [setMessages, sendMessage, armPendingAttachments]
   )
 
   const errorInfo = useMemo(
