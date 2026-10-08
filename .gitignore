@@ -129,3 +129,8 @@ logs/
 # 大纲页改版设计稿与模型选择器预览稿(临时比对物,不入库)
 design/
 /model-selector-preview.html
+# adb 取证与镜像试验残留(2026-10-08 卫生追加:tmp-* 不匹配点开头目录)
+/.tmp-apk-probe/
+/.tmp-strip-fix/
+logcat-install.txt
+ui-dump.xml
