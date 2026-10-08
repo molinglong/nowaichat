@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>aichatt</title>
 <style>
-  /* 中性灰极简 + 点阵背景,与欢迎页规范一致;无玻璃拟态 */
+  /* 中性灰极简 + 点阵背景,与欢迎页规范一致;无玻璃拟态。
+     2026-10-08 方案B「描线绘制」:等待态只显示 logo(「八」两笔按笔顺描出,红点弹跳落位,
+     文字字距收拢浮现);连不上时才浮现错误文案 + 重试。动效只用 transform/opacity。 */
   :root {
     --bg: #f5f5f7;
     --dot: #d8d8dc;
@@ -14,6 +16,7 @@
     --line: #d2d2d7;
     --btn-bg: #ffffff;
     --btn-hover: #f0f0f2;
+    --accent: #e5484d;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -25,8 +28,6 @@
       --btn-bg: #2c2c2e;
       --btn-hover: #3a3a3c;
     }
-    .mark.mark-light { display: none; }
-    .mark.mark-dark { display: block; }
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -35,14 +36,20 @@
     align-items: center;
     justify-content: center;
     background-color: var(--bg);
-    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-    background-size: 24px 24px;
-    font-family: -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif;
     color: var(--ink);
+    font-family: -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif;
     -webkit-user-select: none;
     user-select: none;
+    overflow: hidden;
+  }
+  .dots {
+    position: absolute;
+    inset: -30px;
+    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
   .panel {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -50,34 +57,19 @@
     text-align: center;
     padding: 0 32px;
   }
-  /* 品牌锁标: 标记 + 文字; 深色下换反白图(红点保持原色,不用 filter 反相) */
-  .lockup { display: flex; align-items: center; gap: 11px; }
-  .mark { width: 30px; height: auto; display: block; }
-  .mark-dark { display: none; }
+  /* 品牌锁标: 内联 SVG「八」+ 文字。描线/弹跳初始隐藏态只写在动效媒体查询内,
+     降级(reduced-motion)下天然呈现终态,不会留下画不出来的空白 logo。 */
+  .lockup { display: flex; align-items: center; gap: 13px; }
+  .drawmark { width: 40px; height: 31px; display: block; color: var(--ink); }
   .logo {
     font-size: 28px;
     font-weight: 600;
     letter-spacing: -0.5px;
   }
-  .status {
-    font-size: 13px;
-    color: var(--ink-secondary);
-    min-height: 18px;
-  }
-  .status::after {
-    content: '';
-    animation: dots 1.2s steps(4, end) infinite;
-  }
-  @keyframes dots {
-    0% { content: ''; }
-    25% { content: '·'; }
-    50% { content: '··'; }
-    75% { content: '···'; }
-  }
-  .status.error { color: var(--ink-secondary); }
-  .status.error::after { content: ''; animation: none; }
+  /* 错误态(等待态不显示任何文字):文案 + 重试按钮 */
+  .status, button, .hint { display: none; }
+  .status { font-size: 13px; color: var(--ink-secondary); min-height: 18px; }
   button {
-    display: none;
     padding: 8px 28px;
     font-size: 13px;
     color: var(--ink);
@@ -89,21 +81,53 @@
   }
   button:hover { background: var(--btn-hover); }
   button:focus-visible { outline: 2px solid var(--ink-secondary); outline-offset: 2px; }
-  .hint {
-    font-size: 11px;
-    color: var(--ink-secondary);
-    opacity: 0.7;
+  .hint { font-size: 11px; color: var(--ink-secondary); opacity: 0.7; }
+  body.error .status, body.error button, body.error .hint { display: block; }
+  /* 退场拍(探测成功后整体微放大淡出,衔接远端 320ms 淡入) */
+  body.leaving .panel { animation: out 300ms ease forwards; }
+  body.leaving .dots { animation: dots-out 300ms ease forwards; }
+  @keyframes out { to { opacity: 0; transform: scale(1.04); } }
+  @keyframes dots-out { to { opacity: 0; } }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .dots { animation: dots-in 700ms cubic-bezier(.22,.9,.28,1) both; }
+    @keyframes dots-in { from { opacity: 0; transform: scale(1.1); } to { opacity: 1; transform: scale(1); } }
+    .s1, .s2 { stroke-dasharray: 1; stroke-dashoffset: 1; }
+    .s1 { animation: draw 480ms ease-out 120ms forwards; }
+    .s2 { animation: draw 480ms ease-out 320ms forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    .rdot {
+      transform: scale(0);
+      transform-origin: center;
+      transform-box: fill-box;
+      animation: pop 300ms cubic-bezier(.34,1.7,.64,1) 760ms forwards;
+    }
+    @keyframes pop { to { transform: scale(1); } }
+    .logo { animation: word 520ms cubic-bezier(.22,.9,.28,1) 640ms both; }
+    @keyframes word {
+      from { opacity: 0; letter-spacing: 5px; transform: translateX(-6px); }
+      to { opacity: 1; letter-spacing: -0.5px; transform: none; }
+    }
+    /* 错误态浮现(描线早已播完,只淡入文字) */
+    body.error .status { animation: fade-up 300ms ease both; }
+    body.error button { animation: fade-up 300ms ease 80ms both; }
+    body.error .hint { animation: fade-up 300ms ease 160ms both; }
+    @keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   }
 </style>
 </head>
 <body>
+  <div class="dots"></div>
   <div class="panel">
     <div class="lockup">
-      <img class="mark mark-light" src="./mark.png" alt="">
-      <img class="mark mark-dark" src="./mark-invert.png" alt="">
+      <svg class="drawmark" viewBox="0 0 128 98" fill="none" aria-hidden="true">
+        <path class="s1" d="M60 6 C46 32 28 60 8 90" stroke="currentColor" stroke-width="14" stroke-linecap="round" pathLength="1"/>
+        <path class="s2" d="M68 24 C80 46 98 70 120 90" stroke="currentColor" stroke-width="14" stroke-linecap="round" pathLength="1"/>
+        <circle class="rdot" cx="86" cy="12" r="8" fill="var(--accent)"/>
+      </svg>
       <div class="logo">aichatt</div>
     </div>
-    <div class="status" id="status">正在连接服务器</div>
+    <div class="status" id="status">无法连接服务器</div>
     <button id="retry" type="button">重试</button>
     <div class="hint" id="hint"></div>
   </div>
@@ -111,11 +135,15 @@
   <script>
     // 探测原理:no-cors 模式下 fetch 只在网络层失败时 reject(DNS/连接不通),
     // 服务器返回任何状态码(含 503)都会 resolve opaque 响应 —— 足以判断"能不能连上"。
+    // 三拍衔接:入场动画与探测并行互不等待;探测秒回也先播完最短入场闸(MIN_IN),
+    // 再补一拍退场(EXIT)才整窗跳转,消除"闪一下硬切";远端有 320ms 淡入接住。
     var ORIGIN = window.AICHATT_ORIGIN
-    var statusEl = document.getElementById('status')
     var retryBtn = document.getElementById('retry')
     var hintEl = document.getElementById('hint')
     var probing = false
+    var t0 = 0
+    var MIN_IN = 1150
+    var EXIT = 300
 
     function probe() {
       return fetch(ORIGIN + '/', {
@@ -125,28 +153,31 @@
       }).then(function () { return true }).catch(function () { return false })
     }
 
-    function showWaiting(text) {
-      probing = true
-      retryBtn.style.display = 'none'
-      hintEl.textContent = ''
-      statusEl.classList.remove('error')
-      statusEl.textContent = text || '正在连接服务器'
-    }
-
     function showError() {
       probing = false
-      statusEl.classList.add('error')
-      statusEl.textContent = '无法连接服务器'
-      retryBtn.style.display = 'block'
+      document.body.classList.remove('leaving')
+      document.body.classList.add('error')
       hintEl.textContent = '请检查网络后重试'
     }
 
+    function leave() {
+      document.body.classList.remove('error')
+      document.body.classList.add('leaving')
+      setTimeout(function () { location.replace(ORIGIN + '/') }, EXIT)
+    }
+
     function run() {
-      showWaiting('正在连接服务器')
+      probing = true
+      t0 = performance.now()
+      document.body.classList.remove('error')
+      document.body.classList.remove('leaving')
+      hintEl.textContent = ''
       probe().then(function (ok) {
+        if (!probing) return // 重试后旧探测迟到回执,忽略
         if (ok) {
-          // 整窗跳转到远程站点(与 Web 完全同源,cookie/CORS 无感)
-          location.replace(ORIGIN + '/')
+          // 探测比入场快时补足入场闸;探测慢时直接进入退场
+          var wait = Math.max(0, MIN_IN - (performance.now() - t0))
+          setTimeout(leave, wait)
         } else {
           showError()
         }
