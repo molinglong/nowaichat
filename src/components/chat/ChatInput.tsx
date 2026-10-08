@@ -212,14 +212,18 @@ export function ChatInput({
     return () => window.removeEventListener(INPUT_INSERT_EVENT, onInsert)
   }, [])
 
-  // Auto-resize textarea (standard/welcome 自适应卡片共用;welcome 上限 164 ≈6 行)
+  // Auto-resize textarea (standard/welcome 自适应卡片共用)
+  // 手机端高度一律由内容决定(半屏编辑器除外):原来 min(scrollHeight,164) 在真机字体
+  // 度量下会比内容少几 px,配 overflow-y:auto 就露出滚动条拇指(D3)。卡态改 hidden,
+  // 高度不再被 164 截断,升半屏由 mobileLong 判据接管
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current
     if (!textarea) return
     textarea.style.height = 'auto'
-    if (isMobileViewport && longTextMode) {
-      // 半屏编辑器:高度取 min(55vh, 464px),不再受 164px 单行胶囊上限约束
-      textarea.style.height = `${Math.round(Math.min(window.innerHeight * 0.55, 464))}px`
+    if (isMobileViewport) {
+      textarea.style.height = longTextMode
+        ? `${Math.round(Math.min(window.innerHeight * 0.55, 464))}px`
+        : `${textarea.scrollHeight}px`
       return
     }
     textarea.style.height = `${Math.min(textarea.scrollHeight, variant === 'welcome' ? 164 : 200)}px`
@@ -633,13 +637,18 @@ export function ChatInput({
     </>
   )
   // 手机端输入形态(桌面恒为 false,DOM 与类名不随之变化):
-  //   mobileCard —— 超过 2 行或挂了附件:圆角从 9999 收回 24px 卡片档,避免高胶囊拉成 stadium
+  //   mobileCard —— 有内容(正文非空或挂了附件):方角卡片 + 正文独行 + 钮沉底
   //   mobileLong —— 超过 6 行:出现「收起/展开 + 计数」行(半屏编辑器的判据)
-  //   mobileWide —— 半屏展开中或长文:正文整行独占,⋯ + 发送 换到底部
+  //   mobileWide —— 半屏展开中或长文:高度交给视口,正文可滚动
+  //   mobileStack —— 卡片态与半屏态共用的「正文独占整行」布局开关
   // 必须声明在 toolPills 之前:toolPills 的 JSX 求值时就引用了这些标志
-  const mobileCard = isMobileViewport && (mobileLines > 2 || attachments.length > 0)
+  // 2026-10-08 真机多行改版定案(预览页里的「零抖动」那条;注意本文件另一处"方案 C"
+  // 是 10-06 悬浮胶囊改版的旧代号,与本次无关):原门槛 mobileLines > 2 让第 2 行停在
+  // 9999 圆角的胖胶囊上(D1)。换挡改到 0→1 次,打字全程不再变形;代价由用户点名接受
+  const mobileCard = isMobileViewport && (!!input.trim() || attachments.length > 0)
   const mobileLong = isMobileViewport && mobileLines > 6
   const mobileWide = longTextMode || mobileLong
+  const mobileStack = mobileCard || mobileWide
 
   const toolPills = (
     <>
@@ -760,7 +769,7 @@ export function ChatInput({
             {/* ⋯ 更多工具(收纳菜单): 桌面=对比模式;手机=附件/面具/模型/深度思考/搜索/MCP/对比。
                 手机端弹层要贴输入卡右缘,故 max-md:static 撤掉自身定位锚点;
                 手机端恒显(它是唯一工具入口),桌面仅当有「对比模式」项时出现 */}
-            <div className={cn('relative shrink-0 max-md:static', !hasCompareEntry && 'hidden max-md:block', mobileWide && 'max-md:ml-auto')}>
+            <div className={cn('relative shrink-0 max-md:static', !hasCompareEntry && 'hidden max-md:block', mobileStack && 'max-md:ml-auto')}>
               <button
                 onClick={() => setMoreMenuOpen((v) => !v)}
                 className={cn(iconBtnBase, moreMenuOpen ? pillActive : pillIdle)}
@@ -982,7 +991,7 @@ export function ChatInput({
               // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .pill 定稿改主题线色
               'dark:max-md:border-line/90',
               'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
-              // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
+              // 手机端有内容即卡片:圆角从 9999 收回 24px,单行胶囊只留给空态
               mobileCard && 'max-md:rounded-3xl'
             )}
           >
@@ -1047,14 +1056,16 @@ export function ChatInput({
                 'block w-full bg-transparent text-base sm:text-sm text-content-primary placeholder:text-content-muted',
                 'resize-none focus:outline-none border-0 m-0 px-4 pt-3 pb-1 overflow-y-auto disabled:opacity-50',
                 'max-md:flex-1 max-md:min-w-0 max-md:px-1.5 max-md:py-2 max-md:text-[15px] max-md:pb-2',
-                // 手机端长文:正文整行独占,⋯ + 发送 换到底部一行
-                mobileWide && 'max-md:w-full max-md:basis-full'
+                // 手机端卡片态:正文整行独占,⋯ + 发送 换到底部一行
+                mobileStack && 'max-md:w-full max-md:basis-full',
+                // 卡态高度=内容高,绝不允许滚动条;只有半屏编辑器内容可溢,才开滚动
+                mobileStack && !mobileWide && 'max-md:overflow-hidden'
               )}
               style={{
                 // 手机端单行胶囊内收严到 36px(见 globals.css --m-ta-min),桌面保持 44px
                 minHeight: 'var(--m-ta-min, 44px)',
-                // 半屏编辑器接管高度时解除 164px 上限(height 由 adjustHeight 按视口写入)
-                maxHeight: isMobileViewport && longTextMode ? 'none' : '164px',
+                // 手机端高度全权交给 adjustHeight,164px 上限只留桌面
+                maxHeight: isMobileViewport ? 'none' : '164px',
                 lineHeight: '24px',
               }}
             />
@@ -1208,7 +1219,7 @@ export function ChatInput({
           // 暗色下白描边 55% 过曝成亮圈:按原型 body.dark .pill 定稿改主题线色
           'dark:max-md:border-line/90',
           'max-md:shadow-[0_8px_26px_rgb(0_0_0_/_0.14)]',
-          // 手机端多行:圆角从 9999 收回 24px 卡片档,否则高胶囊会拉成胖椭圆
+          // 手机端有内容即卡片:圆角从 9999 收回 24px,单行胶囊只留给空态
           // (写 rounded-3xl 会被 cn 的 tailwind-merge 判为覆盖 rounded-full,四角一起收,正合此形态)
           mobileCard && 'max-md:rounded-3xl'
         )}
@@ -1305,11 +1316,13 @@ export function ChatInput({
                 'placeholder:text-content-muted',
                 'focus:outline-none disabled:opacity-50',
                 'min-h-[24px] max-h-[200px]',
-                // 方案 C 手机端:单行胶囊内的正文(36px 高、15px 字号、左右贴着胶囊内边距)
+                // 10-07 定案:单行胶囊内的正文(36px 高、15px 字号、左右贴着胶囊内边距)
                 'max-md:flex-1 max-md:min-w-0 max-md:px-1.5 max-md:py-2 max-md:text-[15px]',
-                'max-md:min-h-[var(--m-ta-min)] max-md:max-h-[164px] max-md:overflow-y-auto',
-                // 手机端长文:正文整行独占并解除 164px 上限,⋯ + 发送 换到底部一行
-                mobileWide && 'max-md:w-full max-md:basis-full max-md:max-h-none'
+                // 手机端高度由 adjustHeight 按内容写,164px 上限会把 6 行截掉几 px → 滚动条拇指(D3)
+                'max-md:min-h-[var(--m-ta-min)] max-md:max-h-none',
+                // 10-08 定案:有内容即卡片 —— 正文整行独占,⋯ + 发送 沉到底部一行
+                mobileStack && 'max-md:w-full max-md:basis-full',
+                mobileStack && !mobileWide && 'max-md:overflow-hidden'
               )}
             />
           </div>
