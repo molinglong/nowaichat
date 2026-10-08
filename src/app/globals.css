@@ -690,14 +690,17 @@ body {
 }
 
 /* ── 桌面阅读纱(≥md;壁纸只做环境,正文落纱) ─────────────────────
-   2026-10-07 定案 S5「整列纱」:放弃「居中一张纸」这个物体 —— 纱铺满整个
-   内容列、无边界无模糊,壁纸只从纱里透出。毛玻璃(backdrop-filter)已被
-   用户否(「太丑」),别再往这条规则上加。
-   浓度是扫出来的(scripts/tmp-check-wp-veil.cjs,真实渲染像素取样):
-   浅色 0.78 是「次要灰字最差 5% 到 4.5」的最薄一档(4.7/100%),再薄到 0.72
-   就掉到 99%、0.62 直接 52%;深色 0.72 同判据已达 4.9/100%,不必多压。
-   注意 --content-muted(11.5px 元信息那一档)在两档下都只有 2.7~3.0:1,
-   但它在不开壁纸时也是这个数 —— 属 token 旧账,不在本次范围内动。
+   2026-10-08 v2「实心阅读池」:v1 的整列半透纱被用户判死(「你这做的啥垃圾」)。
+   根因是两层蒙版叠乘 —— .welcome-wallpaper 自带 0.6 基座蒙版(图只剩 40%),
+   纱再乘 0.78 → 正文区壁纸只剩 8.8%。实测线上截图:正文区 p5=233~237、
+   侧栏区 p50=215,即"壁纸没了、脏影还在"。半透纱这条路在算术上是死路:
+   壁纸要看得见(≥30% 图)与次要灰字达标(≤9% 图)不可能同区共存。
+   所以改成空间分离 —— 正文所在的中间一条 760px 用不透明 --surface 实底
+   (= 与不开壁纸逐像素相同,可读性零风险),两侧 80px 渐隐到全透,
+   壁纸以欢迎页同款 40% 浓度留在 gutter / 顶栏带 / 输入区。
+   上下各留一小段渐隐(28 / 44px),避免纱在 TopBar 与输入框交界处出现硬切线;
+   上沿刻意压在 48px(桌面首条消息的 md:pt-12 留白)之内,正文第一行必落实底。
+   毛玻璃(backdrop-filter)已被用户否(「太丑」),别再往这条规则上加。
    判据复用 .app-shell:has(> .welcome-wallpaper) —— 壁纸关时整条不命中,
    桌面会话页与改版前逐像素相同;欢迎页没有消息区,自然也没有纱。
    z-index:-1 与壁纸同层,按 DOM 序本元素在后 → 垫在壁纸之上、消息流之下,
@@ -712,10 +715,16 @@ body {
     inset: 0;
     z-index: -1;
     pointer-events: none;
-    background: rgb(var(--surface) / 0.72);
-  }
-  html:not(.dark) .app-shell:has(> .welcome-wallpaper) .wp-plate {
-    background: rgb(var(--surface) / 0.78);
+    background: rgb(var(--surface));
+    /* 两层 mask 默认 add(并集)会糊成一个十字,必须 intersect 取交集 */
+    -webkit-mask-image:
+      linear-gradient(90deg, transparent calc(50% - 460px), #000 calc(50% - 380px), #000 calc(50% + 380px), transparent calc(50% + 460px)),
+      linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 44px), transparent 100%);
+    mask-image:
+      linear-gradient(90deg, transparent calc(50% - 460px), #000 calc(50% - 380px), #000 calc(50% + 380px), transparent calc(50% + 460px)),
+      linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 44px), transparent 100%);
+    -webkit-mask-composite: source-in;
+    mask-composite: intersect;
   }
 }
 
