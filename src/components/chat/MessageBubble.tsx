@@ -25,6 +25,7 @@ import { copyText } from '@/lib/clipboard'
 import { useTypewriter } from '@/lib/useTypewriter'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { ChartCard } from './ChartCard'
+import { ChatImageLightbox } from './ChatImageLightbox'
 import { ToolCallCard, extractToolCallViews } from './ToolCallCard'
 import { TurnFileSummary } from './TurnFileSummary'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
@@ -274,6 +275,9 @@ function MessageBubbleInner({
 
   // 附件 (仅用户消息有)
   const attachments = (message as UIMessageWithAttachments).attachments ?? []
+  // 图片浏览器: 当前查看的图片在 imageAtts 中的下标,null=关闭
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const imageAtts = attachments.filter((a) => a.type.startsWith('image/'))
 
   // 时间戳和 token 统计
   const msgCreatedAt = (message as UIMessageWithAttachments).createdAt
@@ -706,7 +710,7 @@ function MessageBubbleInner({
   // ── 右键菜单:把操作栏的 hover 按钮集合升格为右键菜单(桌面端习惯) ──
   // 菜单项全部复用现有 handlers,不新增 props → 无需改 memo 比较函数。
   // 无可用项时(如空正文)不 preventDefault,保留浏览器默认菜单。
-  const handleMessageContextMenu = useCallback((e: React.MouseEvent) => {
+  const assembleAndOpenMenu = useCallback((x: number, y: number) => {
     const canCopy = bodyText.length > 0
     // 选区必须在"装配菜单"这一刻抓取:扇区上的左键 mousedown 会清掉 window 选区,
     // 等 onSelect 再读就只剩整段了(用户报"选一句却复制整段"根因)
@@ -754,16 +758,52 @@ function MessageBubbleInner({
       },
     ]
     const items = candidates.filter((it): it is ContextMenuItem => !!it)
-    if (!items.length) return
-    e.preventDefault()
+    if (!items.length) return false
     const { openContextMenu } = useContextMenuStore.getState()
-    openContextMenu({ x: e.clientX, y: e.clientY }, items)
+    openContextMenu({ x, y }, items)
+    return true
   }, [
     bodyText, isUser, isAssistant, canEdit, onEdit, isLastAssistant, canRegenerate,
     onRegenerate, beginEdit, copyPayload,
     handleRegenerateDebounced, handleSaveToStudy, studySaveState, isStreaming,
     message.id, message.role,
   ])
+
+  // 已装好"等抬手"监听的清理器;非空表示一次触屏长按正在进行
+  const touchMenuArmRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => touchMenuArmRef.current?.(), [])
+
+  const handleMessageContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!window.matchMedia('(pointer: coarse)').matches) {
+        if (assembleAndOpenMenu(e.clientX, e.clientY)) e.preventDefault()
+        return
+      }
+      if (bodyText.length === 0) return
+      // 安卓长按先派 contextmenu、选区随后才建立,此刻读 getSelection() 恒为空 → 复制退化成整条;
+      // 且菜单会在手指仍压屏时弹出,压住选区手柄。故只吞系统原生气泡,装配推到抬手后同一长按点。
+      e.preventDefault()
+      touchMenuArmRef.current?.()
+      const x = e.clientX
+      const y = e.clientY
+      const disarm = () => {
+        touchMenuArmRef.current = null
+        document.removeEventListener('touchend', onTouchEnd, true)
+        document.removeEventListener('touchcancel', disarm, true)
+        window.clearTimeout(fallback)
+      }
+      function onTouchEnd() {
+        disarm()
+        assembleAndOpenMenu(x, y)
+      }
+      // 兜底:个别 WebView 长按手势被系统吃掉后不再派 touchend,不能让菜单永远不来
+      const fallback = window.setTimeout(onTouchEnd, 900)
+      touchMenuArmRef.current = disarm
+      document.addEventListener('touchend', onTouchEnd, true)
+      document.addEventListener('touchcancel', disarm, true)
+    },
+    [assembleAndOpenMenu, bodyText]
+  )
 
   // 分支摘要对用户不可见:这条 system 消息只是「喂给模型的上文」的载体,
   // 真正生效的位置在 chat/route.ts(摘出 messages 后 unshift 进 system prompt)。
@@ -774,7 +814,7 @@ function MessageBubbleInner({
   // 失焦不提交:只有点主钮 / Enter 才提交,✕ / Esc 取消。
   if (isUser && isEditing) {
     return (
-      <div className="flex justify-end px-4 max-md:px-2 py-2">
+      <div className="flex justify-end px-4 max-md:px-[15px] py-2">
         <div className="w-full max-w-[460px] max-md:max-w-none">
           <div className="rounded-[13px] border border-line-strong bg-surface overflow-hidden">
             <div className="flex items-center gap-1.5 h-[34px] max-md:h-10 px-3 border-b border-line text-[11.5px] max-md:text-[12.5px] text-content-secondary select-none">
@@ -838,7 +878,8 @@ function MessageBubbleInner({
       data-message-id={message.id}
       onContextMenu={handleMessageContextMenu}
       className={cn(
-        'flex gap-2.5 px-4 max-md:px-2 py-2 max-md:py-[11px] transition-colors group relative',
+        // 手机端 15px:真机对比定稿(8px 贴边显胖 → 12px 仍偏窄,用户拍板 15px;胶囊自身内距 12px 略窄于正文轴)
+        'flex gap-2.5 px-4 max-md:px-[15px] py-2 max-md:py-[11px] transition-colors group relative',
         isUser ? 'justify-end' : 'justify-start',
         isFocused && 'bg-accent/5 border-l-2 border-l-accent'
       )}
@@ -981,29 +1022,31 @@ function MessageBubbleInner({
           </>
         ) : (
           <div className="flex flex-col items-end gap-1.5">
-            {/* 附件展示:图片缩略图(点击看大图) / 文件卡片 */}
+            {/* 附件展示:图片缩略图(点击开应用内图片浏览器) / 文件卡片(下载链接) */}
             {attachments.length > 0 && (
               <div className="flex flex-wrap justify-end gap-2">
-                {attachments.map((att, idx) =>
-                  att.type.startsWith('image/') ? (
+                {imageAtts.map((att, idx) => (
+                  <button
+                    key={`${att.url}#${idx}`}
+                    type="button"
+                    title={att.name}
+                    aria-label={`查看图片:${att.name}`}
+                    onClick={() => setLightboxIndex(idx)}
+                    className="block overflow-hidden rounded-lg border border-line hover:opacity-90 transition-opacity"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={att.url}
+                      alt={att.name}
+                      className="max-h-40 max-w-[220px] object-contain bg-surface-muted"
+                    />
+                  </button>
+                ))}
+                {attachments
+                  .filter((att) => !att.type.startsWith('image/'))
+                  .map((att, idx) => (
                     <a
-                      key={idx}
-                      href={att.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={att.name}
-                      className="block overflow-hidden rounded-lg border border-line hover:opacity-90 transition-opacity"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={att.url}
-                        alt={att.name}
-                        className="max-h-40 max-w-[220px] object-contain bg-surface-muted"
-                      />
-                    </a>
-                  ) : (
-                    <a
-                      key={idx}
+                      key={`${att.url}#f${idx}`}
                       href={att.url}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -1016,13 +1059,21 @@ function MessageBubbleInner({
                         <p className="text-[10px] text-content-muted">{formatSize(att.size)}</p>
                       </div>
                     </a>
-                  )
-                )}
+                  ))}
               </div>
             )}
             <div className="rounded-2xl rounded-br-[6px] bg-accent px-4 py-2.5">
               <p className="whitespace-pre-wrap break-words text-[15px] leading-[1.75] text-accent-foreground">{text}</p>
             </div>
+            {/* 应用内图片浏览器: portal 到 body,点缩略图开 */}
+            {lightboxIndex != null && imageAtts.length > 0 && (
+              <ChatImageLightbox
+                images={imageAtts}
+                index={lightboxIndex}
+                onClose={() => setLightboxIndex(null)}
+                onIndexChange={setLightboxIndex}
+              />
+            )}
           </div>
         )}
 
