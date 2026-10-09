@@ -92,6 +92,10 @@
   --danger-soft: 254 233 234;
   --ease: cubic-bezier(0.32, 0.72, 0.28, 1);
 
+  /* 推理档位滑杆:紫色渐变轨 + 最高档发光色(定稿自 preview-reasoning-tier A 充能流) */
+  --slider-grad: linear-gradient(90deg, #f472b6, #c084fc, #818cf8);
+  --glow-rgb: 129 140 248;
+
 }
 
 .dark {
@@ -158,6 +162,10 @@
   /* 危险语义色: 暗底上压一档亮度才不刺眼,soft 做错误卡底色 */
   --danger: 248 113 113;
   --danger-soft: 61 20 24;
+
+  /* 推理档位滑杆:暗色下渐变加深一档,发光色偏紫 */
+  --slider-grad: linear-gradient(90deg, #ec4899, #a855f7, #6366f1);
+  --glow-rgb: 139 92 246;
 
 }
 
@@ -2286,4 +2294,139 @@ aside.fixed.inset-y-0.right-0.shadow-2xl.translate-x-full {
     width: max-content;
     max-width: 320px;
   }
+}
+
+/* ── 推理档位滑杆(reasoning-tier)───────────────────────────────
+   定稿自 public/preview-reasoning-tier.html「A 充能流」。触发胶囊 + 面板 + 2 段滑杆,
+   最高档(深度思考)常驻粒子流 + 呼吸发光 + 拖块光环。粒子由组件用 WAAPI 驱动
+   (进最高档那一刻 playbackRate 冲 2.8× 再 520ms 回落 1×),这里只定义外观与 keyframes。
+   仅 Tailwind 表达不了的部分落 CSS:滑杆几何、径向渐变粒子、多层动画。 */
+.rt-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgb(var(--surface-muted));
+  color: rgb(var(--content-secondary));
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.rt-trigger:hover { background: rgb(var(--surface-subtle)); }
+.rt-trigger.open { background: rgb(var(--accent-soft)); }
+.rt-trigger.on { color: rgb(var(--content-primary)); }
+.rt-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+.rt-trigger .rt-val { color: rgb(var(--content-primary)); font-weight: 600; }
+.rt-trigger .rt-chev { width: 12px; height: 12px; opacity: 0.7; transition: transform 0.15s ease; }
+.rt-trigger.open .rt-chev { transform: rotate(180deg); }
+
+.rt-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  width: 264px;
+  max-width: calc(100vw - 2rem);
+  background: rgb(var(--surface));
+  border: 1px solid rgb(var(--line));
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.rt-panel.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.rt-head { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; margin-bottom: 10px; }
+.rt-ico {
+  position: absolute; left: 0; top: 0;
+  width: 24px; height: 24px; border-radius: 8px;
+  background: rgb(var(--surface-muted)); color: rgb(var(--content-secondary));
+  display: flex; align-items: center; justify-content: center;
+}
+.rt-ico svg { width: 14px; height: 14px; }
+.rt-title { font-size: 17px; font-weight: 600; letter-spacing: 0.02em; color: rgb(var(--content-primary)); }
+.rt-title.max {
+  font-weight: 800;
+  background: var(--slider-grad);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.rt-model {
+  font-size: 12px; color: rgb(var(--content-muted)); max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.rt-slider { position: relative; height: 40px; touch-action: none; }
+.rt-track {
+  position: absolute; left: 0; right: 0; top: 50%; height: 32px; transform: translateY(-50%);
+  border-radius: 999px; background: rgb(var(--surface-subtle)); overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.14); transition: box-shadow 0.3s ease;
+}
+.rt-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 1;
+  border-radius: 999px 0 0 999px; background: var(--slider-grad); transition: width 0.18s ease;
+}
+.rt-thumb {
+  position: absolute; top: 50%; width: 32px; height: 32px; z-index: 4; border-radius: 999px;
+  background: rgb(var(--surface)); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28), 0 0 0 1px rgb(var(--line));
+  transform: translate(-50%, -50%); cursor: grab; transition: left 0.18s ease;
+}
+.rt-ticks {
+  position: absolute; left: 16px; right: 16px; top: 50%; transform: translateY(-50%);
+  display: flex; justify-content: space-between; pointer-events: none; z-index: 2;
+}
+.rt-ticks i {
+  width: 6px; height: 6px; border-radius: 999px; background: rgb(var(--surface));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+/* 最高档:整条充能(呼吸亮度 + 外发光 + 拖块扩散光环) */
+.rt-slider.at-max .rt-track { box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.14), 0 0 18px rgba(var(--glow-rgb), 0.45); }
+.rt-slider.at-max .rt-fill { animation: rt-breathe 2.8s ease-in-out infinite; }
+.rt-slider.at-max .rt-thumb::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 999px;
+  border: 2px solid rgba(var(--glow-rgb), 0.55); animation: rt-ring 1.9s ease-out infinite;
+}
+@keyframes rt-breathe {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50% { filter: brightness(1.16) saturate(1.18); }
+}
+@keyframes rt-ring {
+  0% { transform: scale(0.86); opacity: 0.85; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+/* A 充能流:景深光点(近大亮快 / 远小暗慢)+ 轻微上下浮动。粒子元素由组件动态注入 */
+.rt-burst { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.rt-burst i {
+  position: absolute; border-radius: 999px; opacity: 0;
+  will-change: left, opacity, transform;
+  background: radial-gradient(circle at 38% 36%, #fff 0%, #fff 42%, rgba(255, 255, 255, 0.7) 70%, rgba(255, 255, 255, 0) 100%);
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.95));
+  animation-name: rt-flowglow, rt-bob;
+  animation-timing-function: linear, ease-in-out;
+  animation-iteration-count: infinite, infinite;
+}
+@keyframes rt-flowglow {
+  0% { left: 104%; opacity: 0; }
+  10% { opacity: var(--o, 1); }
+  88% { opacity: var(--o, 1); }
+  100% { left: -12%; opacity: 0; }
+}
+@keyframes rt-bob {
+  0%, 100% { transform: translateY(-2px); }
+  50% { transform: translateY(2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-slider.at-max .rt-fill,
+  .rt-slider.at-max .rt-thumb::after,
+  .rt-burst i { animation: none; }
+  .rt-burst i { opacity: var(--o, 0.8); }
 }

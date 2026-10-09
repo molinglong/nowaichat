@@ -8,6 +8,7 @@ import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuSt
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import { ModelQuickSheet } from './ModelQuickSheet'
+import { ReasoningTierPicker } from './ReasoningTierPicker'
 import { PROVIDER_DOT } from '@/lib/ai/provider-meta'
 import { MaskPickerMenu } from './MaskPickerMenu'
 import { McpToolMenu } from './McpToolMenu'
@@ -663,23 +664,14 @@ export function ChatInput({
                 pillClassName={cn(iconBtnBase, pillIdle, 'border-0')}
               />
             )}
-            {/* 深度思考开关(图标钮): 与模型选择器菜单里的开关同源(deepThink 状态) */}
-            <button
-              onClick={() => onDeepThinkChange(!deepThink)}
+            {/* 推理强度(触发胶囊+滑杆面板): 桌面外显;与 deepThink 同源,2 段=标准/深度思考。
+                手机端仍收进 ⋯ 面板的 MiniSwitch(见 moreMenus),此处 hidden sm:block 不占移动端胶囊位 */}
+            <ReasoningTierPicker
+              deepThink={deepThink}
+              onDeepThinkChange={onDeepThinkChange}
+              modelName={currentModel?.name}
               disabled={isLoading}
-              className={cn(
-                iconBtnBase,
-                // 手机端收进 ⋯ 面板(见 moreMenus),桌面端保持外显
-                'hidden sm:flex',
-                deepThink ? pillActive : pillIdle,
-                isLoading && 'opacity-50 cursor-not-allowed'
-              )}
-              title="深度思考(推理增强)"
-              aria-label="深度思考"
-              aria-pressed={deepThink}
-            >
-              <Brain className="w-3.5 h-3.5" />
-            </button>
+            />
             {/* 智能搜索开关(图标钮): 联网搜索不可用时隐藏(与模型选择器菜单逻辑一致) */}
             {webSearchAvailable && onWebSearchChange && (
               <button
