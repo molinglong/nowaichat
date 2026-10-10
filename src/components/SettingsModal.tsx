@@ -1260,6 +1260,31 @@ export function SettingsModal({
     [isAdmin, inShell]
   )
 
+  // 桌面侧栏一个分组的行：滚动区里的普通分组与底部钉住的「管理」共用这一段
+  const renderNavGroup = (group: NavGroup) => (
+    <div key={group.title} className="flex md:flex-col items-stretch md:items-stretch gap-0.5 md:space-y-2">
+      {/* 移动端隐藏分组标题;桌面端显示 */}
+      <div className="hidden md:block px-1.5 pb-1 pt-1 text-[10.5px] uppercase tracking-[0.04em] font-medium text-content-muted">
+        {group.title}
+      </div>
+      <div className="flex md:flex-col gap-0.5 md:space-y-px">
+        {group.items.filter(navItemVisible).map((item) => (
+          <NavButton
+            key={item.id}
+            item={item}
+            active={activeSection === item.id}
+            onClick={() => setActiveSection(item.id)}
+            badge={
+              item.id === 'providers' && keys.length > 0 ? keys.length :
+              item.id === 'memory' && memories.length > 0 ? memories.length :
+              undefined
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
+
   // ── 临时会话管理:剩余时间 / 清空本会话对话 / 退出登录 ──
   const [sessionRemaining, setSessionRemaining] = useState<string | null>(null)
   useEffect(() => {
@@ -2979,34 +3004,23 @@ export function SettingsModal({
                   active={activeSection === TOP_ITEM.id}
                   onClick={() => setActiveSection(TOP_ITEM.id)}
                 />
-                {/* 分组 */}
+                {/* 分组（「管理」不在滚动区里：它钉在侧栏底部，见本 nav 末尾） */}
                 <div className="md:mt-1 flex md:flex-col gap-0.5 md:gap-0 md:space-y-2 md:flex md:items-stretch">
-                  {(isEphemeral ? EPHEMERAL_NAV_GROUPS : NAV_GROUPS).map((group) => (
-                    <div key={group.title} className="flex md:flex-col items-stretch md:items-stretch gap-0.5 md:space-y-2">
-                      {/* 移动端隐藏分组标题;桌面端显示 */}
-                      <div className="hidden md:block px-1.5 pb-1 pt-1 text-[10.5px] uppercase tracking-[0.04em] font-medium text-content-muted">
-                        {group.title}
-                      </div>
-                      <div className="flex md:flex-col gap-0.5 md:space-y-px">
-                        {group.items.filter(navItemVisible).map((item) => (
-                          <NavButton
-                            key={item.id}
-                            item={item}
-                            active={activeSection === item.id}
-                            onClick={() => setActiveSection(item.id)}
-                            badge={
-                              item.id === 'providers' && keys.length > 0 ? keys.length :
-                              item.id === 'memory' && memories.length > 0 ? memories.length :
-                              undefined
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                  {(isEphemeral ? EPHEMERAL_NAV_GROUPS : NAV_GROUPS)
+                    .filter((g) => g.title !== '管理')
+                    .map(renderNavGroup)}
                 </div>
               </div>
             </div>
+            {/* 「管理」钉在侧栏底部：额度号池/激活码/注册码 是 adminOnly 的唯一入口，
+                而导航项总高早已超过侧栏可视高——滚轮够不到就等于进不去，所以不给它滚动资格 */}
+            {(isEphemeral ? EPHEMERAL_NAV_GROUPS : NAV_GROUPS)
+              .filter((g) => g.title === '管理' && g.items.some(navItemVisible))
+              .map((g) => (
+                <div key={g.title} className="shrink-0 mt-1 border-t border-line/60 pt-1">
+                  {renderNavGroup(g)}
+                </div>
+              ))}
           </nav>
 
           {/* 移动端一级分组列表（主从）：组标题常驻、一行一分区、右侧当前值摘要。
