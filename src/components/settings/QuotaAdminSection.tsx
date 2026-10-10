@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, RefreshCw, ShieldAlert, Plus, Trash2 } from 'lucide-react'
+import { Loader2, RefreshCw, ShieldAlert, Plus, Trash2, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
 import { fmtTokens, parseKmTokens } from './quota-format'
@@ -81,6 +81,26 @@ const btnGhost =
 const btnDanger =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60'
 
+/** 一次连通性检测的结果，只存组件状态：刷新页面即清空，不进库 */
+type TestResult = { ok: boolean; error?: string; raw?: string; reply?: string; ms: number; at: number }
+
+/** 检测结论行：成功给耗时，失败直接给归类后的中文原因，附检测时刻以判断新旧 */
+function TestResultLine({ r }: { r: TestResult | undefined }) {
+  if (!r) return null
+  return (
+    <p
+      className={cn('text-[10.5px] truncate', r.ok ? 'text-accent' : 'text-red-600')}
+      title={r.ok ? `${r.ms}ms 内返回，上游正文「${r.reply ?? ''}」` : `${r.error}\n${r.raw ?? ''}`}
+    >
+      {r.ok ? `✓ 可用 · ${r.ms}ms${r.reply ? '' : ' · 空回复'}` : `✗ ${r.error}`}
+      <span className="text-content-muted">
+        {' '}
+        · {new Date(r.at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}
+      </span>
+    </p>
+  )
+}
+
 /** 管理分三档：额度号池 / 激活码 / 注册码，同一份聚合数据按视图切片 */
 export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | 'redeem' | 'register' }) {
   const [data, setData] = useState<AdminQuotaData | null>(null)
@@ -134,6 +154,10 @@ export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | '
   // Key 表单
   const [keyProvider, setKeyProvider] = useState('deepseek')
   const [keyValue, setKeyValue] = useState('')
+  // 连通性检测:结果按门面模型 id 存;testingId 为当前正在打上游的那一行
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [batchTesting, setBatchTesting] = useState(false)
 
   const load = useCallback(async (soft = false) => {
     if (soft) setRefreshing(true)
@@ -213,6 +237,44 @@ export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | '
     })
   }
 
+  const runTest = useCallback(async (model: PublicModelRow) => {
+    setTestingId(model.id)
+    try {
+      const res = await fetch('/api/quota/admin/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: model.id }),
+      })
+      const j = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; raw?: string; reply?: string; ms?: number } | null
+      const ok = !!j?.ok
+      setTestResults((prev) => ({
+        ...prev,
+        [model.id]: {
+          ok,
+          error: ok ? undefined : (j?.error ?? `检测请求失败（${res.status}）`),
+          raw: ok ? undefined : j?.raw,
+          reply: ok ? j?.reply : undefined,
+          ms: j?.ms ?? 0,
+          at: Date.now(),
+        },
+      }))
+    } catch {
+      setTestResults((prev) => ({
+        ...prev,
+        [model.id]: { ok: false, error: '网络异常，检测未完成', ms: 0, at: Date.now() },
+      }))
+    } finally {
+      setTestingId(null)
+    }
+  }, [])
+
+  // 一键全检串行跑:并行会同时压同一个上游域名,容易自己把自己限流
+  const testAll = useCallback(async () => {
+    setBatchTesting(true)
+    for (const m of data?.publicModels ?? []) await runTest(m)
+    setBatchTesting(false)
+  }, [data, runTest])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-10 text-content-muted">
@@ -246,14 +308,29 @@ export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | '
         <p className="text-[11px] text-content-muted text-left">
           {view === 'pool' ? '统计日 ' + data.dayKey + ' · 个人日限按北京时间自然日重置' : ''}
         </p>
-        <button
-          onClick={() => void load(true)}
-          disabled={refreshing}
-          className={cn(btnGhost, refreshing && 'opacity-60')}
-        >
-          {refreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-          刷新
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {view === 'pool' && (
+            <button
+              onClick={() => void testAll()}
+              disabled={busy || testingId !== null || data.publicModels.length === 0}
+              className={cn(btnGhost, testingId !== null && 'opacity-60')}
+              title="用服务端 Key 逐个真打一次上游，验证 Key 有效、上游模型名存在（串行执行，不计入额度账）"
+            >
+              {testingId !== null ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+              {batchTesting
+                ? `全检中 ${data.publicModels.findIndex((m) => m.id === testingId) + 1}/${data.publicModels.length}`
+                : '一键全检'}
+            </button>
+          )}
+          <button
+            onClick={() => void load(true)}
+            disabled={refreshing}
+            className={cn(btnGhost, refreshing && 'opacity-60')}
+          >
+            {refreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            刷新
+          </button>
+        </div>
       </div>
       {opError && <p className="text-[11px] text-red-600 text-left">{opError}</p>}
 
@@ -297,7 +374,7 @@ export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | '
         <div className="px-3.5 pt-3 pb-2">
           <p className="text-[12px] font-medium text-content-secondary">公共模型</p>
           <p className="text-[10.5px] text-content-muted mt-0.5">
-            全员可见的「注册即用」档位：一律服务端出钱 + 公共额度计费。×倍率 = 该模型烧池子的速度相对「标准」的倍数（落账 tokens×倍率），按各上游真实成本填。限 N = 全站累计预算：用完自动停运并从用户端隐藏，改大即恢复。
+            全员可见的「注册即用」档位：一律服务端出钱 + 公共额度计费。×倍率 = 该模型烧池子的速度相对「标准」的倍数（落账 tokens×倍率），按各上游真实成本填。限 N = 全站累计预算：用完自动停运并从用户端隐藏，改大即恢复。「检测」= 用服务端 Key 真打一次上游，确认 Key 与模型名可用；几条 token 的消耗记在上游侧，不进本页任何额度数字。
           </p>
         </div>
         {data.publicModels.length === 0 ? (
@@ -391,7 +468,17 @@ export default function QuotaAdminSection({ view = 'pool' }: { view?: 'pool' | '
                       </span>
                     )}
                   </p>
+                  <TestResultLine r={testResults[m.id]} />
                 </div>
+                <button
+                  onClick={() => void runTest(m)}
+                  disabled={busy || testingId !== null}
+                  className={cn(btnGhost, testingId === m.id && 'opacity-60')}
+                  title="用该服务商的服务端 Key 真打一次上游，确认 Key 有效且上游模型名存在"
+                >
+                  {testingId === m.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                  检测
+                </button>
                 <button
                   onClick={() => void mutate('/api/quota/admin/models', { method: 'PATCH', body: JSON.stringify({ id: m.id, enabled: !m.enabled }) })}
                   disabled={busy}
