@@ -697,42 +697,26 @@ body {
   background-color: rgb(var(--surface-muted) / 0.35);
 }
 
-/* ── 桌面阅读纱(≥md;壁纸只做环境,正文落纱) ─────────────────────
-   2026-10-08 v2「实心阅读池」:v1 的整列半透纱被用户判死(「你这做的啥垃圾」)。
-   根因是两层蒙版叠乘 —— .welcome-wallpaper 自带 0.6 基座蒙版(图只剩 40%),
-   纱再乘 0.78 → 正文区壁纸只剩 8.8%。实测线上截图:正文区 p5=233~237、
-   侧栏区 p50=215,即"壁纸没了、脏影还在"。半透纱这条路在算术上是死路:
-   壁纸要看得见(≥30% 图)与次要灰字达标(≤9% 图)不可能同区共存。
-   所以改成空间分离 —— 正文所在的中间一条 760px 用不透明 --surface 实底
-   (= 与不开壁纸逐像素相同,可读性零风险),两侧 80px 渐隐到全透,
-   壁纸以欢迎页同款 40% 浓度留在 gutter / 顶栏带 / 输入区。
-   上下各留一小段渐隐(28 / 44px),避免纱在 TopBar 与输入框交界处出现硬切线;
-   上沿刻意压在 48px(桌面首条消息的 md:pt-12 留白)之内,正文第一行必落实底。
-   毛玻璃(backdrop-filter)已被用户否(「太丑」),别再往这条规则上加。
-   判据复用 .app-shell:has(> .welcome-wallpaper) —— 壁纸关时整条不命中,
-   桌面会话页与改版前逐像素相同;欢迎页没有消息区,自然也没有纱。
-   z-index:-1 与壁纸同层,按 DOM 序本元素在后 → 垫在壁纸之上、消息流之下,
-   不需要给滚动容器加 z-index。手机端由 scrim 承担同一职责,故 ≥md 才出。 */
-.wp-plate {
-  display: none;
-}
+/* ── 桌面会话页壁纸压暗（v3，仅 ≥md）─────────────────────────
+   可读性不再靠「在字底下垫东西」，改成把壁纸层本身压到与 --surface 同亮度：
+   saturate .35 + brightness .42 + blur 20。
+   前两版都是在垫：v1 整列半透纱、v2 中间 760px 不透明「实心阅读池」（黑板），
+   两版都被用户判死。v2 除了难看还白铺 —— 它自身的上下渐隐带正压在正文首行上，
+   实测该行次要灰字只有 1.96:1，与裸壁纸（2.13:1）同样不达标。
+   v2 注释里「壁纸要看得见与次要灰字达标不可能同区共存」这句结论是错的：
+   它只在「叠 alpha 蒙版」这一个前提下成立；压亮度 + 模糊（降局部对比而非整体透明）
+   可以让两者同时成立。别再回到叠透明度的老路。
+   实测（1440×900，正文列 max-w-2xl / y 60–780 逐像素合成，WCAG AA 小字 4.5:1）：
+     正文 245/245/247 → 13.04:1；次要灰字 160/160/168 → 5.47:1，达标面积 99.94%
+     侧栏次要灰字 3.10:1 / 23.9% → 5.61:1 / 99.6%（黑板时代从未达标，本改法顺带治好）
+   blur 会在窗口四周吃进约 3×20px 的透明边，故 inset 外扩 4rem 让模糊圈落在窗外。
+   范围（用户拍板）：只桌面会话页。欢迎页那张大图仍按原浓度呈现；手机端由
+   .mobile-page-scrim 三档蒙版负责，不吃这条。会话态判据 = .is-session 类，
+   由 WelcomeWallpaperLayer 按 chatWelcomeActive(= messages.length===0) 挂。 */
 @media (min-width: 768px) {
-  .app-shell:has(> .welcome-wallpaper) .wp-plate {
-    display: block;
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    background: rgb(var(--surface));
-    /* 两层 mask 默认 add(并集)会糊成一个十字,必须 intersect 取交集 */
-    -webkit-mask-image:
-      linear-gradient(90deg, transparent calc(50% - 460px), #000 calc(50% - 380px), #000 calc(50% + 380px), transparent calc(50% + 460px)),
-      linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 44px), transparent 100%);
-    mask-image:
-      linear-gradient(90deg, transparent calc(50% - 460px), #000 calc(50% - 380px), #000 calc(50% + 380px), transparent calc(50% + 460px)),
-      linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 44px), transparent 100%);
-    -webkit-mask-composite: source-in;
-    mask-composite: intersect;
+  .welcome-wallpaper.is-session {
+    inset: -4rem;
+    filter: saturate(0.35) brightness(0.42) blur(20px);
   }
 }
 

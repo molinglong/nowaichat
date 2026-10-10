@@ -2132,10 +2132,6 @@ export function ChatPanel({
           {/* relative wrapper: "回到底部"按钮需要相对消息区(而非滚动内容)定位,
               absolute 元素放进滚动容器内会随内容滚走 */}
           <div className="relative flex-1 min-h-0">
-            {/* 壁纸在场上时的桌面阅读纱:铺满整个消息区的一张浅底,让字不直接压在图上。
-                显隐与尺寸全在 CSS(.app-shell:has(> .welcome-wallpaper) .wp-plate),
-                壁纸关 / 手机端 / 欢迎态都不渲染出可见像素,故不接 JS 状态 */}
-            <div className="wp-plate" aria-hidden="true" />
             {/* md:pt-12: 桌面端浮动工具簇无底板悬在内容区右上,首条消息(含右对齐用户气泡)须从其下方起排;
                 padding 放在滚动容器内,滚动时随内容移出 —— 顶部裁切线保持 y=0,TopFade 渐隐行为不变 */}
             {/* data-tauri-drag-region:容器自身的 md:pt-12 留白带(滚到顶时的顶部 48px)
