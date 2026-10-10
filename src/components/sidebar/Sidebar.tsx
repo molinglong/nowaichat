@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react
 import { useRenderProbe } from '@/lib/client-diagnostics'
 import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses, ListChecks, Trash2, X } from 'lucide-react'
+import { Plus, Settings, Search, PanelLeftClose, PanelLeftOpen, VenetianMask, LogOut, User, Glasses, ListChecks, Trash2, X, FileJson } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { useInfiniteQuery, useQueryClient, useQuery, type InfiniteData } from '@tanstack/react-query'
 import { NEW_CHAT_MASK_SIGNAL_KEY, useChatStore } from '@/store/chat-store'
@@ -24,6 +24,7 @@ import { SidebarNav } from './SidebarNav'
 import { queryKeys, STALE } from '@/lib/query/keys'
 import { fetchJson, HttpError } from '@/lib/query/fetcher'
 import { toast } from '@/lib/toast'
+import { downloadConversationBundle } from '@/lib/portable-client'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface ConversationData {
@@ -175,6 +176,8 @@ export function Sidebar() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  /** 批量导出对话包进行中:导出是取数+下载,不碰库,但仍要防连点 */
+  const [batchExporting, setBatchExporting] = useState(false)
   const router = useRouter()
 
   const loading = isLoading || isPending
@@ -394,6 +397,36 @@ export function Sidebar() {
     startNewChat,
     exitManageMode,
   ])
+
+  /**
+   * 批量导出对话包:把勾选的会话打成一个可回灌的 .aichat.json。
+   * 与批量删除共用勾选集合,导完**不**退出管理模式 ——
+   * 用户常常是"先导一遍再决定删哪些",导完就退模式等于把勾选白丢了。
+   */
+  const confirmBatchExport = useCallback(async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setBatchExporting(true)
+    try {
+      const res = await downloadConversationBundle({
+        ids,
+        fileName: `aichat-对话包-${ids.length}条-${new Date().toISOString().slice(0, 10)}`,
+      })
+      if (res.skipped > 0) {
+        toast.error(
+          `已导出 ${res.exported} 条，${res.skipped} 条在当前模式下不可见`,
+          { title: '批量导出' }
+        )
+      } else {
+        toast.success(`已导出 ${res.exported} 条对话`, { title: '批量导出' })
+      }
+    } catch (err) {
+      console.error('Failed to batch export conversations:', err)
+      toast.error(err instanceof Error ? err.message : '导出失败，请重试', { title: '批量导出' })
+    } finally {
+      setBatchExporting(false)
+    }
+  }, [selectedIds])
 
   // 批量管理模式 Esc 退出;确认弹窗开着时让弹窗自己吃掉这次按键,避免一次退两层
   useEffect(() => {
@@ -792,6 +825,23 @@ export function Sidebar() {
         {/* 批量管理操作条 */}
         {sidebarEffectiveOpen && manageMode && (
           <div className="px-2 pt-2 pb-2 mt-0.5 border-t border-line/40 flex items-center gap-1.5">
+            <button
+              onClick={confirmBatchExport}
+              disabled={selectedIds.size === 0 || batchExporting}
+              className="flex-1 flex h-7 items-center justify-center gap-1 rounded-lg text-[11px] font-medium
+                bg-surface-subtle text-content-secondary hover:bg-surface-muted
+                transition-colors active:scale-[0.98] touch-manipulation
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+              aria-label={`导出 ${selectedIds.size} 个对话`}
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              {batchExporting ? (
+                <FileJson className="w-3 h-3 animate-pulse" aria-hidden />
+              ) : (
+                <FileJson className="w-3 h-3" aria-hidden />
+              )}
+              导出{selectedIds.size > 0 ? ` ${selectedIds.size}` : ''}
+            </button>
             <button
               onClick={() => setBatchConfirmOpen(true)}
               disabled={selectedIds.size === 0 || deleting}

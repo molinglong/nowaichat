@@ -3,9 +3,10 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, memo } from 'react'
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
-import { Trash2, Pencil, Check, X, GitBranch, Copy, Download } from 'lucide-react'
+import { Trash2, Pencil, Check, X, GitBranch, Copy, Download, FileJson } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
+import { downloadConversationBundle } from '@/lib/portable-client'
 import { useChatStore } from '@/store/chat-store'
 import { useContextMenuStore, type ContextMenuItem } from '@/store/contextMenuStore'
 import { useSingleFlight } from '@/hooks/useSingleFlight'
@@ -56,6 +57,7 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
   // 右键菜单的分支/导出动作自带异步状态(不新增 props,不触碰 memo 比较函数)
   const [branching, setBranching] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [bundleExporting, setBundleExporting] = useState(false)
 
   // Focus and select all text when entering edit mode
   useEffect(() => {
@@ -180,6 +182,26 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
     }
   }, [exporting, id, title])
 
+  // ── 右键菜单:导出对话包(可回灌的 JSON,给另一套实例导入用) ──
+  // 与上面的「导出 Markdown」分工不同:md 给人读,包给系统吃 —— 包保留
+  // 模型/面具/思考过程/对比分组/原始时间戳,导入端靠消息 cuid 幂等去重。
+  const handleExportBundle = useCallback(async () => {
+    if (bundleExporting) return
+    setBundleExporting(true)
+    try {
+      const res = await downloadConversationBundle({ ids: [id], fileName: title })
+      toast.success(
+        `已导出 ${res.exported} 条对话${res.skipped ? `（${res.skipped} 条本模式不可见已跳过）` : ''}`,
+        { title: '导出对话包' }
+      )
+    } catch (err) {
+      console.error('[ConversationItem] export bundle failed:', err)
+      toast.error(err instanceof Error ? err.message : '导出失败,请重试', { title: '导出对话包' })
+    } finally {
+      setBundleExporting(false)
+    }
+  }, [bundleExporting, id, title])
+
   // ── 右键菜单:会话级操作集合(hover 按钮之外补充的桌面端入口) ──
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     // 批量管理模式下不弹单条操作菜单(此处的动作对象是勾选集合)
@@ -223,6 +245,13 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
       disabled: exporting,
       onSelect: handleExport,
     })
+    items.push({
+      id: 'export-bundle',
+      label: bundleExporting ? '正在打包…' : '导出对话包（可导入）',
+      icon: <FileJson className="w-3.5 h-3.5" />,
+      disabled: bundleExporting,
+      onSelect: handleExportBundle,
+    })
     if (onDelete) {
       items.push({
         id: 'delete',
@@ -234,7 +263,20 @@ function ConversationItemInner({ id, title, mode, maskAvatar, maskName, index = 
       })
     }
     openContextMenu({ x: e.clientX, y: e.clientY }, items)
-  }, [selectable, onRename, beginEdit, branching, handleBranch, exporting, handleExport, onDelete, id, title])
+  }, [
+    selectable,
+    onRename,
+    beginEdit,
+    branching,
+    handleBranch,
+    exporting,
+    handleExport,
+    bundleExporting,
+    handleExportBundle,
+    onDelete,
+    id,
+    title,
+  ])
 
   function cancelEditing() {
     setEditValue(title)

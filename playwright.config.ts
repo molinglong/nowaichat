@@ -85,6 +85,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { storageState: ".auth/admin.json", permissions: ["clipboard-read", "clipboard-write"] },
     },
+    {
+      // 会话搬运(导出/导入)用例:复用 admin 会话;导出走 Blob 下载,需收 download 事件
+      name: "portable-smoke",
+      testMatch: /portable\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { storageState: ".auth/admin.json", acceptDownloads: true },
+    },
   ],
   webServer: {
     command: "npm run dev",

@@ -59,6 +59,12 @@ const API_CORS_ALLOW_ORIGINS = [
   "http://localhost:8137", // 主页本地预览(Python http.server)
   "http://127.0.0.1:8137",
   "https://yuban.icu", // 主页线上部署(静态站)
+  // 对话搬运「一键推送线上」:本地 dev 实例(3456 标准口/3000 兜底口)跨域推
+  // 到线上。只有带 sk- Bearer 令牌的 import 会真正写库,坏 origin 拿不到令牌。
+  "http://localhost:3456",
+  "http://127.0.0.1:3456",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
 ]
 
 function corsHeaders(res: NextResponse, origin: string | null): NextResponse {

@@ -98,6 +98,28 @@ export function getMessageMetadata(msg: UIMessage): MessageMetadata | null {
   return raw as MessageMetadata
 }
 
+/**
+ * 读出「导入时未迁移的附件」凭据(由导入端写在 metadata.importSkippedAttachments 上,
+ * 见 src/lib/conversation-portable.ts)。
+ *
+ * 单独走一条读取通道而不是塞进 MessageMetadata 联合:那个联合靠 kind 判别渲染分支,
+ * 而这个字段是挂在**任意已有 metadata** 上的附加项(原消息可能是 chart、也可能是空),
+ * 加进联合反而会把现有分支的 kind 收窄搞坏。
+ */
+function readImportSkippedAttachments(
+  msg: UIMessage
+): { count: number; names: string[] } | null {
+  const meta = getMessageMetadata(msg) as { importSkippedAttachments?: unknown } | null
+  const raw = meta?.importSkippedAttachments
+  if (!raw || typeof raw !== 'object') return null
+  const info = raw as { count?: unknown; names?: unknown }
+  const names = Array.isArray(info.names)
+    ? info.names.filter((n): n is string => typeof n === 'string')
+    : []
+  const count = typeof info.count === 'number' && info.count > 0 ? info.count : names.length
+  return count > 0 ? { count, names } : null
+}
+
 /** UIMessage 上挂载的附件扩展字段(历史加载与发送后注入) */
 export type UIMessageWithAttachments = UIMessage & {
   attachments?: Attachment[]
@@ -275,6 +297,9 @@ function MessageBubbleInner({
 
   // 附件 (仅用户消息有)
   const attachments = (message as UIMessageWithAttachments).attachments ?? []
+  // 跨实例导入的附件欠账:文件躺在导出时的机器上,包里没带,导入端把引用摘掉并留了这份凭据。
+  // 宁可显示"这里原来有 2 个附件",也不留一个点开就 404 的死链。
+  const importSkipped = readImportSkippedAttachments(message)
   // 图片浏览器: 当前查看的图片在 imageAtts 中的下标,null=关闭
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const imageAtts = attachments.filter((a) => a.type.startsWith('image/'))
@@ -1060,6 +1085,19 @@ function MessageBubbleInner({
                       </div>
                     </a>
                   ))}
+              </div>
+            )}
+            {importSkipped && (
+              <div
+                className="flex items-center gap-1.5 rounded-lg border border-dashed border-line px-2 py-1 text-[10px] text-content-muted"
+                title={
+                  importSkipped.names.length
+                    ? `未迁移的附件：${importSkipped.names.join('、')}`
+                    : '这些附件文件在导出时未随记录包迁移'
+                }
+              >
+                <FileText className="w-3 h-3 shrink-0" aria-hidden />
+                导入时未迁移 {importSkipped.count} 个附件
               </div>
             )}
             <div className="rounded-2xl rounded-br-[6px] bg-accent px-4 py-2.5">

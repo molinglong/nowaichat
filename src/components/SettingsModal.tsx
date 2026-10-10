@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen, Gauge, Ticket, Gift, Smartphone } from 'lucide-react'
+import { Save, Trash2, Loader2, Timer, CheckCircle, AlertCircle, Key, KeyRound, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User, CalendarDays, Pencil, X, FileUp, Download, Copy, VenetianMask, RotateCcw, Plug, MapPin, FolderOpen, Gauge, Ticket, Gift, Smartphone, FileJson } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import {
@@ -36,6 +36,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query/keys'
 import { parseMemoryText, COMMON_IMPORT_SOURCES, MEMORY_IMPORT_REFERENCE, type ParsedMemoryDraft } from '@/lib/memory/import-parser'
 import MasksSettings from '@/components/settings/MasksSettings'
+import { PortableSettings } from '@/components/settings/PortableSettings'
 import QuotaAdminSection from '@/components/settings/QuotaAdminSection'
 import QuotaPersonalCard from '@/components/settings/QuotaPersonalCard'
 import McpSettings from '@/components/settings/McpSettings'
@@ -501,7 +502,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'mobileapp' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens' | 'quota' | 'redeem' | 'regcodes'
+type SectionId = 'overview' | 'session' | 'providers' | 'models' | 'search' | 'memory' | 'clarify' | 'localfiles' | 'masks' | 'mcp' | 'general' | 'help' | 'mobileapp' | 'about' | 'usage' | 'image' | 'buddy' | 'account' | 'apitokens' | 'portable' | 'quota' | 'redeem' | 'regcodes'
 
 type NavItem = { id: SectionId; label: string; icon: typeof Key; adminOnly?: boolean }
 type NavGroup = { title: string; items: NavItem[] }
@@ -531,6 +532,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'account', label: '用户中心', icon: User },
       { id: 'apitokens', label: 'API 令牌', icon: KeyRound },
+      { id: 'portable', label: '对话搬运', icon: FileJson },
       { id: 'usage', label: '用量统计', icon: BarChart3 },
     ],
   },
@@ -4757,6 +4759,9 @@ export function SettingsModal({
                 {/* 用户中心 */}
                 {/* API 令牌(外部静态页 Bearer 调用凭证) */}
                 {activeSection === 'apitokens' && <ApiTokensSection />}
+
+                {/* 对话搬运(本地 dev ↔ 线上 的会话导出/导入) */}
+                {activeSection === 'portable' && <PortableSettings />}
 
                 {/* 管理(管理员专属):号池 / 激活码 / 注册码三 tab 共用同一组件按视图切片;接口自行验权,非管理员只会看到 403 降级态 */}
                 {activeSection === 'quota' && <QuotaAdminSection view="pool" />}
